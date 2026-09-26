@@ -54,7 +54,7 @@ cp .env.example .env
 docker compose up -d --build
 ~~~
 
-Open http://localhost.
+Open http://localhost. The web container serves HTTP; a deployment reverse proxy can provide public HTTPS.
 
 For local HTTP:
 
@@ -143,10 +143,13 @@ Task deadlines are stored as the local wall-clock value entered by the user. V0.
 
 ## RackNerd deployment preparation
 
-For a single VPS, create a production `.env` with values similar to:
+For a single VPS behind an existing Nginx server, create a production `.env` with values similar to:
 
 ~~~text
 APP_DOMAIN=your-domain.example
+CADDY_SITE_ADDRESS=:80
+WEB_BIND_ADDRESS=127.0.0.1
+WEB_HTTP_PORT=8080
 SESSION_COOKIE_SECURE=true
 
 MYSQL_DATABASE=tarsgo
@@ -161,9 +164,11 @@ Then run:
 docker compose up -d --build
 ~~~
 
-The current Compose topology intentionally exposes only Caddy ports 80/443. FastAPI and MySQL remain on the internal Docker network. MySQL uses the named `mysql_data` volume, and Caddy keeps its data/config volumes for HTTPS operation.
+Compose publishes only the web container's HTTP port. Set `WEB_BIND_ADDRESS=127.0.0.1` and `WEB_HTTP_PORT=8080` so only the local Nginx can reach it. FastAPI and MySQL remain on the internal Docker network with no host ports. MySQL uses the named `mysql_data` volume.
 
-Point the domain's DNS records at the VPS before relying on Caddy's automatic HTTPS.
+Add an Nginx server block for `APP_DOMAIN` that proxies to `http://127.0.0.1:8080`, and use the existing Nginx/Certbot HTTPS setup. `CADDY_SITE_ADDRESS=:80` keeps Caddy in HTTP-only mode behind Nginx.
+
+Point the domain's DNS A record at the VPS before requesting its Nginx certificate. Add an AAAA record only if the VPS has working public IPv6.
 
 ## Validation
 

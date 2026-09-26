@@ -88,15 +88,24 @@ npm run dev
 
 The Vite development server proxies `/api` to `http://127.0.0.1:8000`.
 
-## V0.1 pages
+## V0.1.1 pages and navigation
 
 - `/login` — email/password login
 - `/invite/:token` — one-time password setup
-- `/` — personal work dashboard
-- `/tasks` — current member's related tasks
-- `/me` — account and permitted management entries
-- `/admin/members` — admin-only member account management
-- `/admin/tasks` — admin/manager task management
+- `/` — personal work dashboard answering “what do I need to do now?”
+- `/tasks` — the single task entry for every role
+  - admin / manager see all tasks and can create or edit tasks
+  - member sees only related tasks and can update status when they are the owner
+- `/team` — admin-only member invitation, listing, disable and restore
+- `/me` — personal information, system role and logout only
+
+The bottom navigation is role-aware:
+
+- member: Home / Tasks / Me
+- manager: Home / Tasks / Me
+- admin: Home / Tasks / Team / Me
+
+Task management is no longer a separate frontend destination. Legacy `/admin/tasks` redirects to `/tasks`, and legacy `/admin/members` redirects to `/team`. Backend authorization remains the security boundary.
 
 The application is mobile-first and uses the same responsive UI on desktop.
 

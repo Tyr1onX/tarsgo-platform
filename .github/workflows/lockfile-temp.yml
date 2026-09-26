@@ -1,0 +1,17 @@
+name: Generate lockfile temp
+
+on:
+  push:
+    branches:
+      - codex/v0.1-hardening
+
+jobs:
+  lockfile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate package-lock
+        run: |
+          cd frontend
+          npm install --package-lock-only --ignore-scripts
+          base64 -w0 package-lock.json

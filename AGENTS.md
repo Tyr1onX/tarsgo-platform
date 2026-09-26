@@ -92,6 +92,8 @@ Real V0.1 tables are `members`, `invitations`, `sessions`, `tasks`, `task_collab
 
 A task has exactly one owner and zero or more collaborators through `task_collaborators`. Do not store collaborator IDs in JSON or strings.
 
+Historical tasks may retain references to disabled members. Do not revalidate unchanged assignments during unrelated task edits. Only assignment fields explicitly changed by an admin/manager must point to active members.
+
 Task status is `todo`, `doing`, or `done`.
 
 Task deadlines are local wall-clock DATETIME values from the current form. Do not introduce partial timezone conversion.

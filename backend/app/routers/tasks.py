@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, selectinload
 
-from ..auth import get_current_member
+from ..auth import get_current_member, require_manager
 from ..db import get_db
 from ..models import Member, Task
 from ..schemas import MemberSummary, TaskCreate, TaskOut, TaskUpdate
@@ -75,15 +75,26 @@ def list_tasks(
     return [_task_out(task) for task in tasks]
 
 
+@router.get("/assignees", response_model=list[MemberSummary])
+def list_task_assignees(
+    _: Member = Depends(require_manager),
+    db: Session = Depends(get_db),
+) -> list[Member]:
+    return list(
+        db.scalars(
+            select(Member)
+            .where(Member.status == "active")
+            .order_by(Member.name.asc(), Member.id.asc())
+        )
+    )
+
+
 @router.post("", response_model=TaskOut, status_code=status.HTTP_201_CREATED)
 def create_task(
     payload: TaskCreate,
-    current: Member = Depends(get_current_member),
+    current: Member = Depends(require_manager),
     db: Session = Depends(get_db),
 ) -> TaskOut:
-    if not _is_manager(current):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权创建任务")
-
     ids = set(payload.collaborator_ids)
     ids.add(payload.owner_id)
     members = _load_active_members(db, ids)

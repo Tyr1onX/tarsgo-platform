@@ -2,19 +2,19 @@
 
 An open-source operations and collaboration platform for university robotics teams.
 
-V0.1 implements one real workflow:
+V0.1 is intentionally limited to one workflow:
 
-~~~
-administrator creates member
+~~~text
+admin creates member
 -> copies one-time invitation link
 -> member sets password
 -> member logs in
--> administrator assigns a task
+-> admin/manager assigns a task
 -> owner/collaborators see the task
 -> task owner updates its status
 ~~~
 
-No public registration, email delivery, OAuth, activity module, notification system, file system, weekly reports, or approval workflow is included.
+No public registration, email delivery, OAuth, activity module, leave, weekly reports, notifications, files, AI, organization editor, or approval workflow is included.
 
 ## Stack
 
@@ -26,149 +26,174 @@ No public registration, email delivery, OAuth, activity module, notification sys
 - Caddy
 - Docker Compose
 
-## Run
+## Permissions
 
-~~~
+System roles are deliberately separate from real team titles.
+
+- `admin`
+  - member account management
+  - create invitations for admin / manager / member
+  - regenerate pending invitations
+  - disable and enable active accounts
+  - full task management
+- `manager`
+  - view all tasks
+  - create and modify tasks
+  - read the minimal active-member list required for task assignment
+  - no member account management
+- `member`
+  - view tasks where they are the owner or collaborator
+  - update status only when they are the task owner
+
+The backend is the security boundary. Hiding frontend controls is not treated as authorization.
+
+## Run locally
+
+~~~bash
 cp .env.example .env
 docker compose up -d --build
 ~~~
 
 Open http://localhost.
 
-For local HTTP, keep SESSION_COOKIE_SECURE=false. For a real HTTPS domain, set APP_DOMAIN to the domain and SESSION_COOKIE_SECURE=true.
+For local HTTP:
 
-Caddy is the only public entry point. /api/* is proxied to FastAPI and every other route serves the Vue SPA.
+~~~text
+APP_DOMAIN=:80
+SESSION_COOKIE_SECURE=false
+~~~
+
+The API container runs `alembic upgrade head` before FastAPI starts.
 
 ## Create the first administrator
 
-There is no public registration route. After first deployment:
+There is no public registration route. After the stack is running:
 
-~~~
+~~~bash
 docker compose exec api python -m app.bootstrap_admin
 ~~~
 
-The administrator can then log in at /login, create members, and copy invitation links through member management.
+The first administrator can then create the remaining accounts from `/admin/members`.
 
-## V0.1 pages
+## Frontend development
 
-- /login — email/password login
-- /invite/:token — one-time password setup
-- / — personal work dashboard
-- /tasks — tasks related to the current member
-- /me — account and management entry
-- /admin/members — member invitations and disabling
-- /admin/tasks — task creation and editing
+Frontend dependencies are locked with `package-lock.json`.
 
-The application is mobile-first. The same pages expand naturally on larger screens; there is no separate desktop admin UI.
-
-## Authentication
-
-Passwords are hashed with Argon2 through pwdlib.
-
-Authentication uses an opaque random HttpOnly cookie:
-
-- the raw session token exists only in the browser cookie
-- the database stores only SHA-256 hashes of session tokens
-- sessions expire after seven days
-- disabling a member deletes that member's active sessions
-- logout deletes the current session
-
-Invitation tokens follow the same raw-token/hash boundary. They expire after seven days and the invitation row is deleted immediately after activation.
-
-admin and manager can use the current management endpoints. manager is retained as a system role but does not have a separate permission matrix in V0.1.
-
-## Data model
-
-V0.1 uses these tables:
-
-- members — name, email, password hash, role, status, created time
-- invitations — one active hashed invitation token per invited member
-- sessions — hashed login sessions
-- tasks — title, deliverable, owner, deadline, status, creator
-- task_collaborators — normal many-to-many task/member association
-
-Member status is invited, active, or disabled.
-
-Task status is todo, doing, or done.
-
-Task deadlines are currently stored as the local wall-clock value entered by the user. V0.1 does not implement multi-timezone conversion.
-
-## Database migrations
-
-The API container runs alembic upgrade head before starting FastAPI. Database structure changes must be added as Alembic migrations instead of being created ad hoc at application startup.
-
-## Development
-
-Frontend:
-
-~~~
+~~~bash
 cd frontend
-npm install
+npm ci
+npm run build
 npm run dev
 ~~~
 
-The Vite server proxies /api to http://127.0.0.1:8000.
+The Vite development server proxies `/api` to `http://127.0.0.1:8000`.
 
-Backend development requires MySQL and the DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD and SESSION_COOKIE_SECURE environment variables.
+## V0.1 pages
 
+- `/login` — email/password login
+- `/invite/:token` — one-time password setup
+- `/` — personal work dashboard
+- `/tasks` — current member's related tasks
+- `/me` — account and permitted management entries
+- `/admin/members` — admin-only member account management
+- `/admin/tasks` — admin/manager task management
+
+The application is mobile-first and uses the same responsive UI on desktop.
+
+## Authentication and member lifecycle
+
+Passwords are hashed with Argon2 through `pwdlib`.
+
+Login uses an opaque random HttpOnly cookie:
+
+- only the cookie contains the raw session token
+- MySQL stores only SHA-256 token hashes
+- SameSite is `Lax`
+- production HTTPS must use `SESSION_COOKIE_SECURE=true`
+- sessions expire after seven days
+- logout removes the current session
+- disabling an account deletes all of that account's sessions immediately
+
+Invitation tokens are also opaque random values. MySQL stores only their hashes. Invitations expire after seven days and are deleted immediately after successful activation.
+
+Member states are:
+
+- `invited` — password has not been set
+- `active` — account can log in
+- `disabled` — previously active account is blocked
+
+Only an `active` account can be disabled. Enabling restores a previously active disabled account to `active`, keeps the existing password, creates no session, and requires the member to log in again. Pending `invited` accounts are not enabled through the restore endpoint. The restore endpoint also refuses legacy disabled rows that have no password hash.
+
+## Data model
+
+V0.1 uses:
+
+- `members`
+- `invitations`
+- `sessions`
+- `tasks`
+- `task_collaborators`
+- `alembic_version`
+
+A task has exactly one owner and zero or more collaborators through the association table. Task status is `todo`, `doing`, or `done`.
+
+Task deadlines are stored as the local wall-clock value entered by the user. V0.1 does not implement multi-timezone conversion.
+
+## RackNerd deployment preparation
+
+For a single VPS, create a production `.env` with values similar to:
+
+~~~text
+APP_DOMAIN=your-domain.example
+SESSION_COOKIE_SECURE=true
+
+MYSQL_DATABASE=tarsgo
+MYSQL_USER=tarsgo
+MYSQL_PASSWORD=<strong-random-password>
+MYSQL_ROOT_PASSWORD=<strong-random-password>
 ~~~
-cd backend
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-alembic upgrade head
-uvicorn app.main:app --reload
+
+Then run:
+
+~~~bash
+docker compose up -d --build
 ~~~
+
+The current Compose topology intentionally exposes only Caddy ports 80/443. FastAPI and MySQL remain on the internal Docker network. MySQL uses the named `mysql_data` volume, and Caddy keeps its data/config volumes for HTTPS operation.
+
+Point the domain's DNS records at the VPS before relying on Caddy's automatic HTTPS.
 
 ## Validation
 
-The GitHub Actions workflow builds the real Docker Compose stack and verifies:
+GitHub Actions runs both:
 
-- unauthenticated access is rejected
-- administrator login
-- member invitation and activation
-- invitation invalidation after use
-- normal members cannot access management endpoints
-- task creation with one owner and multiple collaborators
-- owner and collaborator task visibility
-- only the owner can update a member-owned task
-- task status updates
-- MySQL restart persistence
-- the browser-facing Caddy -> FastAPI -> MySQL path
-
-All test identities are fictional. Runtime passwords are generated inside CI and are not committed.
-
-## Data boundary
-
-The repository is public code. Production data is private.
-
-Never commit .env, passwords, credentials, tokens, private keys, server secrets, database backups, real member data, private team documents, or operational records.
-
-## Structure
-
+~~~bash
+cd frontend
+npm ci
+npm run build
 ~~~
-.
-├── backend/
-│   ├── alembic/
-│   ├── app/
-│   │   ├── routers/
-│   │   ├── auth.py
-│   │   ├── bootstrap_admin.py
-│   │   ├── db.py
-│   │   ├── main.py
-│   │   ├── models.py
-│   │   └── schemas.py
-│   ├── Dockerfile
-│   └── requirements.txt
-├── frontend/
-│   ├── src/
-│   ├── Caddyfile
-│   └── Dockerfile
-├── scripts/
-│   └── smoke_test.py
-├── compose.yaml
-└── README.md
+
+and the real:
+
+~~~bash
+docker compose up -d --build
 ~~~
+
+The Compose smoke test covers authentication, invitation invalidation, admin/manager/member permission boundaries, manager task management, member disable/enable behavior, immediate session invalidation, task owner/collaborator permissions, and MySQL restart persistence.
+
+## Public repository boundary
+
+This repository is public. Never commit:
+
+- `.env`
+- passwords, credentials, session tokens, invite tokens, API keys, or private keys
+- VPS IP addresses or other private server details
+- database files or backups
+- real member names, email addresses, student numbers, phone numbers, or internal team material
+
+Tests and documentation use fictional identities such as 张三, 李四, `admin@example.com`, and `lisi@example.com`.
+
+Contributors who do not want their personal Git email exposed in commit metadata should configure a GitHub-provided `noreply` address before committing. Existing Git history is not rewritten for this purpose.
 
 ## License
 

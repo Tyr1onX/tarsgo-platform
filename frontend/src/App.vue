@@ -6,6 +6,7 @@ import type {
   InvitationInfo,
   InviteResult,
   Member,
+  MemberSummary,
   Role,
   Task,
   TaskStatus,
@@ -26,6 +27,7 @@ const invitePasswordConfirm = ref("")
 
 const tasks = ref<Task[]>([])
 const members = ref<Member[]>([])
+const taskMembers = ref<MemberSummary[]>([])
 const latestInvite = ref<InviteResult | null>(null)
 
 const memberName = ref("")
@@ -40,13 +42,14 @@ const taskCollaboratorIds = ref<number[]>([])
 const taskDeadline = ref("")
 const taskStatus = ref<TaskStatus>("todo")
 
+const isAdmin = computed(() => user.value?.role === "admin")
 const isManager = computed(
   () => user.value?.role === "admin" || user.value?.role === "manager",
 )
 const inviteToken = computed(() =>
   path.value.startsWith("/invite/") ? path.value.slice("/invite/".length) : "",
 )
-const activeMembers = computed(() => members.value.filter((member) => member.status === "active"))
+const activeMembers = computed(() => taskMembers.value)
 const openTasks = computed(() => tasks.value.filter((task) => task.status !== "done"))
 const doneTasks = computed(() => tasks.value.filter((task) => task.status === "done"))
 const upcomingTasks = computed(() => {
@@ -66,7 +69,7 @@ const statusLabels: Record<TaskStatus, string> = {
 
 const roleLabels: Record<Role, string> = {
   admin: "管理员",
-  manager: "管理员",
+  manager: "任务管理员",
   member: "成员",
 }
 
@@ -155,7 +158,7 @@ async function loadRoute() {
     } else if (path.value === "/me") {
       // Current user data is already sufficient.
     } else if (path.value === "/admin/members") {
-      if (!isManager.value) {
+      if (!isAdmin.value) {
         navigate("/")
         return
       }
@@ -165,7 +168,10 @@ async function loadRoute() {
         navigate("/")
         return
       }
-      ;[members.value, tasks.value] = await Promise.all([api.members(), api.tasks("all")])
+      ;[taskMembers.value, tasks.value] = await Promise.all([
+        api.taskAssignees(),
+        api.tasks("all"),
+      ])
       if (!taskOwnerId.value) taskOwnerId.value = activeMembers.value[0]?.id ?? null
     } else {
       navigate("/")
@@ -247,9 +253,20 @@ async function copyInvite() {
 }
 
 async function disableMember(memberId: number) {
+  if (!window.confirm("停用后该成员会立即退出登录，确定停用？")) return
   error.value = ""
   try {
     await api.disableMember(memberId)
+    members.value = await api.members()
+  } catch (reason) {
+    error.value = messageOf(reason)
+  }
+}
+
+async function enableMember(memberId: number) {
+  error.value = ""
+  try {
+    await api.enableMember(memberId)
     members.value = await api.members()
   } catch (reason) {
     error.value = messageOf(reason)
@@ -301,6 +318,7 @@ async function logout() {
   user.value = null
   tasks.value = []
   members.value = []
+  taskMembers.value = []
   navigate("/login")
 }
 
@@ -505,7 +523,7 @@ onBeforeUnmount(() => window.removeEventListener("popstate", handlePopState))
           <small>{{ user ? roleLabels[user.role] : "" }}</small>
         </section>
         <section v-if="isManager" class="management-links">
-          <button type="button" @click="navigate('/admin/members')">
+          <button v-if="isAdmin" type="button" @click="navigate('/admin/members')">
             <span>成员</span>
             <span>›</span>
           </button>
@@ -532,6 +550,7 @@ onBeforeUnmount(() => window.removeEventListener("popstate", handlePopState))
             系统权限
             <select v-model="memberRole">
               <option value="member">成员</option>
+              <option value="manager">任务管理员</option>
               <option value="admin">管理员</option>
             </select>
           </label>
@@ -564,12 +583,19 @@ onBeforeUnmount(() => window.removeEventListener("popstate", handlePopState))
                   生成邀请
                 </button>
                 <button
-                  v-if="member.status !== 'disabled' && member.id !== user?.id"
+                  v-if="member.status === 'active' && member.id !== user?.id"
                   class="danger-text"
                   type="button"
                   @click="disableMember(member.id)"
                 >
-                  禁用
+                  停用
+                </button>
+                <button
+                  v-if="member.status === 'disabled'"
+                  type="button"
+                  @click="enableMember(member.id)"
+                >
+                  恢复
                 </button>
               </div>
             </div>

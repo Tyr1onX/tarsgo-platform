@@ -2,6 +2,7 @@ import type {
   InvitationInfo,
   InviteResult,
   Member,
+  MemberSummary,
   Role,
   Task,
   TaskStatus,
@@ -67,7 +68,10 @@ export const api = {
     request<InviteResult>(`/api/members/${memberId}/invite`, { method: "POST" }),
   disableMember: (memberId: number) =>
     request<Member>(`/api/members/${memberId}/disable`, { method: "POST" }),
+  enableMember: (memberId: number) =>
+    request<Member>(`/api/members/${memberId}/enable`, { method: "POST" }),
 
+  taskAssignees: () => request<MemberSummary[]>("/api/tasks/assignees"),
   tasks: (scope: "mine" | "all" = "mine") =>
     request<Task[]>(`/api/tasks?scope=${scope}`),
   createTask: (payload: {

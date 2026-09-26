@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - codex/v0.1
   pull_request:
 
 jobs:
@@ -28,6 +27,12 @@ jobs:
           EOF
           echo "CI_ADMIN_PASSWORD=$ADMIN_PASSWORD" >> "$GITHUB_ENV"
           echo "CI_MYSQL_ROOT_PASSWORD=$MYSQL_ROOT_PASSWORD" >> "$GITHUB_ENV"
+
+      - name: Build frontend
+        run: |
+          cd frontend
+          npm ci
+          npm run build
 
       - name: Build and start
         run: docker compose up -d --build

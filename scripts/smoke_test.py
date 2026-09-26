@@ -9,6 +9,8 @@ from urllib.request import HTTPCookieProcessor, Request, build_opener
 
 BASE_URL = sys.argv[2].rstrip("/") if len(sys.argv) > 2 else "http://127.0.0.1"
 ADMIN_EMAIL = "admin@example.com"
+MANAGER_EMAIL = "manager@example.com"
+OWNER_EMAIL = "lisi@example.com"
 TASK_TITLE = "整理招新现场物料"
 
 
@@ -40,31 +42,35 @@ def call(client, path, *, method="GET", data=None, expected=200):
     return json.loads(payload)
 
 
-def login(email, password):
+def login(email, password, *, expected=200):
     client = opener()
-    member = call(
+    result = call(
         client,
         "/api/auth/login",
         method="POST",
         data={"email": email, "password": password},
+        expected=expected,
     )
-    assert member["email"] == email
+    if expected == 200:
+        assert result["email"] == email
     return client
 
 
-def invite_and_activate(admin, name, email):
-    invitation = call(
+def invite(admin, name, email, role="member"):
+    return call(
         admin,
         "/api/members/invite",
         method="POST",
-        data={"name": name, "email": email, "role": "member"},
+        data={"name": name, "email": email, "role": role},
         expected=201,
     )
+
+
+def activate(invitation):
     token = invitation["invite_path"].rsplit("/", 1)[1]
     info = call(opener(), f"/api/invitations/{token}")
-    assert info["name"] == name
-    assert info["email"] == email
-
+    assert info["name"] == invitation["member"]["name"]
+    assert info["email"] == invitation["member"]["email"]
     password = secrets.token_urlsafe(18)
     call(
         opener(),
@@ -74,7 +80,7 @@ def invite_and_activate(admin, name, email):
         expected=204,
     )
     call(opener(), f"/api/invitations/{token}", expected=404)
-    return invitation["member"]["id"], password
+    return password
 
 
 def run_workflow():
@@ -82,43 +88,76 @@ def run_workflow():
 
     call(opener(), "/api/auth/me", expected=401)
     call(opener(), "/api/tasks", expected=401)
+    call(opener(), "/api/members", expected=401)
 
     admin = login(ADMIN_EMAIL, admin_password)
-    owner_id, owner_password = invite_and_activate(admin, "李四", "lisi@example.com")
-    first_collaborator_id, first_collaborator_password = invite_and_activate(
-        admin, "王五", "wangwu@example.com"
-    )
-    second_collaborator_id, _ = invite_and_activate(admin, "赵六", "zhaoliu@example.com")
 
-    owner = login("lisi@example.com", owner_password)
-    call(owner, "/api/members", expected=403)
+    manager_invite = invite(admin, "王五", MANAGER_EMAIL, "manager")
+    manager_id = manager_invite["member"]["id"]
+    manager_password = activate(manager_invite)
+
+    owner_invite = invite(admin, "李四", OWNER_EMAIL)
+    owner_id = owner_invite["member"]["id"]
+    owner_password = activate(owner_invite)
+
+    collaborator_invite = invite(admin, "赵六", "zhaoliu@example.com")
+    collaborator_id = collaborator_invite["member"]["id"]
+    collaborator_password = activate(collaborator_invite)
+
+    pending_invite = invite(admin, "钱七", "qianqi@example.com")
+    pending_id = pending_invite["member"]["id"]
+    call(admin, f"/api/members/{pending_id}/enable", method="POST", expected=409)
+
+    manager = login(MANAGER_EMAIL, manager_password)
+    member = login(OWNER_EMAIL, owner_password)
+    collaborator = login("zhaoliu@example.com", collaborator_password)
+
+    call(manager, "/api/members", expected=403)
+    call(
+        manager,
+        "/api/members/invite",
+        method="POST",
+        data={"name": "孙八", "email": "sunba@example.com", "role": "member"},
+        expected=403,
+    )
+    call(
+        manager,
+        "/api/members/invite",
+        method="POST",
+        data={"name": "周九", "email": "zhoujiu@example.com", "role": "admin"},
+        expected=403,
+    )
+    call(manager, f"/api/members/{owner_id}/disable", method="POST", expected=403)
+    call(member, "/api/members", expected=403)
+
+    assignees = call(manager, "/api/tasks/assignees")
+    assert {item["id"] for item in assignees} >= {manager_id, owner_id, collaborator_id}
+    assert all(set(item) == {"id", "name"} for item in assignees)
 
     task = call(
-        admin,
+        manager,
         "/api/tasks",
         method="POST",
         data={
             "title": TASK_TITLE,
             "deliverable": "完成物料清单核对并确认现场可用。",
             "owner_id": owner_id,
-            "collaborator_ids": [first_collaborator_id, second_collaborator_id],
+            "collaborator_ids": [collaborator_id],
             "deadline": "2026-10-15T18:00:00",
             "status": "todo",
         },
         expected=201,
     )
-    assert task["owner"]["id"] == owner_id
-    assert {member["id"] for member in task["collaborators"]} == {
-        first_collaborator_id,
-        second_collaborator_id,
-    }
+    updated_by_manager = call(
+        manager,
+        f"/api/tasks/{task['id']}",
+        method="PATCH",
+        data={"deliverable": "完成物料清单核对、现场确认并归档。"},
+    )
+    assert updated_by_manager["deliverable"].endswith("归档。")
 
-    owner_tasks = call(owner, "/api/tasks?scope=mine")
-    assert any(item["id"] == task["id"] for item in owner_tasks)
-
-    collaborator = login("wangwu@example.com", first_collaborator_password)
-    collaborator_tasks = call(collaborator, "/api/tasks?scope=mine")
-    assert any(item["id"] == task["id"] for item in collaborator_tasks)
+    assert any(item["id"] == task["id"] for item in call(member, "/api/tasks?scope=mine"))
+    assert any(item["id"] == task["id"] for item in call(collaborator, "/api/tasks?scope=mine"))
     call(
         collaborator,
         f"/api/tasks/{task['id']}",
@@ -127,34 +166,47 @@ def run_workflow():
         expected=403,
     )
 
-    updated = call(
-        owner,
+    call(
+        member,
         f"/api/tasks/{task['id']}",
         method="PATCH",
         data={"status": "doing"},
     )
-    assert updated["status"] == "doing"
+
+    disabled = call(admin, f"/api/members/{owner_id}/disable", method="POST")
+    assert disabled["status"] == "disabled"
+    call(member, "/api/auth/me", expected=401)
+    login(OWNER_EMAIL, owner_password, expected=403)
+
+    enabled = call(admin, f"/api/members/{owner_id}/enable", method="POST")
+    assert enabled["status"] == "active"
+    member = login(OWNER_EMAIL, owner_password)
+    assert call(member, "/api/auth/me")["email"] == OWNER_EMAIL
+
     updated = call(
-        owner,
+        member,
         f"/api/tasks/{task['id']}",
         method="PATCH",
         data={"status": "done"},
     )
     assert updated["status"] == "done"
 
-    print("V0.1 workflow smoke test passed")
+    print("V0.1 hardening workflow smoke test passed")
 
 
 def verify_persistence():
     admin = login(ADMIN_EMAIL, os.environ["CI_ADMIN_PASSWORD"])
     members = call(admin, "/api/members")
-    emails = {member["email"] for member in members}
-    assert {"lisi@example.com", "wangwu@example.com", "zhaoliu@example.com"} <= emails
+    by_email = {member["email"]: member for member in members}
+    assert by_email[MANAGER_EMAIL]["role"] == "manager"
+    assert by_email[OWNER_EMAIL]["status"] == "active"
+    assert by_email["qianqi@example.com"]["status"] == "invited"
 
     tasks = call(admin, "/api/tasks?scope=all")
     task = next(item for item in tasks if item["title"] == TASK_TITLE)
     assert task["status"] == "done"
-    assert len(task["collaborators"]) == 2
+    assert task["deliverable"].endswith("归档。")
+    assert len(task["collaborators"]) == 1
     print("Database restart persistence check passed")
 
 

@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from ..auth import hash_token, new_token, require_manager, utcnow
+from ..auth import hash_token, new_token, require_admin, utcnow
 from ..db import get_db
 from ..models import Invitation, LoginSession, Member
 from ..schemas import InviteCreate, InviteOut, MemberOut
@@ -29,7 +29,7 @@ def _create_invitation(db: Session, member: Member) -> InviteOut:
 
 @router.get("", response_model=list[MemberOut])
 def list_members(
-    _: Member = Depends(require_manager),
+    _: Member = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> list[Member]:
     return list(db.scalars(select(Member).order_by(Member.created_at.desc(), Member.id.desc())))
@@ -38,7 +38,7 @@ def list_members(
 @router.post("/invite", response_model=InviteOut, status_code=status.HTTP_201_CREATED)
 def invite_member(
     payload: InviteCreate,
-    _: Member = Depends(require_manager),
+    _: Member = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> InviteOut:
     if db.scalar(select(Member.id).where(Member.email == payload.email)) is not None:
@@ -53,7 +53,7 @@ def invite_member(
 @router.post("/{member_id}/invite", response_model=InviteOut)
 def regenerate_invitation(
     member_id: int,
-    _: Member = Depends(require_manager),
+    _: Member = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> InviteOut:
     member = db.get(Member, member_id)
@@ -67,7 +67,7 @@ def regenerate_invitation(
 @router.post("/{member_id}/disable", response_model=MemberOut)
 def disable_member(
     member_id: int,
-    current: Member = Depends(require_manager),
+    current: Member = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> Member:
     member = db.get(Member, member_id)
@@ -75,10 +75,30 @@ def disable_member(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="成员不存在")
     if member.id == current.id:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="不能停用自己的账号")
+    if member.status != "active":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="只有已激活成员可以停用")
 
     member.status = "disabled"
     db.execute(delete(Invitation).where(Invitation.member_id == member.id))
     db.execute(delete(LoginSession).where(LoginSession.member_id == member.id))
+    db.commit()
+    db.refresh(member)
+    return member
+
+
+@router.post("/{member_id}/enable", response_model=MemberOut)
+def enable_member(
+    member_id: int,
+    _: Member = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> Member:
+    member = db.get(Member, member_id)
+    if not member:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="成员不存在")
+    if member.status != "disabled":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="只有已停用成员可以恢复")
+
+    member.status = "active"
     db.commit()
     db.refresh(member)
     return member

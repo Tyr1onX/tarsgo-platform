@@ -93,3 +93,9 @@ def require_manager(member: Member = Depends(get_current_member)) -> Member:
     if member.role not in {"admin", "manager"}:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权访问")
     return member
+
+
+def require_admin(member: Member = Depends(get_current_member)) -> Member:
+    if member.role != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权访问")
+    return member

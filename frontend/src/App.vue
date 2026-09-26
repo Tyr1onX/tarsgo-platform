@@ -10,6 +10,7 @@ import type {
   Role,
   Task,
   TaskStatus,
+  TaskView,
 } from "./types"
 
 const path = ref(window.location.pathname)
@@ -29,16 +30,23 @@ const tasks = ref<Task[]>([])
 const members = ref<Member[]>([])
 const taskMembers = ref<MemberSummary[]>([])
 const latestInvite = ref<InviteResult | null>(null)
+const taskView = ref<TaskView>("mine")
+const claimableCount = ref(0)
 
 const memberName = ref("")
 const memberEmail = ref("")
 const memberRole = ref<Role>("member")
 
+const taskFormOpen = ref(false)
 const editingTaskId = ref<number | null>(null)
+const parentTaskId = ref<number | null>(null)
 const taskTitle = ref("")
 const taskDeliverable = ref("")
+const taskOwnerMode = ref<"assigned" | "claimable">("assigned")
 const taskOwnerId = ref<number | null>(null)
+const taskOwnerClaimable = ref(false)
 const taskCollaboratorIds = ref<number[]>([])
+const taskCollaborationOpen = ref(false)
 const taskDeadline = ref("")
 const taskStatus = ref<TaskStatus>("todo")
 
@@ -54,6 +62,9 @@ const activeMemberIds = computed(() => new Set(activeMembers.value.map((member) 
 const editingTask = computed(
   () => tasks.value.find((task) => task.id === editingTaskId.value) ?? null,
 )
+const parentTask = computed(
+  () => tasks.value.find((task) => task.id === parentTaskId.value) ?? null,
+)
 const ownerOptions = computed(() => {
   const options = [...activeMembers.value]
   const owner = editingTask.value?.owner
@@ -62,6 +73,13 @@ const ownerOptions = computed(() => {
 })
 const openTasks = computed(() => tasks.value.filter((task) => task.status !== "done"))
 const doneTasks = computed(() => tasks.value.filter((task) => task.status === "done"))
+const rootTasks = computed(() => tasks.value.filter((task) => task.parent_id === null))
+const loadedTaskIds = computed(() => new Set(tasks.value.map((task) => task.id)))
+const orphanTasks = computed(() =>
+  tasks.value.filter(
+    (task) => task.parent_id !== null && !loadedTaskIds.value.has(task.parent_id),
+  ),
+)
 const upcomingTasks = computed(() => {
   const now = Date.now()
   const limit = now + 7 * 24 * 60 * 60 * 1000
@@ -83,17 +101,34 @@ const roleLabels: Record<Role, string> = {
   member: "成员",
 }
 
+const viewLabels: Record<TaskView, string> = {
+  mine: "我的",
+  claimable: "待认领",
+  all: "全部",
+}
+
 function messageOf(reason: unknown): string {
   return reason instanceof Error ? reason.message : "操作失败"
 }
 
 function navigate(nextPath: string) {
-  if (window.location.pathname !== nextPath) {
+  if (window.location.pathname + window.location.search !== nextPath) {
     window.history.pushState({}, "", nextPath)
   }
-  path.value = nextPath
+  path.value = window.location.pathname
   error.value = ""
   void loadRoute()
+}
+
+function readTaskView(): TaskView {
+  const value = new URLSearchParams(window.location.search).get("view")
+  return value === "claimable" || value === "all" ? value : "mine"
+}
+
+function navigateTasks(view: TaskView) {
+  const url = view === "mine" ? "/tasks" : `/tasks?view=${view}`
+  taskView.value = view
+  navigate(url)
 }
 
 function formatDate(value: string) {
@@ -109,24 +144,60 @@ function toLocalInput(value: string) {
   return value.slice(0, 16)
 }
 
+function childTasks(parentId: number) {
+  return tasks.value.filter((task) => task.parent_id === parentId)
+}
+
+function isCollaborator(task: Task) {
+  return task.collaborators.some((member) => member.id === user.value?.id)
+}
+
 function resetTaskForm() {
   editingTaskId.value = null
+  parentTaskId.value = null
   taskTitle.value = ""
   taskDeliverable.value = ""
+  taskOwnerMode.value = "assigned"
   taskOwnerId.value = activeMembers.value[0]?.id ?? null
+  taskOwnerClaimable.value = false
   taskCollaboratorIds.value = []
+  taskCollaborationOpen.value = false
   taskDeadline.value = ""
   taskStatus.value = "todo"
 }
 
+function closeTaskForm() {
+  taskFormOpen.value = false
+  resetTaskForm()
+}
+
+function startNewTask(parent?: Task) {
+  resetTaskForm()
+  if (parent) {
+    parentTaskId.value = parent.id
+    taskDeadline.value = toLocalInput(parent.deadline)
+  }
+  taskFormOpen.value = true
+  if (path.value !== "/tasks" || taskView.value !== "all") {
+    navigateTasks("all")
+  } else {
+    window.scrollTo({ top: 0, behavior: "smooth" })
+  }
+}
+
 function editTask(task: Task) {
+  taskFormOpen.value = true
   editingTaskId.value = task.id
+  parentTaskId.value = task.parent_id
   taskTitle.value = task.title
   taskDeliverable.value = task.deliverable
-  taskOwnerId.value = task.owner.id
+  taskOwnerMode.value = task.owner ? "assigned" : "claimable"
+  taskOwnerId.value = task.owner?.id ?? activeMembers.value[0]?.id ?? null
+  taskOwnerClaimable.value = task.owner_claimable
   taskCollaboratorIds.value = task.collaborators
     .filter((member) => activeMemberIds.value.has(member.id))
     .map((member) => member.id)
+  taskCollaborationOpen.value = task.collaboration_open
   taskDeadline.value = toLocalInput(task.deadline)
   taskStatus.value = task.status
   window.scrollTo({ top: 0, behavior: "smooth" })
@@ -135,7 +206,10 @@ function editTask(task: Task) {
 function sameIds(left: number[], right: number[]) {
   const sortedLeft = [...left].sort((a, b) => a - b)
   const sortedRight = [...right].sort((a, b) => a - b)
-  return sortedLeft.length === sortedRight.length && sortedLeft.every((id, index) => id === sortedRight[index])
+  return (
+    sortedLeft.length === sortedRight.length &&
+    sortedLeft.every((id, index) => id === sortedRight[index])
+  )
 }
 
 async function loadCurrentUser() {
@@ -178,16 +252,22 @@ async function loadRoute() {
       navigate("/team")
       return
     } else if (path.value === "/") {
-      tasks.value = await api.tasks("mine")
+      const [mine, claimable] = await Promise.all([
+        api.tasks("mine"),
+        api.tasks("claimable"),
+      ])
+      tasks.value = mine
+      claimableCount.value = claimable.length
     } else if (path.value === "/tasks") {
+      taskView.value = readTaskView()
       if (isManager.value) {
         ;[taskMembers.value, tasks.value] = await Promise.all([
           api.taskAssignees(),
-          api.tasks("all"),
+          api.tasks(taskView.value),
         ])
         if (!taskOwnerId.value) taskOwnerId.value = activeMembers.value[0]?.id ?? null
       } else {
-        tasks.value = await api.tasks("mine")
+        tasks.value = await api.tasks(taskView.value)
       }
     } else if (path.value === "/team") {
       if (!isAdmin.value) {
@@ -297,15 +377,18 @@ async function enableMember(memberId: number) {
   }
 }
 
-function startNewTask() {
-  resetTaskForm()
-  navigate("/tasks")
-}
-
 async function submitTask() {
   error.value = ""
-  if (!taskOwnerId.value || !taskDeadline.value) {
-    error.value = "请选择负责人和截止时间"
+  const desiredOwnerId = taskOwnerMode.value === "assigned" ? taskOwnerId.value : null
+  const desiredOwnerClaimable =
+    taskOwnerMode.value === "claimable" ? true : taskOwnerClaimable.value
+
+  if (!taskDeadline.value) {
+    error.value = "请选择截止时间"
+    return
+  }
+  if (taskOwnerMode.value === "assigned" && !desiredOwnerId) {
+    error.value = "请选择负责人"
     return
   }
 
@@ -316,10 +399,14 @@ async function submitTask() {
 
       const payload: Parameters<typeof api.updateTask>[1] = {}
       if (taskTitle.value !== original.title) payload.title = taskTitle.value
-      if (taskDeliverable.value !== original.deliverable) {
-        payload.deliverable = taskDeliverable.value
+      if (taskDeliverable.value !== original.deliverable) payload.deliverable = taskDeliverable.value
+      if (desiredOwnerId !== original.owner?.id) payload.owner_id = desiredOwnerId
+      if (desiredOwnerClaimable !== original.owner_claimable) {
+        payload.owner_claimable = desiredOwnerClaimable
       }
-      if (taskOwnerId.value !== original.owner.id) payload.owner_id = taskOwnerId.value
+      if (taskCollaborationOpen.value !== original.collaboration_open) {
+        payload.collaboration_open = taskCollaborationOpen.value
+      }
       if (taskDeadline.value !== toLocalInput(original.deadline)) {
         payload.deadline = taskDeadline.value
       }
@@ -337,16 +424,24 @@ async function submitTask() {
       }
     } else {
       await api.createTask({
+        parent_id: parentTaskId.value,
         title: taskTitle.value,
         deliverable: taskDeliverable.value,
-        owner_id: taskOwnerId.value,
+        owner_id: desiredOwnerId,
+        owner_claimable: desiredOwnerClaimable,
         collaborator_ids: taskCollaboratorIds.value,
+        collaboration_open: taskCollaborationOpen.value,
         deadline: taskDeadline.value,
         status: taskStatus.value,
       })
     }
-    tasks.value = await api.tasks("all")
-    resetTaskForm()
+
+    closeTaskForm()
+    taskView.value = "all"
+    if (window.location.search !== "?view=all") {
+      window.history.replaceState({}, "", "/tasks?view=all")
+    }
+    await loadRoute()
   } catch (reason) {
     error.value = messageOf(reason)
   }
@@ -355,9 +450,49 @@ async function submitTask() {
 async function updateOwnTaskStatus(task: Task, status: TaskStatus) {
   error.value = ""
   try {
-    const updated = await api.updateTask(task.id, { status })
-    const index = tasks.value.findIndex((item) => item.id === task.id)
-    if (index >= 0) tasks.value[index] = updated
+    await api.updateTask(task.id, { status })
+    await loadRoute()
+  } catch (reason) {
+    error.value = messageOf(reason)
+  }
+}
+
+async function claimTask(task: Task) {
+  error.value = ""
+  try {
+    await api.claimTask(task.id)
+    await loadRoute()
+  } catch (reason) {
+    error.value = messageOf(reason)
+  }
+}
+
+async function unclaimTask(task: Task) {
+  if (!window.confirm("取消负责人认领后，该任务会重新进入待认领列表。确定继续？")) return
+  error.value = ""
+  try {
+    await api.unclaimTask(task.id)
+    await loadRoute()
+  } catch (reason) {
+    error.value = messageOf(reason)
+  }
+}
+
+async function joinTask(task: Task) {
+  error.value = ""
+  try {
+    await api.joinTask(task.id)
+    await loadRoute()
+  } catch (reason) {
+    error.value = messageOf(reason)
+  }
+}
+
+async function leaveTask(task: Task) {
+  error.value = ""
+  try {
+    await api.leaveTask(task.id)
+    await loadRoute()
   } catch (reason) {
     error.value = messageOf(reason)
   }
@@ -461,6 +596,7 @@ onBeforeUnmount(() => window.removeEventListener("popstate", handlePopState))
   <main v-else class="app-shell">
     <header class="topbar">
       <span class="brand">TARS-GO</span>
+      <span class="product-label">公共运营事务</span>
     </header>
 
     <div v-if="loading" class="page"><p>正在加载…</p></div>
@@ -473,24 +609,35 @@ onBeforeUnmount(() => window.removeEventListener("popstate", handlePopState))
         <section class="hero">
           <p>你好，{{ user?.name }}</p>
           <h1>我现在需要做什么</h1>
-          <button v-if="isManager" class="primary hero-action" type="button" @click="startNewTask">
-            新建任务
+          <button v-if="isManager" class="primary hero-action" type="button" @click="startNewTask()">
+            新建事项
           </button>
         </section>
 
+        <button
+          v-if="claimableCount"
+          class="claimable-link"
+          type="button"
+          @click="navigateTasks('claimable')"
+        >
+          <span>还有 {{ claimableCount }} 项待认领</span>
+          <strong>去看看 ›</strong>
+        </button>
+
         <section>
           <div class="section-heading">
-            <h2>我的任务</h2>
-            <span>{{ openTasks.length }} 项未完成</span>
+            <h2>我的未完成</h2>
+            <span>{{ openTasks.length }} 项</span>
           </div>
           <div v-if="openTasks.length" class="list">
             <article v-for="task in openTasks" :key="task.id" class="task-row">
               <div>
-                <span class="state">{{ statusLabels[task.status] }}</span>
+                <span class="state">{{ task.parent_id ? "分工" : "事项" }} · {{ statusLabels[task.status] }}</span>
                 <h3>{{ task.title }}</h3>
-                <p>{{ task.deliverable }}</p>
+                <p v-if="task.deliverable">{{ task.deliverable }}</p>
                 <small>
-                  {{ task.owner.name }} 负责 · 截止 {{ formatDate(task.deadline) }}
+                  {{ task.owner ? task.owner.name + " 负责" : "待认领" }}
+                  · 截止 {{ formatDate(task.deadline) }}
                   <template v-if="task.collaborators.length">
                     · 协作 {{ task.collaborators.map((member) => member.name).join("、") }}
                   </template>
@@ -499,23 +646,21 @@ onBeforeUnmount(() => window.removeEventListener("popstate", handlePopState))
             </article>
           </div>
           <div v-else class="empty empty-action">
-            <p>当前没有待处理任务。</p>
-            <button v-if="isManager" class="primary" type="button" @click="startNewTask">
-              新建任务
+            <p>当前没有需要你处理的未完成任务。</p>
+            <button v-if="isManager" class="primary" type="button" @click="startNewTask()">
+              新建事项
             </button>
           </div>
         </section>
 
         <section v-if="upcomingTasks.length">
-          <div class="section-heading">
-            <h2>近期截止</h2>
-          </div>
+          <div class="section-heading"><h2>近期截止</h2></div>
           <div class="compact-list">
             <button
               v-for="task in upcomingTasks"
               :key="task.id"
               type="button"
-              @click="navigate('/tasks')"
+              @click="navigateTasks('mine')"
             >
               <span>{{ task.title }}</span>
               <small>{{ formatDate(task.deadline) }}</small>
@@ -536,85 +681,283 @@ onBeforeUnmount(() => window.removeEventListener("popstate", handlePopState))
       <template v-else-if="path === '/tasks'">
         <div class="page-title">
           <h1>任务</h1>
-          <button v-if="isManager && editingTaskId" type="button" @click="resetTaskForm">
-            新建任务
+          <button v-if="isManager" type="button" @click="startNewTask()">新建事项</button>
+        </div>
+
+        <div class="view-tabs" role="tablist" aria-label="任务视图">
+          <button
+            v-for="view in (['mine', 'claimable', 'all'] as TaskView[])"
+            :key="view"
+            type="button"
+            :class="{ active: taskView === view }"
+            @click="navigateTasks(view)"
+          >
+            {{ viewLabels[view] }}
           </button>
         </div>
 
-        <form v-if="isManager" class="management-form" @submit.prevent="submitTask">
+        <form v-if="isManager && taskFormOpen" class="management-form task-form" @submit.prevent="submitTask">
           <div class="form-title">
-            <h2>{{ editingTaskId ? "修改任务" : "新建任务" }}</h2>
-            <button v-if="editingTaskId" type="button" @click="resetTaskForm">取消修改</button>
+            <div>
+              <small v-if="parentTask" class="form-context">分工属于：{{ parentTask.title }}</small>
+              <h2>{{ editingTaskId ? "修改任务" : parentTaskId ? "添加分工" : "新建事项" }}</h2>
+            </div>
+            <button type="button" @click="closeTaskForm">关闭</button>
           </div>
+
           <label>
-            任务
-            <input v-model="taskTitle" maxlength="200" required />
+            要做什么？
+            <input v-model="taskTitle" maxlength="200" required placeholder="例如：现场摄影" />
           </label>
-          <label>
-            最终交付
-            <textarea v-model="taskDeliverable" maxlength="5000" rows="4" required />
-          </label>
-          <label>
-            负责人
-            <select v-model="taskOwnerId" required>
+
+          <fieldset>
+            <legend>负责人</legend>
+            <div class="choice-row">
+              <label class="choice-option">
+                <input v-model="taskOwnerMode" type="radio" value="assigned" />
+                指定负责人
+              </label>
+              <label class="choice-option">
+                <input v-model="taskOwnerMode" type="radio" value="claimable" />
+                待认领
+              </label>
+            </div>
+            <select v-if="taskOwnerMode === 'assigned'" v-model="taskOwnerId" required>
               <option v-for="member in ownerOptions" :key="member.id" :value="member.id">
                 {{ member.name }}{{ activeMemberIds.has(member.id) ? "" : "（已停用）" }}
               </option>
             </select>
-          </label>
-          <fieldset>
-            <legend>协作者</legend>
-            <label
-              v-for="member in activeMembers.filter((item) => item.id !== taskOwnerId)"
-              :key="member.id"
-              class="check-row"
-            >
-              <input v-model="taskCollaboratorIds" type="checkbox" :value="member.id" />
-              {{ member.name }}
-            </label>
-            <span v-if="activeMembers.length <= 1" class="muted">暂无其他可选成员</span>
           </fieldset>
+
           <label>
             截止时间
             <input v-model="taskDeadline" type="datetime-local" required />
           </label>
-          <label>
-            状态
-            <select v-model="taskStatus">
-              <option value="todo">待开始</option>
-              <option value="doing">进行中</option>
-              <option value="done">已完成</option>
-            </select>
-          </label>
+
+          <details class="advanced-fields">
+            <summary>完成标准与协作设置</summary>
+            <div class="advanced-grid">
+              <label>
+                完成标准（可选）
+                <textarea
+                  v-model="taskDeliverable"
+                  maxlength="5000"
+                  rows="3"
+                  placeholder="例如：照片原图上传并完成分类"
+                />
+              </label>
+
+              <fieldset>
+                <legend>协作者</legend>
+                <label
+                  v-for="member in activeMembers.filter((item) => item.id !== taskOwnerId)"
+                  :key="member.id"
+                  class="check-row"
+                >
+                  <input v-model="taskCollaboratorIds" type="checkbox" :value="member.id" />
+                  {{ member.name }}
+                </label>
+                <span v-if="activeMembers.length <= 1" class="muted">暂无其他可选成员</span>
+              </fieldset>
+
+              <label class="check-row">
+                <input v-model="taskCollaborationOpen" type="checkbox" />
+                允许成员自行加入 / 退出协作
+              </label>
+
+              <label v-if="taskOwnerMode === 'assigned'" class="check-row">
+                <input v-model="taskOwnerClaimable" type="checkbox" />
+                允许负责人取消后重新开放认领
+              </label>
+
+              <label>
+                状态
+                <select v-model="taskStatus">
+                  <option value="todo">待开始</option>
+                  <option value="doing">进行中</option>
+                  <option value="done">已完成</option>
+                </select>
+              </label>
+            </div>
+          </details>
+
           <button class="primary" type="submit">
-            {{ editingTaskId ? "保存修改" : "创建任务" }}
+            {{ editingTaskId ? "保存修改" : parentTaskId ? "添加分工" : "发布事项" }}
           </button>
         </form>
 
-        <section>
-          <div class="section-heading">
-            <h2>{{ isManager ? "全部任务" : "我的任务" }}</h2>
-          </div>
-          <div v-if="tasks.length" class="list">
-            <article
-              v-for="task in tasks"
-              :key="task.id"
-              class="task-row"
-              :class="{ editable: isManager }"
-            >
-              <div class="task-main">
-                <span class="state">{{ statusLabels[task.status] }}</span>
+        <section class="task-board">
+          <div v-if="rootTasks.length || orphanTasks.length" class="operation-list">
+            <article v-for="task in rootTasks" :key="task.id" class="operation-card">
+              <div class="operation-main">
+                <span class="state">事项 · {{ statusLabels[task.status] }}</span>
                 <h3>{{ task.title }}</h3>
-                <p>{{ task.deliverable }}</p>
+                <p v-if="task.deliverable">{{ task.deliverable }}</p>
                 <small>
-                  {{ task.owner.name }} 负责 · 截止 {{ formatDate(task.deadline) }}
-                  <template v-if="task.collaborators.length">
-                    · 协作 {{ task.collaborators.map((member) => member.name).join("、") }}
-                  </template>
+                  {{ task.owner ? "总负责人 " + task.owner.name : "总负责人待认领" }}
+                  · 截止 {{ formatDate(task.deadline) }}
+                </small>
+                <small v-if="task.collaborators.length">
+                  协作：{{ task.collaborators.map((member) => member.name).join("、") }}
                 </small>
               </div>
-              <button v-if="isManager" type="button" @click="editTask(task)">修改</button>
-              <div v-else-if="task.owner.id === user?.id" class="status-actions">
+
+              <div class="task-actions">
+                <button
+                  v-if="!task.owner && task.owner_claimable && task.status !== 'done'"
+                  class="primary small-action"
+                  type="button"
+                  @click="claimTask(task)"
+                >
+                  认领负责人
+                </button>
+                <button
+                  v-if="task.owner?.id === user?.id && task.owner_claimable && task.status !== 'done'"
+                  type="button"
+                  @click="unclaimTask(task)"
+                >
+                  取消认领
+                </button>
+                <button
+                  v-if="task.collaboration_open && task.owner?.id !== user?.id && !isCollaborator(task) && task.status !== 'done'"
+                  type="button"
+                  @click="joinTask(task)"
+                >
+                  加入协作
+                </button>
+                <button
+                  v-if="task.collaboration_open && isCollaborator(task) && task.status !== 'done'"
+                  type="button"
+                  @click="leaveTask(task)"
+                >
+                  退出协作
+                </button>
+                <button v-if="isManager" type="button" @click="editTask(task)">编辑</button>
+              </div>
+
+              <div v-if="task.owner?.id === user?.id" class="status-actions">
+                <button
+                  v-for="value in (['todo', 'doing', 'done'] as TaskStatus[])"
+                  :key="value"
+                  type="button"
+                  :class="{ active: task.status === value }"
+                  @click="updateOwnTaskStatus(task, value)"
+                >
+                  {{ statusLabels[value] }}
+                </button>
+              </div>
+
+              <div v-if="childTasks(task.id).length || (isManager && taskView === 'all')" class="work-breakdown">
+                <div class="breakdown-heading">
+                  <strong>分工</strong>
+                  <button v-if="isManager" type="button" @click="startNewTask(task)">＋ 添加分工</button>
+                </div>
+
+                <article v-for="child in childTasks(task.id)" :key="child.id" class="child-task">
+                  <div>
+                    <span class="state">{{ statusLabels[child.status] }}</span>
+                    <h4>{{ child.title }}</h4>
+                    <p v-if="child.deliverable">{{ child.deliverable }}</p>
+                    <small>
+                      {{ child.owner ? child.owner.name + " 负责" : "待认领" }}
+                      · 截止 {{ formatDate(child.deadline) }}
+                      <template v-if="child.collaborators.length">
+                        · 协作 {{ child.collaborators.map((member) => member.name).join("、") }}
+                      </template>
+                    </small>
+                  </div>
+
+                  <div class="task-actions">
+                    <button
+                      v-if="!child.owner && child.owner_claimable && child.status !== 'done'"
+                      class="primary small-action"
+                      type="button"
+                      @click="claimTask(child)"
+                    >
+                      认领
+                    </button>
+                    <button
+                      v-if="child.owner?.id === user?.id && child.owner_claimable && child.status !== 'done'"
+                      type="button"
+                      @click="unclaimTask(child)"
+                    >
+                      取消认领
+                    </button>
+                    <button
+                      v-if="child.collaboration_open && child.owner?.id !== user?.id && !isCollaborator(child) && child.status !== 'done'"
+                      type="button"
+                      @click="joinTask(child)"
+                    >
+                      加入协作
+                    </button>
+                    <button
+                      v-if="child.collaboration_open && isCollaborator(child) && child.status !== 'done'"
+                      type="button"
+                      @click="leaveTask(child)"
+                    >
+                      退出协作
+                    </button>
+                    <button v-if="isManager" type="button" @click="editTask(child)">编辑</button>
+                  </div>
+
+                  <div v-if="child.owner?.id === user?.id" class="status-actions">
+                    <button
+                      v-for="value in (['todo', 'doing', 'done'] as TaskStatus[])"
+                      :key="value"
+                      type="button"
+                      :class="{ active: child.status === value }"
+                      @click="updateOwnTaskStatus(child, value)"
+                    >
+                      {{ statusLabels[value] }}
+                    </button>
+                  </div>
+                </article>
+              </div>
+            </article>
+
+            <article v-for="task in orphanTasks" :key="task.id" class="operation-card orphan-task">
+              <div class="operation-main">
+                <span class="state">分工 · {{ statusLabels[task.status] }}</span>
+                <h3>{{ task.title }}</h3>
+                <p v-if="task.deliverable">{{ task.deliverable }}</p>
+                <small>
+                  {{ task.owner ? task.owner.name + " 负责" : "待认领" }}
+                  · 截止 {{ formatDate(task.deadline) }}
+                </small>
+              </div>
+              <div class="task-actions">
+                <button
+                  v-if="!task.owner && task.owner_claimable && task.status !== 'done'"
+                  class="primary small-action"
+                  type="button"
+                  @click="claimTask(task)"
+                >
+                  认领负责人
+                </button>
+                <button
+                  v-if="task.owner?.id === user?.id && task.owner_claimable && task.status !== 'done'"
+                  type="button"
+                  @click="unclaimTask(task)"
+                >
+                  取消认领
+                </button>
+                <button
+                  v-if="task.collaboration_open && task.owner?.id !== user?.id && !isCollaborator(task) && task.status !== 'done'"
+                  type="button"
+                  @click="joinTask(task)"
+                >
+                  加入协作
+                </button>
+                <button
+                  v-if="task.collaboration_open && isCollaborator(task) && task.status !== 'done'"
+                  type="button"
+                  @click="leaveTask(task)"
+                >
+                  退出协作
+                </button>
+                <button v-if="isManager" type="button" @click="editTask(task)">编辑</button>
+              </div>
+              <div v-if="task.owner?.id === user?.id" class="status-actions">
                 <button
                   v-for="value in (['todo', 'doing', 'done'] as TaskStatus[])"
                   :key="value"
@@ -627,16 +970,20 @@ onBeforeUnmount(() => window.removeEventListener("popstate", handlePopState))
               </div>
             </article>
           </div>
+
           <div v-else class="empty empty-action">
-            <p>{{ isManager ? "还没有任务。可以从上方创建第一项任务。" : "目前没有与你相关的任务。" }}</p>
+            <p v-if="taskView === 'mine'">目前没有你负责或参与的任务。</p>
+            <p v-else-if="taskView === 'claimable'">当前没有待认领的任务。</p>
+            <p v-else>还没有正式发布的运营事项。</p>
+            <button v-if="isManager && taskView === 'all'" class="primary" type="button" @click="startNewTask()">
+              新建事项
+            </button>
           </div>
         </section>
       </template>
 
       <template v-else-if="path === '/me'">
-        <div class="page-title">
-          <h1>我的</h1>
-        </div>
+        <div class="page-title"><h1>我的</h1></div>
         <section class="profile">
           <strong>{{ user?.name }}</strong>
           <span>{{ user?.email }}</span>
@@ -646,9 +993,7 @@ onBeforeUnmount(() => window.removeEventListener("popstate", handlePopState))
       </template>
 
       <template v-else-if="path === '/team'">
-        <div class="page-title">
-          <h1>团队</h1>
-        </div>
+        <div class="page-title"><h1>团队</h1></div>
         <form class="management-form" @submit.prevent="submitMemberInvite">
           <h2>邀请成员</h2>
           <label>
@@ -715,7 +1060,6 @@ onBeforeUnmount(() => window.removeEventListener("popstate", handlePopState))
           </div>
         </section>
       </template>
-
     </div>
 
     <nav
@@ -724,7 +1068,7 @@ onBeforeUnmount(() => window.removeEventListener("popstate", handlePopState))
       :style="{ gridTemplateColumns: `repeat(${isAdmin ? 4 : 3}, 1fr)` }"
     >
       <button :class="{ active: path === '/' }" type="button" @click="navigate('/')">首页</button>
-      <button :class="{ active: path === '/tasks' }" type="button" @click="navigate('/tasks')">
+      <button :class="{ active: path === '/tasks' }" type="button" @click="navigateTasks('mine')">
         任务
       </button>
       <button

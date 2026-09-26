@@ -95,8 +95,11 @@ def enable_member(
     member = db.get(Member, member_id)
     if not member:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="成员不存在")
-    if member.status != "disabled":
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="只有已停用成员可以恢复")
+    if member.status != "disabled" or not member.password_hash:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="只有已激活后停用的成员可以恢复",
+        )
 
     member.status = "active"
     db.commit()

@@ -4,23 +4,22 @@
 
 TARS-Go Platform is an open-source operations and collaboration platform for university robotics teams.
 
-Build only what is required by real team workflows. The system should remain small, understandable, and deployable on a single server.
+Build only what is required by real team workflows. Keep the system small, understandable, and deployable on one server.
 
 ## Working rules
 
-1. Read the current code before making architectural decisions. README is supporting documentation, not the source of truth.
+1. Read current code before making architectural decisions. README is supporting documentation, not the source of truth.
 2. Prefer the smallest implementation that completes the real workflow.
 3. Keep one implementation path and one source of truth for each state.
 4. Do not add abstractions, dependencies, services, configuration, or compatibility layers without a current requirement.
-5. Fix root causes instead of adding defensive patches.
-6. Remove obsolete code when a new implementation fully replaces it.
-7. Keep changes scoped to the current requirement; do not perform unrelated large refactors.
-8. Verify third-party behavior against the current version before relying on it.
-9. Never commit production secrets or real private team/member data.
+5. Fix root causes instead of layering patches.
+6. Remove obsolete code when a new implementation replaces it.
+7. Keep changes scoped to the current requirement.
+8. Never commit production secrets or real private team/member data.
 
 ## Architecture
 
-~~~
+~~~text
 Browser
   |
 Caddy
@@ -29,9 +28,9 @@ Caddy
   +-- /api/* -> FastAPI -> MySQL
 ~~~
 
-The deployment target is a single VPS using Docker Compose. The API container runs Alembic migrations before starting FastAPI.
+Deployment target: one VPS with Docker Compose. The API container runs Alembic migrations before FastAPI starts.
 
-Do not introduce Redis, message queues, microservices, Kubernetes, a separate API gateway, or multiple databases unless the existing architecture is proven insufficient by a real requirement.
+Do not introduce Redis, queues, microservices, Kubernetes, a separate API gateway, multiple databases, or deployment control panels without a demonstrated requirement.
 
 ## Current stack
 
@@ -43,45 +42,63 @@ Do not introduce Redis, message queues, microservices, Kubernetes, a separate AP
 - Caddy
 - Docker Compose
 
-## Current V0.1 workflow
+Frontend dependencies are locked with `package-lock.json`; Docker and CI use `npm ci`.
 
-~~~
+## Current V0.1 scope
+
+~~~text
 admin creates member
 -> one-time invitation link
 -> member sets password
 -> member logs in
--> admin creates task
+-> admin/manager creates task
 -> owner/collaborators see task
 -> owner updates task status
 ~~~
 
-Do not extend this workflow with activities, leave, weekly reports, notifications, files, AI, GitHub sync, organization editors, points, or approval flows unless a later task explicitly requires them.
+Do not add activities, leave, weekly reports, notifications, files, AI, GitHub sync, organization editors, points, approval flows, or other business modules unless a later requirement explicitly asks for them.
 
-## Authentication and authorization
+## Authorization boundary
 
-System roles are admin, manager and member.
+System roles are `admin`, `manager`, and `member`.
 
-admin and manager currently share the management boundary. Do not add a permission matrix until a real manager-specific requirement exists.
+- `admin`: member account management + task management
+- `manager`: task management only
+- `member`: own related tasks; only a task owner may update its status
 
-Passwords use Argon2 through pwdlib.
+Only `admin` may list full member account data, create invitations, regenerate invitations, disable/enable accounts, or create accounts with any system role.
 
-Login uses an opaque random HttpOnly cookie. Only the SHA-256 hash of the session token is stored in MySQL. Do not replace this with browser-readable tokens, JWT refresh-token infrastructure, or OAuth without a demonstrated requirement.
+Do not expand member-account endpoints back to `manager`. Use `require_admin` for account management and `require_manager` for admin/manager task-management operations.
 
-Invitation tokens are also random opaque values with only their hashes stored in MySQL. One invited member has at most one current invitation row. Accepting the invitation deletes that row immediately.
+Task management needs only a minimal active-member assignment list (id + name). Do not grant managers full member-account reads merely to populate task assignment controls.
+
+Real-world titles such as captain, vice captain, group leader, or project manager are not system roles and must not appear in authorization logic.
+
+## Authentication and member state
+
+Passwords use Argon2 through `pwdlib`.
+
+Login uses a random opaque HttpOnly cookie with SameSite=Lax. Only SHA-256 session-token hashes are stored in MySQL. Production HTTPS requires Secure cookies.
+
+Invitation tokens are random opaque values; only their hashes are stored. They expire after seven days and are removed immediately after activation.
+
+Member states are `invited`, `active`, and `disabled`.
+
+Only active accounts may be disabled. Disabling deletes existing sessions immediately. Enabling restores only a previously active account: it keeps the password, creates no session, and the user must log in again. Do not enable an invited account; the enable path also requires an existing password hash so legacy disabled invitations cannot become active accidentally.
 
 ## Current data model
 
-The real V0.1 tables are members, invitations, sessions, tasks, task_collaborators and alembic_version.
+Real V0.1 tables are `members`, `invitations`, `sessions`, `tasks`, `task_collaborators`, and `alembic_version`.
 
-Member status is invited, active, or disabled. Task status is todo, doing, or done.
+A task has exactly one owner and zero or more collaborators through `task_collaborators`. Do not store collaborator IDs in JSON or strings.
 
-A task has exactly one owner and zero or more collaborators through task_collaborators. Do not store collaborator IDs in JSON or string fields.
+Task status is `todo`, `doing`, or `done`.
 
-Task deadlines are currently local wall-clock DATETIME values from the user form. Do not introduce UTC conversion in only one layer; timezone support must be designed end to end if it becomes a real requirement.
+Task deadlines are local wall-clock DATETIME values from the current form. Do not introduce partial timezone conversion.
 
 ## Backend boundaries
 
-~~~
+~~~text
 app/
 ├── auth.py
 ├── bootstrap_admin.py
@@ -96,28 +113,28 @@ app/
     └── tasks.py
 ~~~
 
-Do not add controller/service/repository/facade layers around these modules without a concrete boundary that needs them.
+Do not add controller/service/repository/facade layers without a concrete boundary that needs them.
 
 ## Frontend boundaries
 
-The frontend intentionally has no UI framework and no separate desktop application.
+The frontend intentionally has no UI framework, router library, or state-management library.
 
-Current routes are /login, /invite/:token, /, /tasks, /me, /admin/members and /admin/tasks.
+Current routes are `/login`, `/invite/:token`, `/`, `/tasks`, `/me`, `/admin/members`, and `/admin/tasks`.
 
-Mobile is the primary layout. PC is the same UI with responsive expansion.
+Mobile is the primary layout. PC uses the same responsive UI.
 
-Do not add dashboard statistics, decorative cards, fake buttons, unused routes, or explanatory UI that does not change the user's next action.
+Do not redesign the UI or split `App.vue` only for stylistic reasons. Do not add dashboard statistics, fake buttons, decorative cards, or explanatory content that does not affect the user's next action.
 
-## Data boundary
+## Public data boundary
 
-The repository is public. Production data is private.
+Never commit `.env`, passwords, tokens, API keys, private keys, server IPs, database files/backups, real personal information, private team notes, or internal operational records.
 
-Never commit .env, credentials, passwords, tokens, private keys, server secrets, database files, backups, real personal information, leave/attendance records, private meeting notes, or internal team documents.
+Use fictional data for tests and documentation. CI passwords must be generated at runtime.
 
-Use fictional data for tests and documentation. CI secrets and passwords must be generated at runtime.
+Git commit author metadata is outside the repository file-content boundary; do not rewrite history to hide it.
 
 ## Validation
 
-The V0.1 GitHub Actions workflow builds the real Docker Compose stack and runs scripts/smoke_test.py.
+The V0.1 GitHub Actions workflow runs `npm ci`, the frontend production build, the real Docker Compose stack, and `scripts/smoke_test.py`.
 
-A change to the current workflow is not complete until the relevant validation passes. The test must keep covering authentication boundaries, invitation invalidation, task owner/collaborator visibility, task status permissions, and database restart persistence.
+A change is not complete until the relevant validation passes. Keep coverage for unauthenticated access, invitations, admin-only account management, manager task management, member task restrictions, disable/enable session behavior, and database restart persistence.

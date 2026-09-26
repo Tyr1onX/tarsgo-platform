@@ -647,8 +647,8 @@ onBeforeUnmount(() => window.removeEventListener("popstate", handlePopState))
         <section class="hero">
           <p>你好，{{ user?.name }}</p>
           <h1>我现在需要做什么</h1>
-          <button v-if="isManager" class="primary hero-action" type="button" @click="startNewTask()">
-            新建事项
+          <button v-if="isManager" class="hero-action" type="button" @click="startNewTask()">
+            ＋ 新建事项
           </button>
         </section>
 
@@ -658,14 +658,13 @@ onBeforeUnmount(() => window.removeEventListener("popstate", handlePopState))
           type="button"
           @click="navigateTasks('claimable')"
         >
-          <span>还有 {{ claimableCount }} 项待认领</span>
-          <strong>去看看 ›</strong>
+          <span>还有 {{ claimableCount }} 项待认领 →</span>
         </button>
 
         <section>
           <div class="section-heading">
-            <h2>我的未完成</h2>
-            <span>{{ openTasks.length }} 项</span>
+            <h2>我的事项</h2>
+            <span>{{ openTasks.length }} 项待处理</span>
           </div>
           <div v-if="openTasks.length" class="list">
             <article v-for="task in openTasks" :key="task.id" class="task-row">
@@ -684,10 +683,7 @@ onBeforeUnmount(() => window.removeEventListener("popstate", handlePopState))
             </article>
           </div>
           <div v-else class="empty empty-action">
-            <p>当前没有需要你处理的未完成任务。</p>
-            <button v-if="isManager" class="primary" type="button" @click="startNewTask()">
-              新建事项
-            </button>
+            <p>目前没有你负责或协作的未完成事项。</p>
           </div>
         </section>
 

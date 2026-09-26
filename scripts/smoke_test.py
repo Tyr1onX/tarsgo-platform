@@ -175,11 +175,13 @@ def run_workflow():
 
     disabled = call(admin, f"/api/members/{owner_id}/disable", method="POST")
     assert disabled["status"] == "disabled"
-    call(member, "/api/auth/me", expected=401)
+    stale_member_session = member
+    call(stale_member_session, "/api/auth/me", expected=401)
     login(OWNER_EMAIL, owner_password, expected=403)
 
     enabled = call(admin, f"/api/members/{owner_id}/enable", method="POST")
     assert enabled["status"] == "active"
+    call(stale_member_session, "/api/auth/me", expected=401)
     member = login(OWNER_EMAIL, owner_password)
     assert call(member, "/api/auth/me")["email"] == OWNER_EMAIL
 

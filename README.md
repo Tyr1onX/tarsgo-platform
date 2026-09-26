@@ -1,20 +1,29 @@
 # TARS-Go Platform
 
-An open-source operations and collaboration platform for university robotics teams.
+TARS-Go is an open-source collaboration platform for university robotics teams.
 
-V0.1 is intentionally limited to one workflow:
+The current product direction is a **public operations collaboration board** for work such as promotion, event execution, recruitment, materials, livestreaming and photography.
+
+Discussion still happens in WeChat, meetings or offline. TARS-Go records work that has already been clarified and keeps the current execution state visible to the team.
+
+Technical R&D workflows for mechanical, electrical or algorithm teams are not part of the current V0.2 scope.
+
+## Current workflow
 
 ~~~text
-admin creates member
--> copies one-time invitation link
--> member sets password
--> member logs in
--> admin/manager assigns a task
--> owner/collaborators see the task
--> task owner updates its status
+admin / manager publishes an operations item
+-> item may be split into one level of execution tasks over time
+-> owner is assigned directly or opened for claiming
+-> collaborators are assigned directly or may join when collaboration is open
+-> all active members can see published work
+-> owners update execution status
+-> admin / manager keeps structure and assignments aligned with reality
 ~~~
 
-No public registration, email delivery, OAuth, activity module, leave, weekly reports, notifications, files, AI, organization editor, or approval workflow is included.
+See:
+
+- docs/operations-workflow.md — product workflow and task-granularity rules
+- docs/ai-direction.md — long-term AI role and explicit boundaries
 
 ## Stack
 
@@ -28,24 +37,129 @@ No public registration, email delivery, OAuth, activity module, leave, weekly re
 
 ## Permissions
 
-System roles are deliberately separate from real team titles.
+System roles are independent from real-world team titles.
 
-- `admin`
-  - member account management
-  - create invitations for admin / manager / member
-  - regenerate pending invitations
-  - disable and enable active accounts
-  - full task management
-- `manager`
-  - view all tasks
-  - create and modify tasks
-  - read the minimal active-member list required for task assignment
-  - no member account management
-- `member`
-  - view tasks where they are the owner or collaborator
-  - update status only when they are the task owner
+### admin
 
-The backend is the security boundary. Hiding frontend controls is not treated as authorization.
+- manage member accounts
+- create, edit and reassign all operations items and execution tasks
+- use the same claiming / collaboration actions available to active members
+
+### manager
+
+- create, edit and reassign all operations items and execution tasks
+- read the minimal active-member list required for assignment
+- no member-account administration
+
+### member
+
+- view all published operations work
+- view work they own or collaborate on
+- view currently claimable work
+- claim an ownerless task when owner claiming is open
+- cancel their own claim when the task is not completed and remains claimable
+- join / leave open collaboration
+- update status only for tasks they currently own
+
+Backend authorization is the security boundary.
+
+## Task model
+
+V0.2 continues to use the existing tasks table rather than adding an Activity model.
+
+A task may be:
+
+- a root item (parent_id = NULL) representing an operations item
+- a one-level child task (parent_id = root task id) representing an execution assignment
+
+Current task fields include:
+
+- title
+- optional completion standard (deliverable)
+- optional owner
+- owner_claimable
+- collaborators
+- collaboration_open
+- parent id
+- explicit deadline
+- status: todo | doing | done
+
+A published task must either have an owner or allow owner claiming.
+
+Only one child level is supported in V0.2. Grandchildren are rejected.
+
+Historical tasks may continue to reference disabled members. Existing assignments are not revalidated during unrelated edits; newly submitted owners and collaborators must be active.
+
+## Pages
+
+- /login — email/password login
+- /invite/:token — one-time password setup
+- / — “what do I need to do now?” home view
+- /tasks — single task entry for every role
+- /team — admin-only member account management
+- /me — personal information, system role and logout
+
+/tasks provides three views to every active member:
+
+- **我的** — tasks the member owns or collaborates on
+- **待认领** — ownerless, non-completed tasks with public owner claiming enabled
+- **全部** — all published operations items and execution tasks
+
+admin / manager can open a lightweight form from the same task page to create a root item or add one execution task below an item.
+
+Legacy /admin/tasks redirects to /tasks, and /admin/members redirects to /team.
+
+## Claiming and collaboration
+
+Owner claiming is atomic at the database update boundary: once one member claims an ownerless task, a second claimant receives a conflict instead of overwriting the owner.
+
+A member may cancel their own claim only when:
+
+- they are the current owner
+- the task is not done
+- the task is still marked as owner-claimable
+
+Open collaboration allows active non-owners to join or leave themselves while the task is not completed.
+
+admin / manager may always reassign owners and collaborators through normal task editing.
+
+## Authentication and member lifecycle
+
+Passwords are hashed with Argon2 through pwdlib.
+
+Login uses an opaque random HttpOnly cookie:
+
+- only the cookie contains the raw session token
+- MySQL stores only SHA-256 token hashes
+- SameSite is Lax
+- production HTTPS must use SESSION_COOKIE_SECURE=true
+- sessions expire after seven days
+- disabling an account deletes all sessions immediately
+
+Invitation tokens are opaque random values; only their hashes are stored. Invitations expire after seven days and are deleted after activation.
+
+Member states are invited, active and disabled.
+
+Only active accounts can use task claiming or collaboration APIs because every action requires a valid active session.
+
+## Database migration
+
+V0.2 adds Alembic revision:
+
+~~~text
+0002_operations_claiming
+~~~
+
+It upgrades the existing V0.1 tasks table without deleting data:
+
+- existing owner_id values are preserved
+- owner_id becomes nullable
+- parent_id is added nullable
+- owner_claimable defaults to false
+- collaboration_open defaults to false
+- existing completion standards and statuses remain unchanged
+
+CI includes a real 0001_v0_1 -> 0002_operations_claiming compatibility check using seeded legacy data.
 
 ## Run locally
 
@@ -54,7 +168,7 @@ cp .env.example .env
 docker compose up -d --build
 ~~~
 
-Open http://localhost. The web container serves HTTP; a deployment reverse proxy can provide public HTTPS.
+Open http://localhost.
 
 For local HTTP:
 
@@ -63,21 +177,21 @@ APP_DOMAIN=:80
 SESSION_COOKIE_SECURE=false
 ~~~
 
-The API container runs `alembic upgrade head` before FastAPI starts.
+The API container runs alembic upgrade head before FastAPI starts.
 
 ## Create the first administrator
 
-There is no public registration route. After the stack is running:
+There is no public registration route.
 
 ~~~bash
 docker compose exec api python -m app.bootstrap_admin
 ~~~
 
-The first administrator can then create the remaining accounts from `/admin/members`.
+The first administrator can invite remaining accounts from /team.
 
 ## Frontend development
 
-Frontend dependencies are locked with `package-lock.json`.
+Dependencies are locked with package-lock.json.
 
 ~~~bash
 cd frontend
@@ -86,73 +200,9 @@ npm run build
 npm run dev
 ~~~
 
-The Vite development server proxies `/api` to `http://127.0.0.1:8000`.
-
-## V0.1.1 pages and navigation
-
-- `/login` — email/password login
-- `/invite/:token` — one-time password setup
-- `/` — personal work dashboard answering “what do I need to do now?”
-- `/tasks` — the single task entry for every role
-  - admin / manager see all tasks and can create or edit tasks
-  - member sees only related tasks and can update status when they are the owner
-- `/team` — admin-only member invitation, listing, disable and restore
-- `/me` — personal information, system role and logout only
-
-The bottom navigation is role-aware:
-
-- member: Home / Tasks / Me
-- manager: Home / Tasks / Me
-- admin: Home / Tasks / Team / Me
-
-Task management is no longer a separate frontend destination. Legacy `/admin/tasks` redirects to `/tasks`, and legacy `/admin/members` redirects to `/team`. Backend authorization remains the security boundary.
-
-The application is mobile-first and uses the same responsive UI on desktop.
-
-## Authentication and member lifecycle
-
-Passwords are hashed with Argon2 through `pwdlib`.
-
-Login uses an opaque random HttpOnly cookie:
-
-- only the cookie contains the raw session token
-- MySQL stores only SHA-256 token hashes
-- SameSite is `Lax`
-- production HTTPS must use `SESSION_COOKIE_SECURE=true`
-- sessions expire after seven days
-- logout removes the current session
-- disabling an account deletes all of that account's sessions immediately
-
-Invitation tokens are also opaque random values. MySQL stores only their hashes. Invitations expire after seven days and are deleted immediately after successful activation.
-
-Member states are:
-
-- `invited` — password has not been set
-- `active` — account can log in
-- `disabled` — previously active account is blocked
-
-Only an `active` account can be disabled. Enabling restores a previously active disabled account to `active`, keeps the existing password, creates no session, and requires the member to log in again. Pending `invited` accounts are not enabled through the restore endpoint. The restore endpoint also refuses legacy disabled rows that have no password hash.
-
-## Data model
-
-V0.1 uses:
-
-- `members`
-- `invitations`
-- `sessions`
-- `tasks`
-- `task_collaborators`
-- `alembic_version`
-
-A task has exactly one owner and zero or more collaborators through the association table. Task status is `todo`, `doing`, or `done`.
-
-Historical tasks may continue to reference members who were later disabled. Editing title, deliverable, deadline, or status does not revalidate existing assignments. Any newly submitted owner or collaborator assignment must reference an active member.
-
-Task deadlines are stored as the local wall-clock value entered by the user. V0.1 does not implement multi-timezone conversion.
-
 ## RackNerd deployment preparation
 
-For a single VPS behind an existing Nginx server, create a production `.env` with values similar to:
+For a single VPS behind an existing Nginx server:
 
 ~~~text
 APP_DOMAIN=your-domain.example
@@ -167,21 +217,17 @@ MYSQL_PASSWORD=<strong-random-password>
 MYSQL_ROOT_PASSWORD=<strong-random-password>
 ~~~
 
-Then run:
+Then:
 
 ~~~bash
 docker compose up -d --build
 ~~~
 
-Compose publishes only the web container's HTTP port. Set `WEB_BIND_ADDRESS=127.0.0.1` and `WEB_HTTP_PORT=8080` so only the local Nginx can reach it. FastAPI and MySQL remain on the internal Docker network with no host ports. MySQL uses the named `mysql_data` volume.
-
-Add an Nginx server block for `APP_DOMAIN` that proxies to `http://127.0.0.1:8080`, and use the existing Nginx/Certbot HTTPS setup. `CADDY_SITE_ADDRESS=:80` keeps Caddy in HTTP-only mode behind Nginx.
-
-Point the domain's DNS A record at the VPS before requesting its Nginx certificate. Add an AAAA record only if the VPS has working public IPv6.
+Only the web container's HTTP port is published. FastAPI and MySQL remain on the internal Docker network. MySQL data stays in the named mysql_data volume.
 
 ## Validation
 
-GitHub Actions runs both:
+GitHub Actions runs:
 
 ~~~bash
 cd frontend
@@ -189,27 +235,78 @@ npm ci
 npm run build
 ~~~
 
-and the real:
+and:
 
 ~~~bash
 docker compose up -d --build
+python scripts/smoke_test.py workflow http://127.0.0.1
+python scripts/smoke_test.py persistence http://127.0.0.1
 ~~~
 
-The Compose smoke test covers authentication, invitation invalidation, admin/manager/member permission boundaries, manager task management, member disable/enable behavior, immediate session invalidation, task owner/collaborator permissions, and MySQL restart persistence.
+Coverage includes:
+
+- member visibility of all published operations tasks
+- parent / child correctness and one-level limit
+- direct assignment and public owner claiming
+- atomic prevention of duplicate claiming
+- open collaboration join / leave
+- safe claim cancellation
+- admin / manager reassignment
+- member structural-edit restrictions
+- owner-only member status updates
+- disabled-member blocking
+- database restart persistence
+- V0.1 legacy-data migration
+
+## Deliberately deferred
+
+V0.2 first stage does **not** implement:
+
+- AI API / LLM provider
+- automatic scheduling
+- time-conflict calculation
+- task recommendation algorithms
+- workload algorithms
+- notifications
+- comments
+- files
+- leave
+- weekly reports
+- technical R&D management
+- complex dashboards
+- complex organization structures
+- full field-change history
+
+The product direction for later AI and richer execution metadata is documented, but not implemented yet.
 
 ## Public repository boundary
 
 This repository is public. Never commit:
 
-- `.env`
-- passwords, credentials, session tokens, invite tokens, API keys, or private keys
+- .env
+- passwords, credentials, session tokens, invite tokens, API keys or private keys
 - VPS IP addresses or other private server details
 - database files or backups
-- real member names, email addresses, student numbers, phone numbers, or internal team material
+- real member names, email addresses, student numbers, phone numbers or internal team material
 
-Tests and documentation use fictional identities such as 张三, 李四, `admin@example.com`, and `lisi@example.com`.
+Tests and documentation use fictional identities such as 张三, 李四, admin@example.com and lisi@example.com.
 
-Contributors who do not want their personal Git email exposed in commit metadata should configure a GitHub-provided `noreply` address before committing. Existing Git history is not rewritten for this purpose.
+Contributors who do not want their personal Git email exposed in commit metadata should configure a GitHub-provided noreply address before committing. Existing Git history is not rewritten.
+
+## Production test-data cleanup
+
+Do not delete production data automatically through migrations or application startup.
+
+After V0.2 deployment, cleanup of fictional production test data should be a separately reviewed database operation that:
+
+1. identifies fictional accounts and tasks by explicit IDs / emails / titles
+2. preserves the database schema and Alembic version
+3. preserves the real administrator account
+4. deletes dependent task-collaborator rows, tasks, sessions and invitations before deleting fictional members
+5. runs inside a transaction after a backup
+6. is reviewed before execution
+
+No production cleanup is executed by this release.
 
 ## License
 

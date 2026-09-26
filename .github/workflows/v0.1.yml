@@ -50,8 +50,8 @@ jobs:
             CREATE DATABASE tarsgo_migration CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
             GRANT ALL PRIVILEGES ON tarsgo_migration.* TO 'tarsgo'@'%';
           "
-          MIGRATION_URL="mysql+pymysql://tarsgo:$CI_MYSQL_PASSWORD@db:3306/tarsgo_migration"
-          docker compose exec -T -e DATABASE_URL="$MIGRATION_URL" api alembic upgrade 0001_v0_1
+          MIGRATION_DB="tarsgo_migration"
+          docker compose exec -T -e DB_NAME="$MIGRATION_DB" api alembic upgrade 0001_v0_1
           docker compose exec -T db mysql -uroot -p"$CI_MYSQL_ROOT_PASSWORD" tarsgo_migration <<'SQL'
           INSERT INTO members (id, name, email, password_hash, role, status)
           VALUES
@@ -61,7 +61,7 @@ jobs:
           VALUES
             (100, '旧版任务', '旧版交付', 101, '2026-09-20 18:00:00', 'todo', 100);
           SQL
-          docker compose exec -T -e DATABASE_URL="$MIGRATION_URL" api alembic upgrade head
+          docker compose exec -T -e DB_NAME="$MIGRATION_DB" api alembic upgrade head
           RESULT="$(docker compose exec -T db mysql -uroot -p"$CI_MYSQL_ROOT_PASSWORD" -N -B tarsgo_migration -e "
             SELECT CONCAT(
               owner_id, '|',

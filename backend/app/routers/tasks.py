@@ -140,26 +140,26 @@ def update_task(
         db.expire(task)
         return _task_out(_get_task(db, task.id))
 
-    new_owner_id = payload.owner_id if "owner_id" in fields else task.owner_id
-    collaborator_ids = (
-        payload.collaborator_ids
-        if "collaborator_ids" in fields and payload.collaborator_ids is not None
-        else [member.id for member in task.collaborators]
-    )
-    assignment_ids = set(collaborator_ids)
-    assignment_ids.add(new_owner_id)
-    members = _load_active_members(db, assignment_ids)
-
     for field in ("title", "deliverable", "deadline", "status"):
         if field in fields:
             setattr(task, field, getattr(payload, field))
+
     if "owner_id" in fields:
+        new_owner_id = payload.owner_id
+        _load_active_members(db, {new_owner_id})
         task.owner_id = new_owner_id
-    if "collaborator_ids" in fields or "owner_id" in fields:
+
+    if "collaborator_ids" in fields:
+        collaborator_ids = payload.collaborator_ids
+        members = _load_active_members(db, set(collaborator_ids))
         task.collaborators = [
             members[member_id]
             for member_id in dict.fromkeys(collaborator_ids)
-            if member_id != new_owner_id
+            if member_id != task.owner_id
+        ]
+    elif "owner_id" in fields:
+        task.collaborators = [
+            member for member in task.collaborators if member.id != task.owner_id
         ]
 
     db.commit()

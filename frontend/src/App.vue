@@ -171,26 +171,32 @@ async function loadRoute() {
       }
     } else if (path.value.startsWith("/invite/")) {
       invitation.value = await api.invitation(inviteToken.value)
-    } else if (path.value === "/" || path.value === "/tasks") {
-      tasks.value = await api.tasks("mine")
-    } else if (path.value === "/me") {
-      // Current user data is already sufficient.
+    } else if (path.value === "/admin/tasks") {
+      navigate("/tasks")
+      return
     } else if (path.value === "/admin/members") {
+      navigate("/team")
+      return
+    } else if (path.value === "/") {
+      tasks.value = await api.tasks("mine")
+    } else if (path.value === "/tasks") {
+      if (isManager.value) {
+        ;[taskMembers.value, tasks.value] = await Promise.all([
+          api.taskAssignees(),
+          api.tasks("all"),
+        ])
+        if (!taskOwnerId.value) taskOwnerId.value = activeMembers.value[0]?.id ?? null
+      } else {
+        tasks.value = await api.tasks("mine")
+      }
+    } else if (path.value === "/team") {
       if (!isAdmin.value) {
         navigate("/")
         return
       }
       members.value = await api.members()
-    } else if (path.value === "/admin/tasks") {
-      if (!isManager.value) {
-        navigate("/")
-        return
-      }
-      ;[taskMembers.value, tasks.value] = await Promise.all([
-        api.taskAssignees(),
-        api.tasks("all"),
-      ])
-      if (!taskOwnerId.value) taskOwnerId.value = activeMembers.value[0]?.id ?? null
+    } else if (path.value === "/me") {
+      // Current user data is already sufficient.
     } else {
       navigate("/")
       return
@@ -289,6 +295,11 @@ async function enableMember(memberId: number) {
   } catch (reason) {
     error.value = messageOf(reason)
   }
+}
+
+function startNewTask() {
+  resetTaskForm()
+  navigate("/tasks")
 }
 
 async function submitTask() {
@@ -449,17 +460,7 @@ onBeforeUnmount(() => window.removeEventListener("popstate", handlePopState))
 
   <main v-else class="app-shell">
     <header class="topbar">
-      <button
-        v-if="path.startsWith('/admin/')"
-        class="text-button"
-        type="button"
-        @click="navigate('/me')"
-      >
-        返回
-      </button>
-      <span v-else class="brand">TARS-GO</span>
-      <strong v-if="path === '/admin/members'">成员</strong>
-      <strong v-else-if="path === '/admin/tasks'">任务管理</strong>
+      <span class="brand">TARS-GO</span>
     </header>
 
     <div v-if="loading" class="page"><p>正在加载…</p></div>
@@ -472,6 +473,9 @@ onBeforeUnmount(() => window.removeEventListener("popstate", handlePopState))
         <section class="hero">
           <p>你好，{{ user?.name }}</p>
           <h1>我现在需要做什么</h1>
+          <button v-if="isManager" class="primary hero-action" type="button" @click="startNewTask">
+            新建任务
+          </button>
         </section>
 
         <section>
@@ -485,11 +489,21 @@ onBeforeUnmount(() => window.removeEventListener("popstate", handlePopState))
                 <span class="state">{{ statusLabels[task.status] }}</span>
                 <h3>{{ task.title }}</h3>
                 <p>{{ task.deliverable }}</p>
-                <small>截止 {{ formatDate(task.deadline) }} · 负责人 {{ task.owner.name }}</small>
+                <small>
+                  {{ task.owner.name }} 负责 · 截止 {{ formatDate(task.deadline) }}
+                  <template v-if="task.collaborators.length">
+                    · 协作 {{ task.collaborators.map((member) => member.name).join("、") }}
+                  </template>
+                </small>
               </div>
             </article>
           </div>
-          <p v-else class="empty">当前没有待处理任务。</p>
+          <div v-else class="empty empty-action">
+            <p>当前没有待处理任务。</p>
+            <button v-if="isManager" class="primary" type="button" @click="startNewTask">
+              新建任务
+            </button>
+          </div>
         </section>
 
         <section v-if="upcomingTasks.length">
@@ -522,34 +536,101 @@ onBeforeUnmount(() => window.removeEventListener("popstate", handlePopState))
       <template v-else-if="path === '/tasks'">
         <div class="page-title">
           <h1>任务</h1>
+          <button v-if="isManager && editingTaskId" type="button" @click="resetTaskForm">
+            新建任务
+          </button>
         </div>
-        <div v-if="tasks.length" class="list">
-          <article v-for="task in tasks" :key="task.id" class="task-row">
-            <div class="task-main">
-              <span class="state">{{ statusLabels[task.status] }}</span>
-              <h3>{{ task.title }}</h3>
-              <p>{{ task.deliverable }}</p>
-              <small>
-                截止 {{ formatDate(task.deadline) }} · 负责人 {{ task.owner.name }}
-                <template v-if="task.collaborators.length">
-                  · 协作 {{ task.collaborators.map((member) => member.name).join("、") }}
-                </template>
-              </small>
-            </div>
-            <div v-if="task.owner.id === user?.id" class="status-actions">
-              <button
-                v-for="value in (['todo', 'doing', 'done'] as TaskStatus[])"
-                :key="value"
-                type="button"
-                :class="{ active: task.status === value }"
-                @click="updateOwnTaskStatus(task, value)"
-              >
-                {{ statusLabels[value] }}
-              </button>
-            </div>
-          </article>
-        </div>
-        <p v-else class="empty">没有与你相关的任务。</p>
+
+        <form v-if="isManager" class="management-form" @submit.prevent="submitTask">
+          <div class="form-title">
+            <h2>{{ editingTaskId ? "修改任务" : "新建任务" }}</h2>
+            <button v-if="editingTaskId" type="button" @click="resetTaskForm">取消修改</button>
+          </div>
+          <label>
+            任务
+            <input v-model="taskTitle" maxlength="200" required />
+          </label>
+          <label>
+            最终交付
+            <textarea v-model="taskDeliverable" maxlength="5000" rows="4" required />
+          </label>
+          <label>
+            负责人
+            <select v-model="taskOwnerId" required>
+              <option v-for="member in ownerOptions" :key="member.id" :value="member.id">
+                {{ member.name }}{{ activeMemberIds.has(member.id) ? "" : "（已停用）" }}
+              </option>
+            </select>
+          </label>
+          <fieldset>
+            <legend>协作者</legend>
+            <label
+              v-for="member in activeMembers.filter((item) => item.id !== taskOwnerId)"
+              :key="member.id"
+              class="check-row"
+            >
+              <input v-model="taskCollaboratorIds" type="checkbox" :value="member.id" />
+              {{ member.name }}
+            </label>
+            <span v-if="activeMembers.length <= 1" class="muted">暂无其他可选成员</span>
+          </fieldset>
+          <label>
+            截止时间
+            <input v-model="taskDeadline" type="datetime-local" required />
+          </label>
+          <label>
+            状态
+            <select v-model="taskStatus">
+              <option value="todo">待开始</option>
+              <option value="doing">进行中</option>
+              <option value="done">已完成</option>
+            </select>
+          </label>
+          <button class="primary" type="submit">
+            {{ editingTaskId ? "保存修改" : "创建任务" }}
+          </button>
+        </form>
+
+        <section>
+          <div class="section-heading">
+            <h2>{{ isManager ? "全部任务" : "我的任务" }}</h2>
+          </div>
+          <div v-if="tasks.length" class="list">
+            <article
+              v-for="task in tasks"
+              :key="task.id"
+              class="task-row"
+              :class="{ editable: isManager }"
+            >
+              <div class="task-main">
+                <span class="state">{{ statusLabels[task.status] }}</span>
+                <h3>{{ task.title }}</h3>
+                <p>{{ task.deliverable }}</p>
+                <small>
+                  {{ task.owner.name }} 负责 · 截止 {{ formatDate(task.deadline) }}
+                  <template v-if="task.collaborators.length">
+                    · 协作 {{ task.collaborators.map((member) => member.name).join("、") }}
+                  </template>
+                </small>
+              </div>
+              <button v-if="isManager" type="button" @click="editTask(task)">修改</button>
+              <div v-else-if="task.owner.id === user?.id" class="status-actions">
+                <button
+                  v-for="value in (['todo', 'doing', 'done'] as TaskStatus[])"
+                  :key="value"
+                  type="button"
+                  :class="{ active: task.status === value }"
+                  @click="updateOwnTaskStatus(task, value)"
+                >
+                  {{ statusLabels[value] }}
+                </button>
+              </div>
+            </article>
+          </div>
+          <div v-else class="empty empty-action">
+            <p>{{ isManager ? "还没有任务。可以从上方创建第一项任务。" : "目前没有与你相关的任务。" }}</p>
+          </div>
+        </section>
       </template>
 
       <template v-else-if="path === '/me'">
@@ -561,22 +642,15 @@ onBeforeUnmount(() => window.removeEventListener("popstate", handlePopState))
           <span>{{ user?.email }}</span>
           <small>{{ user ? roleLabels[user.role] : "" }}</small>
         </section>
-        <section v-if="isManager" class="management-links">
-          <button v-if="isAdmin" type="button" @click="navigate('/admin/members')">
-            <span>成员</span>
-            <span>›</span>
-          </button>
-          <button type="button" @click="navigate('/admin/tasks')">
-            <span>任务</span>
-            <span>›</span>
-          </button>
-        </section>
         <button class="secondary full" type="button" @click="logout">退出登录</button>
       </template>
 
-      <template v-else-if="path === '/admin/members'">
+      <template v-else-if="path === '/team'">
+        <div class="page-title">
+          <h1>团队</h1>
+        </div>
         <form class="management-form" @submit.prevent="submitMemberInvite">
-          <h1>创建成员</h1>
+          <h2>邀请成员</h2>
           <label>
             姓名
             <input v-model="memberName" maxlength="100" required />
@@ -642,83 +716,24 @@ onBeforeUnmount(() => window.removeEventListener("popstate", handlePopState))
         </section>
       </template>
 
-      <template v-else-if="path === '/admin/tasks'">
-        <form class="management-form" @submit.prevent="submitTask">
-          <div class="form-title">
-            <h1>{{ editingTaskId ? "修改任务" : "创建任务" }}</h1>
-            <button v-if="editingTaskId" type="button" @click="resetTaskForm">取消修改</button>
-          </div>
-          <label>
-            任务
-            <input v-model="taskTitle" maxlength="200" required />
-          </label>
-          <label>
-            最终交付
-            <textarea v-model="taskDeliverable" maxlength="5000" rows="4" required />
-          </label>
-          <label>
-            负责人
-            <select v-model="taskOwnerId" required>
-              <option v-for="member in ownerOptions" :key="member.id" :value="member.id">
-                {{ member.name }}{{ activeMemberIds.has(member.id) ? "" : "（已停用）" }}
-              </option>
-            </select>
-          </label>
-          <fieldset>
-            <legend>协作者</legend>
-            <label
-              v-for="member in activeMembers.filter((item) => item.id !== taskOwnerId)"
-              :key="member.id"
-              class="check-row"
-            >
-              <input v-model="taskCollaboratorIds" type="checkbox" :value="member.id" />
-              {{ member.name }}
-            </label>
-            <span v-if="activeMembers.length <= 1" class="muted">暂无其他可选成员</span>
-          </fieldset>
-          <label>
-            截止时间
-            <input v-model="taskDeadline" type="datetime-local" required />
-          </label>
-          <label>
-            状态
-            <select v-model="taskStatus">
-              <option value="todo">待开始</option>
-              <option value="doing">进行中</option>
-              <option value="done">已完成</option>
-            </select>
-          </label>
-          <button class="primary" type="submit">
-            {{ editingTaskId ? "保存修改" : "创建任务" }}
-          </button>
-        </form>
-
-        <section>
-          <div class="section-heading"><h2>全部任务</h2></div>
-          <div v-if="tasks.length" class="list">
-            <article v-for="task in tasks" :key="task.id" class="task-row editable">
-              <div>
-                <span class="state">{{ statusLabels[task.status] }}</span>
-                <h3>{{ task.title }}</h3>
-                <p>{{ task.deliverable }}</p>
-                <small>截止 {{ formatDate(task.deadline) }} · 负责人 {{ task.owner.name }}</small>
-              </div>
-              <button type="button" @click="editTask(task)">修改</button>
-            </article>
-          </div>
-          <p v-else class="empty">还没有任务。</p>
-        </section>
-      </template>
     </div>
 
-    <nav v-if="!path.startsWith('/admin/')" class="bottom-nav" aria-label="主导航">
+    <nav
+      class="bottom-nav"
+      aria-label="主导航"
+      :style="{ gridTemplateColumns: `repeat(${isAdmin ? 4 : 3}, 1fr)` }"
+    >
       <button :class="{ active: path === '/' }" type="button" @click="navigate('/')">首页</button>
-      <button
-        :class="{ active: path === '/tasks' }"
-        type="button"
-        @click="navigate('/tasks')"
-      >
+      <button :class="{ active: path === '/tasks' }" type="button" @click="navigate('/tasks')">
         任务
+      </button>
+      <button
+        v-if="isAdmin"
+        :class="{ active: path === '/team' }"
+        type="button"
+        @click="navigate('/team')"
+      >
+        团队
       </button>
       <button :class="{ active: path === '/me' }" type="button" @click="navigate('/me')">我的</button>
     </nav>

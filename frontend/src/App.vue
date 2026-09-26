@@ -133,7 +133,9 @@ function editTask(task: Task) {
 }
 
 function sameIds(left: number[], right: number[]) {
-  return left.length === right.length && [...left].sort().every((id, index) => id === [...right].sort()[index])
+  const sortedLeft = [...left].sort((a, b) => a - b)
+  const sortedRight = [...right].sort((a, b) => a - b)
+  return sortedLeft.length === sortedRight.length && sortedLeft.every((id, index) => id === sortedRight[index])
 }
 
 async function loadCurrentUser() {

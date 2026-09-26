@@ -148,13 +148,6 @@ def run_workflow():
         },
         expected=201,
     )
-    updated_by_manager = call(
-        manager,
-        f"/api/tasks/{task['id']}",
-        method="PATCH",
-        data={"deliverable": "完成物料清单核对、现场确认并归档。"},
-    )
-    assert updated_by_manager["deliverable"].endswith("归档。")
 
     assert any(item["id"] == task["id"] for item in call(member, "/api/tasks?scope=mine"))
     assert any(item["id"] == task["id"] for item in call(collaborator, "/api/tasks?scope=mine"))
@@ -165,7 +158,6 @@ def run_workflow():
         data={"status": "doing"},
         expected=403,
     )
-
     call(
         member,
         f"/api/tasks/{task['id']}",
@@ -173,11 +165,84 @@ def run_workflow():
         data={"status": "doing"},
     )
 
-    disabled = call(admin, f"/api/members/{owner_id}/disable", method="POST")
-    assert disabled["status"] == "disabled"
+    disabled_collaborator = call(
+        admin,
+        f"/api/members/{collaborator_id}/disable",
+        method="POST",
+    )
+    assert disabled_collaborator["status"] == "disabled"
+
+    updated_by_manager = call(
+        manager,
+        f"/api/tasks/{task['id']}",
+        method="PATCH",
+        data={
+            "title": "整理并确认招新现场物料",
+            "deliverable": "完成物料清单核对、现场确认并归档。",
+        },
+    )
+    assert updated_by_manager["title"] == "整理并确认招新现场物料"
+    assert updated_by_manager["deliverable"].endswith("归档。")
+    assert [item["id"] for item in updated_by_manager["collaborators"]] == [collaborator_id]
+
+    call(
+        manager,
+        f"/api/tasks/{task['id']}",
+        method="PATCH",
+        data={"collaborator_ids": [collaborator_id]},
+        expected=400,
+    )
+    call(
+        manager,
+        "/api/tasks",
+        method="POST",
+        data={
+            "title": "不能分配给停用协作者",
+            "deliverable": "测试",
+            "owner_id": manager_id,
+            "collaborator_ids": [collaborator_id],
+            "deadline": "2026-10-16T18:00:00",
+            "status": "todo",
+        },
+        expected=400,
+    )
+
+    disabled_owner = call(admin, f"/api/members/{owner_id}/disable", method="POST")
+    assert disabled_owner["status"] == "disabled"
     stale_member_session = member
     call(stale_member_session, "/api/auth/me", expected=401)
     login(OWNER_EMAIL, owner_password, expected=403)
+
+    call(
+        manager,
+        f"/api/tasks/{task['id']}",
+        method="PATCH",
+        data={"owner_id": owner_id},
+        expected=400,
+    )
+    call(
+        manager,
+        "/api/tasks",
+        method="POST",
+        data={
+            "title": "不能分配给停用负责人",
+            "deliverable": "测试",
+            "owner_id": owner_id,
+            "collaborator_ids": [],
+            "deadline": "2026-10-16T18:00:00",
+            "status": "todo",
+        },
+        expected=400,
+    )
+
+    transferred = call(
+        manager,
+        f"/api/tasks/{task['id']}",
+        method="PATCH",
+        data={"owner_id": manager_id},
+    )
+    assert transferred["owner"]["id"] == manager_id
+    assert [item["id"] for item in transferred["collaborators"]] == [collaborator_id]
 
     enabled = call(admin, f"/api/members/{owner_id}/enable", method="POST")
     assert enabled["status"] == "active"
@@ -186,7 +251,7 @@ def run_workflow():
     assert call(member, "/api/auth/me")["email"] == OWNER_EMAIL
 
     updated = call(
-        member,
+        manager,
         f"/api/tasks/{task['id']}",
         method="PATCH",
         data={"status": "done"},
@@ -202,13 +267,17 @@ def verify_persistence():
     by_email = {member["email"]: member for member in members}
     assert by_email[MANAGER_EMAIL]["role"] == "manager"
     assert by_email[OWNER_EMAIL]["status"] == "active"
+    assert by_email["zhaoliu@example.com"]["status"] == "disabled"
     assert by_email["qianqi@example.com"]["status"] == "invited"
 
     tasks = call(admin, "/api/tasks?scope=all")
-    task = next(item for item in tasks if item["title"] == TASK_TITLE)
+    task = next(item for item in tasks if item["title"] == "整理并确认招新现场物料")
     assert task["status"] == "done"
+    assert task["owner"]["id"] == by_email[MANAGER_EMAIL]["id"]
     assert task["deliverable"].endswith("归档。")
-    assert len(task["collaborators"]) == 1
+    assert [item["id"] for item in task["collaborators"]] == [
+        by_email["zhaoliu@example.com"]["id"]
+    ]
     print("Database restart persistence check passed")
 
 

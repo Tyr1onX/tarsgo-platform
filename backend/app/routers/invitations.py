@@ -10,12 +10,15 @@ from ..schemas import InvitationAccept, InvitationInfo
 router = APIRouter(prefix="/api/invitations", tags=["invitations"])
 
 
-def _get_invitation(db: Session, token: str) -> Invitation:
-    invitation = db.scalar(
+def _get_invitation(db: Session, token: str, *, lock: bool = False) -> Invitation:
+    query = (
         select(Invitation)
         .options(joinedload(Invitation.member))
         .where(Invitation.token_hash == hash_token(token))
     )
+    if lock:
+        query = query.with_for_update()
+    invitation = db.scalar(query)
     if not invitation:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="邀请无效")
     if invitation.expires_at <= utcnow():
@@ -41,7 +44,7 @@ def invitation_info(token: str, db: Session = Depends(get_db)) -> InvitationInfo
 
 @router.post("/{token}/accept", status_code=status.HTTP_204_NO_CONTENT)
 def accept_invitation(token: str, payload: InvitationAccept, db: Session = Depends(get_db)) -> None:
-    invitation = _get_invitation(db, token)
+    invitation = _get_invitation(db, token, lock=True)
     invitation.member.password_hash = hash_password(payload.password)
     invitation.member.status = "active"
     db.delete(invitation)

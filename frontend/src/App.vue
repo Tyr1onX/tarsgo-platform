@@ -93,9 +93,7 @@ function formatDate(value: string) {
 }
 
 function toLocalInput(value: string) {
-  const date = new Date(value)
-  const offset = date.getTimezoneOffset() * 60_000
-  return new Date(date.getTime() - offset).toISOString().slice(0, 16)
+  return value.slice(0, 16)
 }
 
 function resetTaskForm() {
@@ -270,7 +268,7 @@ async function submitTask() {
     deliverable: taskDeliverable.value,
     owner_id: taskOwnerId.value,
     collaborator_ids: taskCollaboratorIds.value,
-    deadline: new Date(taskDeadline.value).toISOString(),
+    deadline: taskDeadline.value,
     status: taskStatus.value,
   }
 
@@ -534,7 +532,6 @@ onBeforeUnmount(() => window.removeEventListener("popstate", handlePopState))
             系统权限
             <select v-model="memberRole">
               <option value="member">成员</option>
-              <option value="manager">管理员</option>
               <option value="admin">管理员</option>
             </select>
           </label>

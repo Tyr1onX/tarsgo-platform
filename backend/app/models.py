@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, String, Table, Text, Column, func
+from sqlalchemy import Boolean, CheckConstraint, Column, DateTime, ForeignKey, String, Table, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
@@ -63,17 +63,24 @@ class Task(Base):
     __tablename__ = "tasks"
     __table_args__ = (
         CheckConstraint("status IN ('todo','doing','done')", name="ck_tasks_status"),
+        CheckConstraint(
+            "owner_id IS NOT NULL OR owner_claimable = 1",
+            name="ck_tasks_owner_or_claimable",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    parent_id: Mapped[int | None] = mapped_column(ForeignKey("tasks.id"), nullable=True)
     title: Mapped[str] = mapped_column(String(200))
     deliverable: Mapped[str] = mapped_column(Text())
-    owner_id: Mapped[int] = mapped_column(ForeignKey("members.id"))
+    owner_id: Mapped[int | None] = mapped_column(ForeignKey("members.id"), nullable=True)
+    owner_claimable: Mapped[bool] = mapped_column(Boolean(), default=False, server_default="0")
+    collaboration_open: Mapped[bool] = mapped_column(Boolean(), default=False, server_default="0")
     deadline: Mapped[datetime] = mapped_column(DateTime())
     status: Mapped[str] = mapped_column(String(20), default="todo")
     created_by: Mapped[int] = mapped_column(ForeignKey("members.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(), server_default=func.now())
 
-    owner: Mapped[Member] = relationship(foreign_keys=[owner_id])
+    owner: Mapped[Member | None] = relationship(foreign_keys=[owner_id])
     creator: Mapped[Member] = relationship(foreign_keys=[created_by])
     collaborators: Mapped[list[Member]] = relationship(secondary=task_collaborators)

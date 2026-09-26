@@ -1,4 +1,4 @@
-name: V0.1 validation
+name: V0.2 validation
 
 on:
   push:
@@ -26,6 +26,7 @@ jobs:
           MYSQL_ROOT_PASSWORD=$MYSQL_ROOT_PASSWORD
           EOF
           echo "CI_ADMIN_PASSWORD=$ADMIN_PASSWORD" >> "$GITHUB_ENV"
+          echo "CI_MYSQL_PASSWORD=$MYSQL_PASSWORD" >> "$GITHUB_ENV"
           echo "CI_MYSQL_ROOT_PASSWORD=$MYSQL_ROOT_PASSWORD" >> "$GITHUB_ENV"
 
       - name: Build frontend
@@ -41,6 +42,38 @@ jobs:
         run: |
           curl --retry 30 --retry-delay 2 --retry-all-errors -fsS http://127.0.0.1/api/health
           curl -fsS http://127.0.0.1/login | grep -q 'id="app"'
+
+      - name: Verify V0.1 to V0.2 migration
+        run: |
+          docker compose exec -T db mysql -uroot -p"$CI_MYSQL_ROOT_PASSWORD" -e "
+            DROP DATABASE IF EXISTS tarsgo_migration;
+            CREATE DATABASE tarsgo_migration CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+            GRANT ALL PRIVILEGES ON tarsgo_migration.* TO 'tarsgo'@'%';
+          "
+          MIGRATION_URL="mysql+pymysql://tarsgo:$CI_MYSQL_PASSWORD@db:3306/tarsgo_migration"
+          docker compose exec -T -e DATABASE_URL="$MIGRATION_URL" api alembic upgrade 0001_v0_1
+          docker compose exec -T db mysql -uroot -p"$CI_MYSQL_ROOT_PASSWORD" tarsgo_migration <<'SQL'
+          INSERT INTO members (id, name, email, password_hash, role, status)
+          VALUES
+            (100, '张三', 'legacy-admin@example.com', NULL, 'admin', 'active'),
+            (101, '李四', 'legacy-member@example.com', NULL, 'member', 'active');
+          INSERT INTO tasks (id, title, deliverable, owner_id, deadline, status, created_by)
+          VALUES
+            (100, '旧版任务', '旧版交付', 101, '2026-09-20 18:00:00', 'todo', 100);
+          SQL
+          docker compose exec -T -e DATABASE_URL="$MIGRATION_URL" api alembic upgrade head
+          RESULT="$(docker compose exec -T db mysql -uroot -p"$CI_MYSQL_ROOT_PASSWORD" -N -B tarsgo_migration -e "
+            SELECT CONCAT(
+              owner_id, '|',
+              IF(parent_id IS NULL, 'NULL', parent_id), '|',
+              owner_claimable, '|',
+              collaboration_open, '|',
+              deliverable
+            )
+            FROM tasks WHERE id = 100;
+          ")"
+          test "$RESULT" = "101|NULL|0|0|旧版交付"
+          docker compose exec -T db mysql -uroot -p"$CI_MYSQL_ROOT_PASSWORD" -e "DROP DATABASE tarsgo_migration;"
 
       - name: Create initial administrator
         run: |
@@ -65,7 +98,7 @@ jobs:
               db.commit()
           PY
 
-      - name: Verify V0.1 workflow
+      - name: Verify V0.2 workflow
         run: python scripts/smoke_test.py workflow http://127.0.0.1
 
       - name: Restart database

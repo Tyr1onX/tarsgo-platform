@@ -50,6 +50,16 @@ const inviteToken = computed(() =>
   path.value.startsWith("/invite/") ? path.value.slice("/invite/".length) : "",
 )
 const activeMembers = computed(() => taskMembers.value)
+const activeMemberIds = computed(() => new Set(activeMembers.value.map((member) => member.id)))
+const editingTask = computed(
+  () => tasks.value.find((task) => task.id === editingTaskId.value) ?? null,
+)
+const ownerOptions = computed(() => {
+  const options = [...activeMembers.value]
+  const owner = editingTask.value?.owner
+  if (owner && !activeMemberIds.value.has(owner.id)) options.unshift(owner)
+  return options
+})
 const openTasks = computed(() => tasks.value.filter((task) => task.status !== "done"))
 const doneTasks = computed(() => tasks.value.filter((task) => task.status === "done"))
 const upcomingTasks = computed(() => {
@@ -114,10 +124,18 @@ function editTask(task: Task) {
   taskTitle.value = task.title
   taskDeliverable.value = task.deliverable
   taskOwnerId.value = task.owner.id
-  taskCollaboratorIds.value = task.collaborators.map((member) => member.id)
+  taskCollaboratorIds.value = task.collaborators
+    .filter((member) => activeMemberIds.value.has(member.id))
+    .map((member) => member.id)
   taskDeadline.value = toLocalInput(task.deadline)
   taskStatus.value = task.status
   window.scrollTo({ top: 0, behavior: "smooth" })
+}
+
+function sameIds(left: number[], right: number[]) {
+  const sortedLeft = [...left].sort((a, b) => a - b)
+  const sortedRight = [...right].sort((a, b) => a - b)
+  return sortedLeft.length === sortedRight.length && sortedLeft.every((id, index) => id === sortedRight[index])
 }
 
 async function loadCurrentUser() {
@@ -280,20 +298,41 @@ async function submitTask() {
     return
   }
 
-  const payload = {
-    title: taskTitle.value,
-    deliverable: taskDeliverable.value,
-    owner_id: taskOwnerId.value,
-    collaborator_ids: taskCollaboratorIds.value,
-    deadline: taskDeadline.value,
-    status: taskStatus.value,
-  }
-
   try {
     if (editingTaskId.value) {
-      await api.updateTask(editingTaskId.value, payload)
+      const original = editingTask.value
+      if (!original) return
+
+      const payload: Parameters<typeof api.updateTask>[1] = {}
+      if (taskTitle.value !== original.title) payload.title = taskTitle.value
+      if (taskDeliverable.value !== original.deliverable) {
+        payload.deliverable = taskDeliverable.value
+      }
+      if (taskOwnerId.value !== original.owner.id) payload.owner_id = taskOwnerId.value
+      if (taskDeadline.value !== toLocalInput(original.deadline)) {
+        payload.deadline = taskDeadline.value
+      }
+      if (taskStatus.value !== original.status) payload.status = taskStatus.value
+
+      const originalActiveCollaborators = original.collaborators
+        .filter((member) => activeMemberIds.value.has(member.id))
+        .map((member) => member.id)
+      if (!sameIds(taskCollaboratorIds.value, originalActiveCollaborators)) {
+        payload.collaborator_ids = taskCollaboratorIds.value
+      }
+
+      if (Object.keys(payload).length) {
+        await api.updateTask(editingTaskId.value, payload)
+      }
     } else {
-      await api.createTask(payload)
+      await api.createTask({
+        title: taskTitle.value,
+        deliverable: taskDeliverable.value,
+        owner_id: taskOwnerId.value,
+        collaborator_ids: taskCollaboratorIds.value,
+        deadline: taskDeadline.value,
+        status: taskStatus.value,
+      })
     }
     tasks.value = await api.tasks("all")
     resetTaskForm()
@@ -620,8 +659,8 @@ onBeforeUnmount(() => window.removeEventListener("popstate", handlePopState))
           <label>
             负责人
             <select v-model="taskOwnerId" required>
-              <option v-for="member in activeMembers" :key="member.id" :value="member.id">
-                {{ member.name }}
+              <option v-for="member in ownerOptions" :key="member.id" :value="member.id">
+                {{ member.name }}{{ activeMemberIds.has(member.id) ? "" : "（已停用）" }}
               </option>
             </select>
           </label>

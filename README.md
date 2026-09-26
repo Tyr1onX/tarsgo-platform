@@ -137,6 +137,8 @@ V0.1 uses:
 
 A task has exactly one owner and zero or more collaborators through the association table. Task status is `todo`, `doing`, or `done`.
 
+Historical tasks may continue to reference members who were later disabled. Editing title, deliverable, deadline, or status does not revalidate existing assignments. Any newly submitted owner or collaborator assignment must reference an active member.
+
 Task deadlines are stored as the local wall-clock value entered by the user. V0.1 does not implement multi-timezone conversion.
 
 ## RackNerd deployment preparation

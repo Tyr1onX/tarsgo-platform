@@ -1,0 +1,100 @@
+import type {
+  InvitationInfo,
+  InviteResult,
+  Member,
+  Role,
+  Task,
+  TaskStatus,
+} from "./types"
+
+export class ApiError extends Error {
+  status: number
+
+  constructor(status: number, message: string) {
+    super(message)
+    this.status = status
+  }
+}
+
+async function request<T>(url: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(url, {
+    ...init,
+    headers: {
+      ...(init?.body ? { "Content-Type": "application/json" } : {}),
+      ...init?.headers,
+    },
+  })
+
+  if (!response.ok) {
+    let message = "操作失败"
+    try {
+      const data = (await response.json()) as { detail?: string }
+      if (data.detail) message = data.detail
+    } catch {
+      // Keep the generic message for non-JSON errors.
+    }
+    throw new ApiError(response.status, message)
+  }
+
+  if (response.status === 204) return undefined as T
+  return response.json() as Promise<T>
+}
+
+export const api = {
+  me: () => request<Member>("/api/auth/me"),
+  login: (email: string, password: string) =>
+    request<Member>("/api/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ email, password }),
+    }),
+  logout: () => request<void>("/api/auth/logout", { method: "POST" }),
+
+  invitation: (token: string) =>
+    request<InvitationInfo>(`/api/invitations/${encodeURIComponent(token)}`),
+  acceptInvitation: (token: string, password: string) =>
+    request<void>(`/api/invitations/${encodeURIComponent(token)}/accept`, {
+      method: "POST",
+      body: JSON.stringify({ password }),
+    }),
+
+  members: () => request<Member[]>("/api/members"),
+  inviteMember: (name: string, email: string, role: Role) =>
+    request<InviteResult>("/api/members/invite", {
+      method: "POST",
+      body: JSON.stringify({ name, email, role }),
+    }),
+  regenerateInvite: (memberId: number) =>
+    request<InviteResult>(`/api/members/${memberId}/invite`, { method: "POST" }),
+  disableMember: (memberId: number) =>
+    request<Member>(`/api/members/${memberId}/disable`, { method: "POST" }),
+
+  tasks: (scope: "mine" | "all" = "mine") =>
+    request<Task[]>(`/api/tasks?scope=${scope}`),
+  createTask: (payload: {
+    title: string
+    deliverable: string
+    owner_id: number
+    collaborator_ids: number[]
+    deadline: string
+    status: TaskStatus
+  }) =>
+    request<Task>("/api/tasks", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  updateTask: (
+    taskId: number,
+    payload: Partial<{
+      title: string
+      deliverable: string
+      owner_id: number
+      collaborator_ids: number[]
+      deadline: string
+      status: TaskStatus
+    }>,
+  ) =>
+    request<Task>(`/api/tasks/${taskId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+}

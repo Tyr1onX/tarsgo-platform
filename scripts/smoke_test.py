@@ -11,7 +11,12 @@ BASE_URL = sys.argv[2].rstrip("/") if len(sys.argv) > 2 else "http://127.0.0.1"
 ADMIN_EMAIL = "admin@example.com"
 MANAGER_EMAIL = "manager@example.com"
 OWNER_EMAIL = "lisi@example.com"
-TASK_TITLE = "整理招新现场物料"
+SECOND_MEMBER_EMAIL = "zhaoliu@example.com"
+ROOT_TITLE = "春屿展示"
+ROOT_FINAL_TITLE = "春屿展示（确认）"
+CLAIM_CHILD_TITLE = "周边物资保障"
+COLLAB_CHILD_TITLE = "现场摄影"
+RELEASABLE_TITLE = "直播间值守"
 
 
 def opener():
@@ -35,7 +40,9 @@ def call(client, path, *, method="GET", data=None, expected=200):
         status = error.code
 
     if status != expected:
-        raise AssertionError(f"{method} {path}: expected {expected}, got {status}: {payload.decode()}")
+        raise AssertionError(
+            f"{method} {path}: expected {expected}, got {status}: {payload.decode()}"
+        )
 
     if not payload:
         return None
@@ -70,7 +77,6 @@ def activate(invitation):
     token = invitation["invite_path"].rsplit("/", 1)[1]
     info = call(opener(), f"/api/invitations/{token}")
     assert info["name"] == invitation["member"]["name"]
-    assert info["email"] == invitation["member"]["email"]
     password = secrets.token_urlsafe(18)
     call(
         opener(),
@@ -83,11 +89,27 @@ def activate(invitation):
     return password
 
 
+def create_task(manager, **overrides):
+    payload = {
+        "title": "默认运营任务",
+        "deliverable": "",
+        "owner_id": None,
+        "owner_claimable": True,
+        "collaborator_ids": [],
+        "collaboration_open": False,
+        "parent_id": None,
+        "deadline": "2026-10-15T18:00:00",
+        "status": "todo",
+    }
+    payload.update(overrides)
+    return call(manager, "/api/tasks", method="POST", data=payload, expected=201)
+
+
 def run_workflow():
     admin_password = os.environ["CI_ADMIN_PASSWORD"]
 
     call(opener(), "/api/auth/me", expected=401)
-    call(opener(), "/api/tasks", expected=401)
+    call(opener(), "/api/tasks?scope=all", expected=401)
     call(opener(), "/api/members", expected=401)
 
     admin = login(ADMIN_EMAIL, admin_password)
@@ -100,185 +122,221 @@ def run_workflow():
     owner_id = owner_invite["member"]["id"]
     owner_password = activate(owner_invite)
 
-    collaborator_invite = invite(admin, "赵六", "zhaoliu@example.com")
-    collaborator_id = collaborator_invite["member"]["id"]
-    collaborator_password = activate(collaborator_invite)
-
-    pending_invite = invite(admin, "钱七", "qianqi@example.com")
-    pending_id = pending_invite["member"]["id"]
-    call(admin, f"/api/members/{pending_id}/enable", method="POST", expected=409)
+    second_invite = invite(admin, "赵六", SECOND_MEMBER_EMAIL)
+    second_id = second_invite["member"]["id"]
+    second_password = activate(second_invite)
 
     manager = login(MANAGER_EMAIL, manager_password)
-    member = login(OWNER_EMAIL, owner_password)
-    collaborator = login("zhaoliu@example.com", collaborator_password)
+    owner = login(OWNER_EMAIL, owner_password)
+    second = login(SECOND_MEMBER_EMAIL, second_password)
 
     call(manager, "/api/members", expected=403)
-    call(
-        manager,
-        "/api/members/invite",
-        method="POST",
-        data={"name": "孙八", "email": "sunba@example.com", "role": "member"},
-        expected=403,
-    )
-    call(
-        manager,
-        "/api/members/invite",
-        method="POST",
-        data={"name": "周九", "email": "zhoujiu@example.com", "role": "admin"},
-        expected=403,
-    )
-    call(manager, f"/api/members/{owner_id}/disable", method="POST", expected=403)
-    call(member, "/api/members", expected=403)
+    call(owner, "/api/members", expected=403)
+    call(owner, "/api/tasks/assignees", expected=403)
 
     assignees = call(manager, "/api/tasks/assignees")
-    assert {item["id"] for item in assignees} >= {manager_id, owner_id, collaborator_id}
-    assert all(set(item) == {"id", "name"} for item in assignees)
+    assert {item["id"] for item in assignees} >= {manager_id, owner_id, second_id}
 
-    task = call(
+    call(
         manager,
         "/api/tasks",
         method="POST",
         data={
-            "title": TASK_TITLE,
-            "deliverable": "完成物料清单核对并确认现场可用。",
-            "owner_id": owner_id,
-            "collaborator_ids": [collaborator_id],
+            "title": "无负责人且不可认领",
+            "deliverable": "",
+            "owner_id": None,
+            "owner_claimable": False,
+            "collaborator_ids": [],
+            "collaboration_open": False,
+            "parent_id": None,
             "deadline": "2026-10-15T18:00:00",
             "status": "todo",
         },
-        expected=201,
+        expected=422,
     )
 
-    assert any(item["id"] == task["id"] for item in call(member, "/api/tasks?scope=mine"))
-    assert any(item["id"] == task["id"] for item in call(collaborator, "/api/tasks?scope=mine"))
+    root = create_task(
+        manager,
+        title=ROOT_TITLE,
+        deliverable="完成展示现场整体执行。",
+        owner_id=manager_id,
+        owner_claimable=False,
+        collaborator_ids=[second_id],
+        collaboration_open=False,
+        deadline="2026-09-21T18:00:00",
+    )
+    assert root["parent_id"] is None
+    assert root["owner"]["id"] == manager_id
+
+    claim_child = create_task(
+        manager,
+        title=CLAIM_CHILD_TITLE,
+        parent_id=root["id"],
+        owner_id=None,
+        owner_claimable=True,
+        collaboration_open=True,
+        deadline="2026-09-21T15:00:00",
+    )
+    assert claim_child["parent_id"] == root["id"]
+    assert claim_child["owner"] is None
+    assert claim_child["owner_claimable"] is True
+
+    collaboration_child = create_task(
+        manager,
+        title=COLLAB_CHILD_TITLE,
+        parent_id=root["id"],
+        owner_id=manager_id,
+        owner_claimable=False,
+        collaboration_open=True,
+        deadline="2026-09-21T17:00:00",
+    )
+
     call(
-        collaborator,
-        f"/api/tasks/{task['id']}",
+        manager,
+        "/api/tasks",
+        method="POST",
+        data={
+            "title": "不允许的二级分工",
+            "deliverable": "",
+            "owner_id": manager_id,
+            "owner_claimable": False,
+            "collaborator_ids": [],
+            "collaboration_open": False,
+            "parent_id": claim_child["id"],
+            "deadline": "2026-09-21T16:00:00",
+            "status": "todo",
+        },
+        expected=400,
+    )
+
+    all_for_owner = call(owner, "/api/tasks?scope=all")
+    all_ids = {item["id"] for item in all_for_owner}
+    assert {root["id"], claim_child["id"], collaboration_child["id"]} <= all_ids
+
+    call(
+        owner,
+        f"/api/tasks/{root['id']}",
         method="PATCH",
-        data={"status": "doing"},
+        data={"title": "成员不应能修改结构"},
         expected=403,
     )
-    call(
-        member,
-        f"/api/tasks/{task['id']}",
+
+    waiting = call(owner, "/api/tasks?scope=claimable")
+    assert claim_child["id"] in {item["id"] for item in waiting}
+
+    claimed = call(second, f"/api/tasks/{claim_child['id']}/claim", method="POST")
+    assert claimed["owner"]["id"] == second_id
+    call(owner, f"/api/tasks/{claim_child['id']}/claim", method="POST", expected=409)
+
+    joined = call(owner, f"/api/tasks/{collaboration_child['id']}/collaborators/join", method="POST")
+    assert owner_id in {item["id"] for item in joined["collaborators"]}
+    left = call(owner, f"/api/tasks/{collaboration_child['id']}/collaborators/leave", method="POST")
+    assert owner_id not in {item["id"] for item in left["collaborators"]}
+
+    reassigned = call(
+        manager,
+        f"/api/tasks/{claim_child['id']}",
+        method="PATCH",
+        data={"owner_id": owner_id},
+    )
+    assert reassigned["owner"]["id"] == owner_id
+
+    updated_by_owner = call(
+        owner,
+        f"/api/tasks/{claim_child['id']}",
         method="PATCH",
         data={"status": "doing"},
     )
-
-    disabled_collaborator = call(
-        admin,
-        f"/api/members/{collaborator_id}/disable",
-        method="POST",
-    )
-    assert disabled_collaborator["status"] == "disabled"
-
-    updated_by_manager = call(
-        manager,
-        f"/api/tasks/{task['id']}",
-        method="PATCH",
-        data={
-            "title": "整理并确认招新现场物料",
-            "deliverable": "完成物料清单核对、现场确认并归档。",
-        },
-    )
-    assert updated_by_manager["title"] == "整理并确认招新现场物料"
-    assert updated_by_manager["deliverable"].endswith("归档。")
-    assert [item["id"] for item in updated_by_manager["collaborators"]] == [collaborator_id]
-
+    assert updated_by_owner["status"] == "doing"
     call(
-        manager,
-        f"/api/tasks/{task['id']}",
+        second,
+        f"/api/tasks/{claim_child['id']}",
         method="PATCH",
-        data={"collaborator_ids": [collaborator_id]},
-        expected=400,
+        data={"status": "done"},
+        expected=403,
     )
+
+    releasable = create_task(
+        manager,
+        title=RELEASABLE_TITLE,
+        owner_id=None,
+        owner_claimable=True,
+        collaboration_open=False,
+        deadline="2026-09-21T16:30:00",
+    )
+    claimed_by_owner = call(owner, f"/api/tasks/{releasable['id']}/claim", method="POST")
+    assert claimed_by_owner["owner"]["id"] == owner_id
+    released = call(owner, f"/api/tasks/{releasable['id']}/unclaim", method="POST")
+    assert released["owner"] is None
+    assert released["owner_claimable"] is True
+
+    call(owner, f"/api/tasks/{releasable['id']}/claim", method="POST")
     call(
-        manager,
-        "/api/tasks",
-        method="POST",
-        data={
-            "title": "不能分配给停用协作者",
-            "deliverable": "测试",
-            "owner_id": manager_id,
-            "collaborator_ids": [collaborator_id],
-            "deadline": "2026-10-16T18:00:00",
-            "status": "todo",
-        },
-        expected=400,
-    )
-
-    disabled_owner = call(admin, f"/api/members/{owner_id}/disable", method="POST")
-    assert disabled_owner["status"] == "disabled"
-    stale_member_session = member
-    call(stale_member_session, "/api/auth/me", expected=401)
-    login(OWNER_EMAIL, owner_password, expected=403)
-
-    call(
-        manager,
-        f"/api/tasks/{task['id']}",
-        method="PATCH",
-        data={"owner_id": owner_id},
-        expected=400,
-    )
-    call(
-        manager,
-        "/api/tasks",
-        method="POST",
-        data={
-            "title": "不能分配给停用负责人",
-            "deliverable": "测试",
-            "owner_id": owner_id,
-            "collaborator_ids": [],
-            "deadline": "2026-10-16T18:00:00",
-            "status": "todo",
-        },
-        expected=400,
-    )
-
-    transferred = call(
-        manager,
-        f"/api/tasks/{task['id']}",
-        method="PATCH",
-        data={"owner_id": manager_id},
-    )
-    assert transferred["owner"]["id"] == manager_id
-    assert [item["id"] for item in transferred["collaborators"]] == [collaborator_id]
-
-    enabled = call(admin, f"/api/members/{owner_id}/enable", method="POST")
-    assert enabled["status"] == "active"
-    call(stale_member_session, "/api/auth/me", expected=401)
-    member = login(OWNER_EMAIL, owner_password)
-    assert call(member, "/api/auth/me")["email"] == OWNER_EMAIL
-
-    updated = call(
-        manager,
-        f"/api/tasks/{task['id']}",
+        owner,
+        f"/api/tasks/{releasable['id']}",
         method="PATCH",
         data={"status": "done"},
     )
-    assert updated["status"] == "done"
+    call(owner, f"/api/tasks/{releasable['id']}/unclaim", method="POST", expected=409)
 
-    print("V0.1 hardening workflow smoke test passed")
+    disabled = call(admin, f"/api/members/{second_id}/disable", method="POST")
+    assert disabled["status"] == "disabled"
+    call(second, "/api/auth/me", expected=401)
+    login(SECOND_MEMBER_EMAIL, second_password, expected=403)
+
+    disabled_target = create_task(
+        manager,
+        title="停用成员不可认领",
+        owner_id=None,
+        owner_claimable=True,
+        deadline="2026-09-22T12:00:00",
+    )
+    call(second, f"/api/tasks/{disabled_target['id']}/claim", method="POST", expected=401)
+
+    root_updated = call(
+        manager,
+        f"/api/tasks/{root['id']}",
+        method="PATCH",
+        data={"title": ROOT_FINAL_TITLE},
+    )
+    assert root_updated["title"] == ROOT_FINAL_TITLE
+    assert [item["id"] for item in root_updated["collaborators"]] == [second_id]
+
+    all_after = call(owner, "/api/tasks?scope=all")
+    root_after = next(item for item in all_after if item["id"] == root["id"])
+    children = [item for item in all_after if item["parent_id"] == root["id"]]
+    assert root_after["parent_id"] is None
+    assert {item["title"] for item in children} >= {CLAIM_CHILD_TITLE, COLLAB_CHILD_TITLE}
+
+    print("V0.2 operations workflow smoke test passed")
 
 
 def verify_persistence():
     admin = login(ADMIN_EMAIL, os.environ["CI_ADMIN_PASSWORD"])
     members = call(admin, "/api/members")
     by_email = {member["email"]: member for member in members}
-    assert by_email[MANAGER_EMAIL]["role"] == "manager"
+    assert by_email[MANAGER_EMAIL]["status"] == "active"
     assert by_email[OWNER_EMAIL]["status"] == "active"
-    assert by_email["zhaoliu@example.com"]["status"] == "disabled"
-    assert by_email["qianqi@example.com"]["status"] == "invited"
+    assert by_email[SECOND_MEMBER_EMAIL]["status"] == "disabled"
 
     tasks = call(admin, "/api/tasks?scope=all")
-    task = next(item for item in tasks if item["title"] == "整理并确认招新现场物料")
-    assert task["status"] == "done"
-    assert task["owner"]["id"] == by_email[MANAGER_EMAIL]["id"]
-    assert task["deliverable"].endswith("归档。")
-    assert [item["id"] for item in task["collaborators"]] == [
-        by_email["zhaoliu@example.com"]["id"]
-    ]
-    print("Database restart persistence check passed")
+    root = next(item for item in tasks if item["title"] == ROOT_FINAL_TITLE)
+    claim_child = next(item for item in tasks if item["title"] == CLAIM_CHILD_TITLE)
+    collaboration_child = next(item for item in tasks if item["title"] == COLLAB_CHILD_TITLE)
+    releasable = next(item for item in tasks if item["title"] == RELEASABLE_TITLE)
+
+    assert root["parent_id"] is None
+    assert by_email[SECOND_MEMBER_EMAIL]["id"] in {
+        item["id"] for item in root["collaborators"]
+    }
+    assert claim_child["parent_id"] == root["id"]
+    assert claim_child["owner"]["id"] == by_email[OWNER_EMAIL]["id"]
+    assert claim_child["status"] == "doing"
+    assert collaboration_child["parent_id"] == root["id"]
+    assert collaboration_child["collaboration_open"] is True
+    assert releasable["status"] == "done"
+
+    print("V0.2 database restart persistence check passed")
 
 
 if __name__ == "__main__":

@@ -6,6 +6,7 @@ import type {
   Role,
   Task,
   TaskStatus,
+  TaskView,
 } from "./types"
 
 export class ApiError extends Error {
@@ -41,6 +42,18 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>
 }
 
+export interface TaskPayload {
+  title: string
+  deliverable?: string
+  owner_id: number | null
+  owner_claimable: boolean
+  collaborator_ids: number[]
+  collaboration_open: boolean
+  parent_id?: number | null
+  deadline: string
+  status: TaskStatus
+}
+
 export const api = {
   me: () => request<Member>("/api/auth/me"),
   login: (email: string, password: string) =>
@@ -72,33 +85,26 @@ export const api = {
     request<Member>(`/api/members/${memberId}/enable`, { method: "POST" }),
 
   taskAssignees: () => request<MemberSummary[]>("/api/tasks/assignees"),
-  tasks: (scope: "mine" | "all" = "mine") =>
-    request<Task[]>(`/api/tasks?scope=${scope}`),
-  createTask: (payload: {
-    title: string
-    deliverable: string
-    owner_id: number
-    collaborator_ids: number[]
-    deadline: string
-    status: TaskStatus
-  }) =>
+  tasks: (scope: TaskView = "mine") => request<Task[]>(`/api/tasks?scope=${scope}`),
+  createTask: (payload: TaskPayload) =>
     request<Task>("/api/tasks", {
       method: "POST",
       body: JSON.stringify(payload),
     }),
   updateTask: (
     taskId: number,
-    payload: Partial<{
-      title: string
-      deliverable: string
-      owner_id: number
-      collaborator_ids: number[]
-      deadline: string
-      status: TaskStatus
-    }>,
+    payload: Partial<Omit<TaskPayload, "parent_id">>,
   ) =>
     request<Task>(`/api/tasks/${taskId}`, {
       method: "PATCH",
       body: JSON.stringify(payload),
     }),
+  claimTask: (taskId: number) =>
+    request<Task>(`/api/tasks/${taskId}/claim`, { method: "POST" }),
+  unclaimTask: (taskId: number) =>
+    request<Task>(`/api/tasks/${taskId}/unclaim`, { method: "POST" }),
+  joinTask: (taskId: number) =>
+    request<Task>(`/api/tasks/${taskId}/collaborators/join`, { method: "POST" }),
+  leaveTask: (taskId: number) =>
+    request<Task>(`/api/tasks/${taskId}/collaborators/leave`, { method: "POST" }),
 }

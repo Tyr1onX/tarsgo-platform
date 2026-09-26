@@ -1,6 +1,7 @@
 export type Role = "admin" | "manager" | "member"
 export type MemberStatus = "invited" | "active" | "disabled"
 export type TaskStatus = "todo" | "doing" | "done"
+export type TaskView = "mine" | "claimable" | "all"
 
 export interface Member {
   id: number
@@ -18,10 +19,13 @@ export interface MemberSummary {
 
 export interface Task {
   id: number
+  parent_id: number | null
   title: string
   deliverable: string
-  owner: MemberSummary
+  owner: MemberSummary | null
+  owner_claimable: boolean
   collaborators: MemberSummary[]
+  collaboration_open: boolean
   deadline: string
   status: TaskStatus
   created_by: number

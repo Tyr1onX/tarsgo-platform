@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 Role = Literal["admin", "manager", "member"]
 MemberStatus = Literal["invited", "active", "disabled"]
@@ -83,46 +83,70 @@ class MemberSummary(BaseModel):
 
 class TaskCreate(BaseModel):
     title: str = Field(min_length=1, max_length=200)
-    deliverable: str = Field(min_length=1, max_length=5000)
-    owner_id: int
+    deliverable: str = Field(default="", max_length=5000)
+    owner_id: int | None = None
+    owner_claimable: bool = False
     collaborator_ids: list[int] = Field(default_factory=list)
+    collaboration_open: bool = False
+    parent_id: int | None = None
     deadline: datetime
     status: TaskStatus = "todo"
 
-    @field_validator("title", "deliverable")
+    @field_validator("title")
     @classmethod
-    def strip_text(cls, value: str) -> str:
+    def strip_title(cls, value: str) -> str:
         value = value.strip()
         if not value:
-            raise ValueError("内容不能为空")
+            raise ValueError("任务内容不能为空")
         return value
+
+    @field_validator("deliverable")
+    @classmethod
+    def strip_deliverable(cls, value: str) -> str:
+        return value.strip()
+
+    @model_validator(mode="after")
+    def validate_owner(self):
+        if self.owner_id is None and not self.owner_claimable:
+            raise ValueError("任务必须指定负责人或开放负责人认领")
+        return self
 
 
 class TaskUpdate(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=200)
-    deliverable: str | None = Field(default=None, min_length=1, max_length=5000)
+    deliverable: str | None = Field(default=None, max_length=5000)
     owner_id: int | None = None
+    owner_claimable: bool | None = None
     collaborator_ids: list[int] | None = None
+    collaboration_open: bool | None = None
     deadline: datetime | None = None
     status: TaskStatus | None = None
 
-    @field_validator("title", "deliverable")
+    @field_validator("title")
     @classmethod
-    def strip_optional_text(cls, value: str | None) -> str | None:
+    def strip_optional_title(cls, value: str | None) -> str | None:
         if value is None:
             return value
         value = value.strip()
         if not value:
-            raise ValueError("内容不能为空")
+            raise ValueError("任务内容不能为空")
         return value
+
+    @field_validator("deliverable")
+    @classmethod
+    def strip_optional_deliverable(cls, value: str | None) -> str | None:
+        return None if value is None else value.strip()
 
 
 class TaskOut(BaseModel):
     id: int
+    parent_id: int | None
     title: str
     deliverable: str
-    owner: MemberSummary
+    owner: MemberSummary | None
+    owner_claimable: bool
     collaborators: list[MemberSummary]
+    collaboration_open: bool
     deadline: datetime
     status: TaskStatus
     created_by: int

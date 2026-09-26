@@ -121,7 +121,13 @@ Do not add controller/service/repository/facade layers without a concrete bounda
 
 The frontend intentionally has no UI framework, router library, or state-management library.
 
-Current routes are `/login`, `/invite/:token`, `/`, `/tasks`, `/me`, `/admin/members`, and `/admin/tasks`.
+Current primary routes are `/login`, `/invite/:token`, `/`, `/tasks`, `/team`, and `/me`. Legacy `/admin/tasks` and `/admin/members` only redirect to the corresponding primary route.
+
+Keep one task entry: `/tasks`. admin/manager task-management controls belong on that page; member uses the same page for related tasks. Do not recreate a separate task-management destination.
+
+`/team` is admin-only member account management. manager must not receive a team/member-management navigation entry.
+
+`/me` is personal information, role and logout only. Do not hide management navigation inside the personal page.
 
 Mobile is the primary layout. PC uses the same responsive UI.
 

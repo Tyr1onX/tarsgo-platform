@@ -27,6 +27,7 @@ jobs:
           MYSQL_ROOT_PASSWORD=$MYSQL_ROOT_PASSWORD
           EOF
           echo "CI_ADMIN_PASSWORD=$ADMIN_PASSWORD" >> "$GITHUB_ENV"
+          echo "CI_MYSQL_ROOT_PASSWORD=$MYSQL_ROOT_PASSWORD" >> "$GITHUB_ENV"
 
       - name: Build and start
         run: docker compose up -d --build
@@ -66,7 +67,7 @@ jobs:
         run: |
           docker compose restart db
           for i in $(seq 1 30); do
-            if docker compose exec -T db mysqladmin ping -h 127.0.0.1 -uroot -p"$MYSQL_ROOT_PASSWORD" --silent 2>/dev/null; then
+            if docker compose exec -T db mysqladmin ping -h 127.0.0.1 -uroot -p"$CI_MYSQL_ROOT_PASSWORD" --silent 2>/dev/null; then
               break
             fi
             sleep 2

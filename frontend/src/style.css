@@ -204,13 +204,32 @@ h3 {
   font-size: clamp(30px, 9vw, 46px);
 }
 
+.hero-action {
+  margin-top: 20px;
+}
+
 .page > section,
 .page > details {
   margin-bottom: 34px;
 }
 
-.page-title h1 {
+.page-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   margin-bottom: 28px;
+}
+
+.page-title h1 {
+  margin: 0;
+}
+
+.page-title button {
+  border: 0;
+  background: transparent;
+  padding: 4px 0;
+  color: #555;
 }
 
 .section-heading,
@@ -315,6 +334,16 @@ h3 {
   color: #777;
 }
 
+.empty-action {
+  display: grid;
+  justify-items: start;
+  gap: 12px;
+}
+
+.empty-action p {
+  margin: 0;
+}
+
 .message {
   margin: 0 0 14px;
   border-radius: 8px;
@@ -366,7 +395,8 @@ h3 {
   border-bottom: 1px solid #dcdcd6;
 }
 
-.management-form h1 {
+.management-form h1,
+.management-form h2 {
   margin: 0;
 }
 
@@ -431,7 +461,6 @@ h3 {
   left: 0;
   height: 64px;
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
   border-top: 1px solid #ddd;
   background: rgb(255 255 255 / 96%);
   backdrop-filter: blur(12px);
@@ -487,6 +516,7 @@ h3 {
   }
 
   .management-form h1,
+  .management-form h2,
   .management-form .form-title,
   .management-form label:has(textarea),
   .management-form fieldset,

@@ -2,8 +2,13 @@ from fastapi import FastAPI, HTTPException
 from sqlalchemy.exc import SQLAlchemyError
 
 from .db import check_database
+from .routers import auth, invitations, members, tasks
 
 app = FastAPI(title="TARS-Go Platform API")
+app.include_router(auth.router)
+app.include_router(invitations.router)
+app.include_router(members.router)
+app.include_router(tasks.router)
 
 
 @app.get("/api/health")
@@ -12,5 +17,4 @@ def health() -> dict[str, str]:
         check_database()
     except SQLAlchemyError as exc:
         raise HTTPException(status_code=503, detail="database unavailable") from exc
-
     return {"status": "ok"}

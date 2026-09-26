@@ -20,18 +20,16 @@ Build only what is required by real team workflows. The system should remain sma
 
 ## Architecture
 
-Keep the current deployment model unless a real limitation appears:
-
-```text
+~~~
 Browser
   |
 Caddy
   |-- Vue static frontend
   |
   +-- /api/* -> FastAPI -> MySQL
-```
+~~~
 
-The deployment target is a single VPS using Docker Compose.
+The deployment target is a single VPS using Docker Compose. The API container runs Alembic migrations before starting FastAPI.
 
 Do not introduce Redis, message queues, microservices, Kubernetes, a separate API gateway, or multiple databases unless the existing architecture is proven insufficient by a real requirement.
 
@@ -40,39 +38,86 @@ Do not introduce Redis, message queues, microservices, Kubernetes, a separate AP
 - Vue 3 + TypeScript + Vite
 - FastAPI
 - SQLAlchemy + PyMySQL
+- Alembic
 - MySQL 8.4 LTS
 - Caddy
 - Docker Compose
 
-## Product scope
+## Current V0.1 workflow
 
-The foundation is implemented first. Business modules should be added from actual usage.
+~~~
+admin creates member
+-> one-time invitation link
+-> member sets password
+-> member logs in
+-> admin creates task
+-> owner/collaborators see task
+-> owner updates task status
+~~~
 
-Current expected order:
+Do not extend this workflow with activities, leave, weekly reports, notifications, files, AI, GitHub sync, organization editors, points, or approval flows unless a later task explicitly requires them.
 
-1. members
-2. activities
-3. tasks
-4. attendance / leave
-5. weekly reports / activity reviews
+## Authentication and authorization
 
-Do not pre-build speculative modules such as chat, forums, complex approval engines, generic workflow builders, file drives, or multi-tenant billing.
+System roles are admin, manager and member.
+
+admin and manager currently share the management boundary. Do not add a permission matrix until a real manager-specific requirement exists.
+
+Passwords use Argon2 through pwdlib.
+
+Login uses an opaque random HttpOnly cookie. Only the SHA-256 hash of the session token is stored in MySQL. Do not replace this with browser-readable tokens, JWT refresh-token infrastructure, or OAuth without a demonstrated requirement.
+
+Invitation tokens are also random opaque values with only their hashes stored in MySQL. One invited member has at most one current invitation row. Accepting the invitation deletes that row immediately.
+
+## Current data model
+
+The real V0.1 tables are members, invitations, sessions, tasks, task_collaborators and alembic_version.
+
+Member status is invited, active, or disabled. Task status is todo, doing, or done.
+
+A task has exactly one owner and zero or more collaborators through task_collaborators. Do not store collaborator IDs in JSON or string fields.
+
+Task deadlines are currently local wall-clock DATETIME values from the user form. Do not introduce UTC conversion in only one layer; timezone support must be designed end to end if it becomes a real requirement.
+
+## Backend boundaries
+
+~~~
+app/
+├── auth.py
+├── bootstrap_admin.py
+├── db.py
+├── main.py
+├── models.py
+├── schemas.py
+└── routers/
+    ├── auth.py
+    ├── invitations.py
+    ├── members.py
+    └── tasks.py
+~~~
+
+Do not add controller/service/repository/facade layers around these modules without a concrete boundary that needs them.
+
+## Frontend boundaries
+
+The frontend intentionally has no UI framework and no separate desktop application.
+
+Current routes are /login, /invite/:token, /, /tasks, /me, /admin/members and /admin/tasks.
+
+Mobile is the primary layout. PC is the same UI with responsive expansion.
+
+Do not add dashboard statistics, decorative cards, fake buttons, unused routes, or explanatory UI that does not change the user's next action.
 
 ## Data boundary
 
 The repository is public. Production data is private.
 
-Never commit:
+Never commit .env, credentials, passwords, tokens, private keys, server secrets, database files, backups, real personal information, leave/attendance records, private meeting notes, or internal team documents.
 
-- `.env`
-- credentials, tokens, private keys, or server secrets
-- database files or backups
-- real names, student numbers, phone numbers, or other personal information
-- leave/attendance records
-- private meeting notes or internal team documents
-
-Use fictional demo data for development and documentation.
+Use fictional data for tests and documentation. CI secrets and passwords must be generated at runtime.
 
 ## Validation
 
-For code changes, verify the smallest relevant workflow before considering the change complete. For infrastructure changes, verify Docker Compose and the browser -> Caddy -> FastAPI -> MySQL path.
+The V0.1 GitHub Actions workflow builds the real Docker Compose stack and runs scripts/smoke_test.py.
+
+A change to the current workflow is not complete until the relevant validation passes. The test must keep covering authentication boundaries, invitation invalidation, task owner/collaborator visibility, task status permissions, and database restart persistence.

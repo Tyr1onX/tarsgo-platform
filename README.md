@@ -2,101 +2,173 @@
 
 An open-source operations and collaboration platform for university robotics teams.
 
-The project is currently at its infrastructure stage. The runnable foundation contains a Vue frontend, a FastAPI backend, MySQL, and Caddy, managed by one Docker Compose file.
+V0.1 implements one real workflow:
+
+~~~
+administrator creates member
+-> copies one-time invitation link
+-> member sets password
+-> member logs in
+-> administrator assigns a task
+-> owner/collaborators see the task
+-> task owner updates its status
+~~~
+
+No public registration, email delivery, OAuth, activity module, notification system, file system, weekly reports, or approval workflow is included.
 
 ## Stack
 
 - Vue 3 + TypeScript + Vite
 - FastAPI
 - SQLAlchemy + PyMySQL
+- Alembic
 - MySQL 8.4 LTS
 - Caddy
 - Docker Compose
 
 ## Run
 
-```bash
+~~~
 cp .env.example .env
 docker compose up -d --build
-```
+~~~
 
-Open `http://localhost`.
+Open http://localhost.
 
-The home page requests `/api/health`. A healthy result confirms that the browser-facing frontend, Caddy reverse proxy, FastAPI service, and MySQL connection are all working.
+For local HTTP, keep SESSION_COOKIE_SECURE=false. For a real HTTPS domain, set APP_DOMAIN to the domain and SESSION_COOKIE_SECURE=true.
+
+Caddy is the only public entry point. /api/* is proxied to FastAPI and every other route serves the Vue SPA.
+
+## Create the first administrator
+
+There is no public registration route. After first deployment:
+
+~~~
+docker compose exec api python -m app.bootstrap_admin
+~~~
+
+The administrator can then log in at /login, create members, and copy invitation links through member management.
+
+## V0.1 pages
+
+- /login — email/password login
+- /invite/:token — one-time password setup
+- / — personal work dashboard
+- /tasks — tasks related to the current member
+- /me — account and management entry
+- /admin/members — member invitations and disabling
+- /admin/tasks — task creation and editing
+
+The application is mobile-first. The same pages expand naturally on larger screens; there is no separate desktop admin UI.
+
+## Authentication
+
+Passwords are hashed with Argon2 through pwdlib.
+
+Authentication uses an opaque random HttpOnly cookie:
+
+- the raw session token exists only in the browser cookie
+- the database stores only SHA-256 hashes of session tokens
+- sessions expire after seven days
+- disabling a member deletes that member's active sessions
+- logout deletes the current session
+
+Invitation tokens follow the same raw-token/hash boundary. They expire after seven days and the invitation row is deleted immediately after activation.
+
+admin and manager can use the current management endpoints. manager is retained as a system role but does not have a separate permission matrix in V0.1.
+
+## Data model
+
+V0.1 uses these tables:
+
+- members — name, email, password hash, role, status, created time
+- invitations — one active hashed invitation token per invited member
+- sessions — hashed login sessions
+- tasks — title, deliverable, owner, deadline, status, creator
+- task_collaborators — normal many-to-many task/member association
+
+Member status is invited, active, or disabled.
+
+Task status is todo, doing, or done.
+
+Task deadlines are currently stored as the local wall-clock value entered by the user. V0.1 does not implement multi-timezone conversion.
+
+## Database migrations
+
+The API container runs alembic upgrade head before starting FastAPI. Database structure changes must be added as Alembic migrations instead of being created ad hoc at application startup.
 
 ## Development
 
-For the full local stack, Docker Compose is the shortest path.
+Frontend:
 
-Frontend-only development:
-
-```bash
+~~~
 cd frontend
 npm install
 npm run dev
-```
+~~~
 
-The Vite development server proxies `/api` to `http://127.0.0.1:8000`.
+The Vite server proxies /api to http://127.0.0.1:8000.
 
-Backend development requires MySQL and these environment variables:
+Backend development requires MySQL and the DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD and SESSION_COOKIE_SECURE environment variables.
 
-```bash
-export DB_HOST=127.0.0.1
-export DB_PORT=3306
-export DB_NAME=tarsgo
-export DB_USER=tarsgo
-export DB_PASSWORD=change-me
-
+~~~
 cd backend
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+alembic upgrade head
 uvicorn app.main:app --reload
-```
+~~~
 
-## Structure
+## Validation
 
-```text
-.
-├── backend/
-│   ├── app/
-│   ├── Dockerfile
-│   └── requirements.txt
-├── frontend/
-│   ├── src/
-│   ├── Caddyfile
-│   ├── Dockerfile
-│   └── package.json
-├── compose.yaml
-├── .env.example
-└── README.md
-```
+The GitHub Actions workflow builds the real Docker Compose stack and verifies:
 
-## RackNerd deployment
+- unauthenticated access is rejected
+- administrator login
+- member invitation and activation
+- invitation invalidation after use
+- normal members cannot access management endpoints
+- task creation with one owner and multiple collaborators
+- owner and collaborator task visibility
+- only the owner can update a member-owned task
+- task status updates
+- MySQL restart persistence
+- the browser-facing Caddy -> FastAPI -> MySQL path
 
-1. Point a domain's DNS record to the VPS.
-2. Copy `.env.example` to `.env`.
-3. Set `APP_DOMAIN` to the real domain.
-4. Replace every example database password.
-5. Run `docker compose up -d --build`.
-
-Only ports 80 and 443 are published by Compose. MySQL and FastAPI remain on the internal Docker network. Caddy handles the public entry point and HTTPS when `APP_DOMAIN` is a real domain.
+All test identities are fictional. Runtime passwords are generated inside CI and are not committed.
 
 ## Data boundary
 
 The repository is public code. Production data is private.
 
-Never commit:
+Never commit .env, passwords, credentials, tokens, private keys, server secrets, database backups, real member data, private team documents, or operational records.
 
-- `.env` or credentials
-- database files or backups
-- real names, student numbers, phone numbers, or other member data
-- leave and attendance records
-- internal meeting notes or private team documents
+## Structure
 
-## Current scope
-
-Only the application foundation is implemented. Member, activity, task, attendance, leave, and weekly-report modules will be added from actual team workflows instead of being pre-built speculatively.
+~~~
+.
+├── backend/
+│   ├── alembic/
+│   ├── app/
+│   │   ├── routers/
+│   │   ├── auth.py
+│   │   ├── bootstrap_admin.py
+│   │   ├── db.py
+│   │   ├── main.py
+│   │   ├── models.py
+│   │   └── schemas.py
+│   ├── Dockerfile
+│   └── requirements.txt
+├── frontend/
+│   ├── src/
+│   ├── Caddyfile
+│   └── Dockerfile
+├── scripts/
+│   └── smoke_test.py
+├── compose.yaml
+└── README.md
+~~~
 
 ## License
 

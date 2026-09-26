@@ -1,10 +1,16 @@
 import os
+from collections.abc import Generator
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import URL
+from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 
-def _database_url() -> URL:
+class Base(DeclarativeBase):
+    pass
+
+
+def database_url() -> URL:
     return URL.create(
         "mysql+pymysql",
         username=os.environ["DB_USER"],
@@ -16,7 +22,13 @@ def _database_url() -> URL:
     )
 
 
-engine = create_engine(_database_url(), pool_pre_ping=True)
+engine = create_engine(database_url(), pool_pre_ping=True)
+SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
+
+
+def get_db() -> Generator[Session, None, None]:
+    with SessionLocal() as session:
+        yield session
 
 
 def check_database() -> None:

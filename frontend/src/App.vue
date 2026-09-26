@@ -594,7 +594,45 @@ onBeforeUnmount(() => window.removeEventListener("popstate", handlePopState))
   </main>
 
   <main v-else class="app-shell">
-    <header class="topbar">
+    <div class="brand-ribbon" aria-hidden="true"></div>
+
+    <aside class="desktop-sidebar" aria-label="主导航">
+      <div class="sidebar-brand-block">
+        <button class="sidebar-brand" type="button" @click="navigate('/')">TARS-GO</button>
+        <span>公共运营事务</span>
+      </div>
+
+      <nav class="sidebar-nav">
+        <button :class="{ active: path === '/' }" type="button" @click="navigate('/')">首页</button>
+        <button :class="{ active: path === '/tasks' }" type="button" @click="navigateTasks('mine')">
+          任务
+        </button>
+        <button
+          v-if="isAdmin"
+          :class="{ active: path === '/team' }"
+          type="button"
+          @click="navigate('/team')"
+        >
+          团队
+        </button>
+        <button :class="{ active: path === '/me' }" type="button" @click="navigate('/me')">
+          我的
+        </button>
+      </nav>
+
+      <div class="sidebar-account">
+        <div class="sidebar-user">
+          <strong>{{ user?.name }}</strong>
+          <span>{{ user ? roleLabels[user.role] : "" }}</span>
+        </div>
+        <div class="sidebar-user-actions">
+          <button type="button" @click="navigate('/me')">个人信息</button>
+          <button type="button" @click="logout">退出登录</button>
+        </div>
+      </div>
+    </aside>
+
+    <header class="mobile-topbar">
       <span class="brand">TARS-GO</span>
       <span class="product-label">公共运营事务</span>
     </header>

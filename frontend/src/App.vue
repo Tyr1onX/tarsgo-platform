@@ -21,6 +21,7 @@ import type {
 const path = ref(window.location.pathname)
 const user = ref<Member | null>(null)
 const loading = ref(true)
+const routeNotFound = ref(false)
 const error = ref("")
 const notice = ref("")
 
@@ -270,6 +271,7 @@ async function loadCurrentUser() {
 
 async function loadRoute() {
   loading.value = true
+  routeNotFound.value = false
   error.value = ""
 
   try {
@@ -334,8 +336,7 @@ async function loadRoute() {
     } else if (path.value === "/me") {
       // Current user data is already sufficient.
     } else {
-      navigate("/")
-      return
+      routeNotFound.value = true
     }
   } catch (reason) {
     if (reason instanceof ApiError && reason.status === 401 && !path.value.startsWith("/invite/")) {
@@ -759,8 +760,8 @@ onBeforeUnmount(() => window.removeEventListener("popstate", handlePopState))
           required
         />
       </label>
-      <p v-if="error" class="message error">{{ error }}</p>
-      <p v-if="notice" class="message success">{{ notice }}</p>
+      <p v-if="error" class="message error" role="alert">{{ error }}</p>
+      <p v-if="notice" class="message success" role="status">{{ notice }}</p>
       <button class="primary" type="submit">登录</button>
     </form>
   </main>
@@ -797,7 +798,7 @@ onBeforeUnmount(() => window.removeEventListener("popstate", handlePopState))
               required
             />
           </label>
-          <p v-if="error" class="message error">{{ error }}</p>
+          <p v-if="error" class="message error" role="alert">{{ error }}</p>
           <button class="primary" type="submit">激活账号</button>
         </form>
       </template>
@@ -813,9 +814,11 @@ onBeforeUnmount(() => window.removeEventListener("popstate", handlePopState))
           <span>正在验证邀请…</span>
         </div>
       </div>
-      <div v-else class="empty">
+      <div v-else class="empty auth-empty-state">
+        <span class="empty-code">BASE / INVITE</span>
         <h1>无法使用邀请</h1>
         <p>{{ error || "邀请无效或已失效，请联系管理员。" }}</p>
+        <button class="secondary" type="button" @click="navigate('/login')">返回登录</button>
       </div>
     </section>
   </main>
@@ -880,10 +883,19 @@ onBeforeUnmount(() => window.removeEventListener("popstate", handlePopState))
     </div>
 
     <div v-else class="page">
-      <p v-if="error" class="message error">{{ error }}</p>
-      <p v-if="notice" class="message success">{{ notice }}</p>
+      <p v-if="error" class="message error" role="alert">{{ error }}</p>
+      <p v-if="notice" class="message success" role="status">{{ notice }}</p>
 
-      <template v-if="path === '/'">
+      <template v-if="routeNotFound">
+        <section class="system-state">
+          <span class="system-code">BASE / 404</span>
+          <h1>这个路径不属于当前 Base</h1>
+          <p>可能是链接已经变化，或者地址输入有误。</p>
+          <button class="primary" type="button" @click="navigate('/')">返回 Base</button>
+        </section>
+      </template>
+
+      <template v-else-if="path === '/'">
         <section class="hero">
           <p>BASE / OVERVIEW · 你好，{{ user?.name }}</p>
           <h1>我现在需要做什么</h1>
@@ -927,7 +939,9 @@ onBeforeUnmount(() => window.removeEventListener("popstate", handlePopState))
               </div>
             </article>
           </div>
-          <div v-else class="empty empty-action">
+          <div v-else class="empty empty-action empty-state">
+            <span class="empty-code">BASE / CLEAR</span>
+            <h3>当前队列已清空</h3>
             <p>目前没有你负责或协作的未完成事项。</p>
           </div>
         </section>
@@ -1383,9 +1397,15 @@ onBeforeUnmount(() => window.removeEventListener("popstate", handlePopState))
             </article>
           </div>
 
-          <div v-else class="empty empty-action">
+          <div v-else class="empty empty-action empty-state">
+            <span class="empty-code">
+              {{ taskView === 'mine' ? 'TASKS / MINE' : taskView === 'claimable' ? 'TASKS / CLAIM' : 'TASKS / ALL' }}
+            </span>
+            <h3 v-if="taskView === 'mine'">暂时没有你的执行项</h3>
+            <h3 v-else-if="taskView === 'claimable'">当前没有待认领项</h3>
+            <h3 v-else>运营列表还是空的</h3>
             <p v-if="taskView === 'mine'">目前没有你负责或参与的任务。</p>
-            <p v-else-if="taskView === 'claimable'">当前没有待认领的任务。</p>
+            <p v-else-if="taskView === 'claimable'">新的可认领任务出现后，会显示在这里。</p>
             <p v-else>还没有正式发布的运营事项。</p>
             <button v-if="isManager && taskView === 'all'" class="primary" type="button" @click="startNewTask()">
               新建事项
@@ -1494,7 +1514,7 @@ onBeforeUnmount(() => window.removeEventListener("popstate", handlePopState))
           <input ref="knowledgeUploadRef" class="visually-hidden" type="file" accept=".md,.txt,.docx,.pdf" @change="uploadKnowledgeFile" />
           <small>单个文件最大 10 MB；扫描版 PDF 不做 OCR。</small>
         </section>
-        <p v-if="knowledgeSyncSummary" class="message success">
+        <p v-if="knowledgeSyncSummary" class="message success" role="status">
           同步完成：新增 {{ knowledgeSyncSummary.added }}，更新 {{ knowledgeSyncSummary.updated }}，未变化 {{ knowledgeSyncSummary.unchanged }}，失败 {{ knowledgeSyncSummary.failed }}，已移除 {{ knowledgeSyncSummary.removed }}。
         </p>
         <section>
@@ -1510,7 +1530,11 @@ onBeforeUnmount(() => window.removeEventListener("popstate", handlePopState))
               <button class="danger-text" type="button" @click="removeKnowledgeDocument(document)">删除</button>
             </article>
           </div>
-          <div v-else class="empty"><p>还没有团队资料。</p></div>
+          <div v-else class="empty empty-state">
+            <span class="empty-code">KNOWLEDGE / EMPTY</span>
+            <h3>还没有团队资料</h3>
+            <p>可以从 GitHub 同步，或上传一份文档作为知识来源。</p>
+          </div>
         </section>
       </template>
     </div>

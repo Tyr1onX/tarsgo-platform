@@ -698,7 +698,18 @@ onBeforeUnmount(() => window.removeEventListener("popstate", handlePopState))
           <button class="primary" type="submit">激活账号</button>
         </form>
       </template>
-      <p v-else-if="loading">正在验证邀请…</p>
+      <div v-else-if="loading" class="tars-loading tars-loading-auth" role="status" aria-live="polite">
+        <div class="tars-loading-mark" aria-hidden="true">
+          <span class="tars-loading-block block-a"></span>
+          <span class="tars-loading-block block-b"></span>
+          <span class="tars-loading-block block-c"></span>
+          <span class="tars-loading-block block-d"></span>
+        </div>
+        <div class="tars-loading-copy">
+          <strong>TARS BASE</strong>
+          <span>正在验证邀请…</span>
+        </div>
+      </div>
       <div v-else class="empty">
         <h1>无法使用邀请</h1>
         <p>{{ error || "邀请无效或已失效，请联系管理员。" }}</p>
@@ -750,7 +761,20 @@ onBeforeUnmount(() => window.removeEventListener("popstate", handlePopState))
       <span class="product-label">JLU · TARS-GO</span>
     </header>
 
-    <div v-if="loading" class="page"><p>正在加载…</p></div>
+    <div v-if="loading" class="page tars-loading-page">
+      <div class="tars-loading" role="status" aria-live="polite">
+        <div class="tars-loading-mark" aria-hidden="true">
+          <span class="tars-loading-block block-a"></span>
+          <span class="tars-loading-block block-b"></span>
+          <span class="tars-loading-block block-c"></span>
+          <span class="tars-loading-block block-d"></span>
+        </div>
+        <div class="tars-loading-copy">
+          <strong>TARS BASE</strong>
+          <span>正在加载…</span>
+        </div>
+      </div>
+    </div>
 
     <div v-else class="page">
       <p v-if="error" class="message error">{{ error }}</p>

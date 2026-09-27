@@ -17,6 +17,7 @@ from ..ai_planner import (
 )
 from ..auth import get_current_member
 from ..db import get_db
+from ..knowledge import KnowledgeContext, build_planner_context, planner_input_text
 from ..models import AIPlannerDailyUsage, Member
 from ..schemas import AIPlannerAccessOut, AIPlannerDraft, AIPlannerRequest
 
@@ -63,7 +64,7 @@ def _usage_date():
     return datetime.now(timezone.utc).date()
 
 
-def _reserve_request(db: Session, member_id: int):
+def _reserve_request(db: Session, member_id: int, knowledge_context_chars: int = 0):
     usage_date = _usage_date()
     for attempt in range(2):
         try:
@@ -73,12 +74,20 @@ def _reserve_request(db: Session, member_id: int):
                 .with_for_update()
             )
             if usage is None:
-                db.add(AIPlannerDailyUsage(member_id=member_id, usage_date=usage_date, request_count=1))
+                db.add(
+                    AIPlannerDailyUsage(
+                        member_id=member_id,
+                        usage_date=usage_date,
+                        request_count=1,
+                        knowledge_context_chars=max(knowledge_context_chars, 0),
+                    )
+                )
             else:
                 if usage.request_count >= DAILY_REQUEST_LIMIT:
                     db.rollback()
                     raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="今天的 AI 规划次数已用完，请明天再试")
                 usage.request_count += 1
+                usage.knowledge_context_chars += max(knowledge_context_chars, 0)
             db.commit()
             return usage_date
         except IntegrityError:
@@ -115,10 +124,27 @@ def generate_plan(
     provider: PlannerProvider = Depends(get_planner_provider),
 ) -> AIPlannerDraft:
     _require_planner_access(current)
-    usage_date = _reserve_request(db, current.id)
+    try:
+        context = build_planner_context(
+            db,
+            description=payload.description,
+            item_title=payload.item_title,
+            current_event_context=payload.current_event_context,
+            current_event_document_ids=payload.current_event_document_ids,
+        )
+    except Exception as exc:
+        db.rollback()
+        logger.warning("AI planner knowledge context unavailable exception_type=%s", type(exc).__name__)
+        pasted = (payload.current_event_context or "").strip()
+        header = "负责人补充资料：\n"
+        fallback = header + pasted[: max(0, 5_000 - len(header))] if pasted else ""
+        context = KnowledgeContext(current_event_text=fallback)
+
+    planner_input = planner_input_text(payload.description, payload.item_title, context)
+    usage_date = _reserve_request(db, current.id, context.context_chars)
 
     try:
-        generation = provider.generate(payload.description)
+        generation = provider.generate(planner_input)
     except PlannerTimeoutError:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="AI 规划请求超时，请稍后重试")
     except PlannerRateLimitError:

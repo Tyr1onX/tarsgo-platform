@@ -100,6 +100,7 @@ Historical tasks may continue to reference disabled members. Existing assignment
 - / — “what do I need to do now?” home view
 - /tasks — single task entry for every role
 - /ai-planner — allowlisted admin-only AI planning workspace; not global navigation
+- /knowledge — admin-only GitHub and document knowledge management; not global navigation
 - /team — admin-only member account management
 - /me — personal information, system role and logout
 
@@ -171,7 +172,7 @@ Access requires all of:
 
 The frontend only shows the entry when /api/ai/planner/access says it is available. The planner POST endpoint performs the authoritative checks again.
 
-One Generate action makes exactly one SDK model request. There is no agent loop, automatic reflection, history upload, database task dump, RAG or file upload. Input is capped at 5000 characters, output at 15 assignments / 6 questions and 2200 output tokens. The official OpenAI Python SDK is configured with automatic retries disabled. A persistent per-member UTC-day counter caps planning at 20 attempts per day and stores aggregate input/output/total token usage without storing prompt or draft text.
+One Generate action makes exactly one SDK model request. There is no agent loop, automatic reflection, database task dump or vector retrieval. The planner may use bounded local keyword results from Knowledge Source V0.1, plus current-event text or selected documents supplied by the admin. Input description is capped at 5000 characters, knowledge context at 8000 characters, and output at 15 assignments / 6 questions. The official OpenAI Python SDK is configured with automatic retries disabled. A persistent per-member UTC-day counter caps planning at 20 attempts per day and stores aggregate input/output/total token usage and knowledge-context character counts without storing prompt or draft text.
 
 ### AI planner configuration
 
@@ -203,6 +204,7 @@ Current Alembic chain:
 0001_v0_1
 -> 0002_operations_claiming
 -> 0003_ai_planner_usage
+-> 0004_knowledge_documents
 ~~~
 
 It upgrades the existing V0.1 tasks table without deleting data:
@@ -215,6 +217,25 @@ It upgrades the existing V0.1 tasks table without deleting data:
 - existing completion standards and statuses remain unchanged
 
 CI includes a real 0001_v0_1 -> 0002_operations_claiming compatibility check using seeded legacy data.
+
+## Knowledge Source V0.1
+
+Admins can sync only configured paths from one configured GitHub repository or upload individual `.md`, `.txt`, `.docx` and `.pdf` files at `/knowledge`. GitHub access is read-only; credentials remain in the server `.env`. Uploaded originals are stored under `/opt/tarsgo-knowledge` by default, outside the repository and in a private directory. Files are limited to 10 MiB. PDFs are text-extracted without OCR; files with no extractable text are marked accordingly.
+
+Extracted text and source metadata are indexed in `knowledge_documents`. GitHub paths are upserted by source path and content hash; missing files are marked removed. Local retrieval scores title, path and text keywords and sends at most six short excerpts, with up to 3,000 history characters. Current-event materials have a separate 5,000-character budget and take precedence. Documents are treated as untrusted reference text, never as instructions. No embedding, vector database or model-based retrieval is used.
+
+Server-side configuration:
+
+~~~text
+KNOWLEDGE_ENABLED=false
+KNOWLEDGE_GITHUB_REPO=owner/repository
+KNOWLEDGE_GITHUB_BRANCH=main
+KNOWLEDGE_GITHUB_TOKEN=<read-only fine-grained token, if required>
+KNOWLEDGE_GITHUB_PATHS=docs,knowledge
+KNOWLEDGE_STORAGE_HOST_DIR=/opt/tarsgo-knowledge
+~~~
+
+For a private repository, use a fine-grained token restricted to that repository with Contents read-only permission. Keep tokens and uploaded/private team material out of Git and ordinary logs. The API never returns document text, server filesystem paths or GitHub credentials.
 
 ## Run locally
 
@@ -308,6 +329,8 @@ Coverage includes:
 - safe claim cancellation
 - admin / manager reassignment
 - member structural-edit restrictions
+- admin-only knowledge APIs, supported text extraction, file limits, GitHub path/hash sync, removed-source handling and bounded planner retrieval
+- one planner provider call and graceful operation when the knowledge index is unavailable
 - owner-only member status updates
 - disabled-member blocking
 - database restart persistence

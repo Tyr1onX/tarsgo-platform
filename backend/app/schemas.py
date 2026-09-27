@@ -154,6 +154,9 @@ class TaskOut(BaseModel):
 class AIPlannerRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     description: str = Field(min_length=10, max_length=5000)
+    item_title: str | None = Field(default=None, max_length=200)
+    current_event_context: str | None = Field(default=None, max_length=5000)
+    current_event_document_ids: list[int] = Field(default_factory=list, max_length=5)
 
     @field_validator("description")
     @classmethod
@@ -161,6 +164,29 @@ class AIPlannerRequest(BaseModel):
         value = value.strip()
         if len(value) < 10:
             raise ValueError("请再补充一些事项背景")
+        return value
+
+    @field_validator("item_title")
+    @classmethod
+    def strip_item_title(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        return value or None
+
+    @field_validator("current_event_context")
+    @classmethod
+    def strip_current_event_context(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        return value or None
+
+    @field_validator("current_event_document_ids")
+    @classmethod
+    def validate_document_ids(cls, value: list[int]) -> list[int]:
+        if any(document_id < 1 for document_id in value) or len(set(value)) != len(value):
+            raise ValueError("资料选择无效")
         return value
 
 
@@ -227,6 +253,34 @@ class AIPlannerDraft(BaseModel):
 
 class AIPlannerAccessOut(BaseModel):
     available: bool
+
+
+class KnowledgeDocumentOut(BaseModel):
+    id: int
+    source_type: Literal["github", "upload"]
+    source_name: str
+    display_name: str
+    title: str
+    parse_status: Literal["ready", "truncated", "failed", "unparseable", "removed"]
+    parse_error: str | None
+    is_active: bool
+    synced_at: datetime
+    source_updated_at: datetime | None
+
+
+class KnowledgeOptionOut(BaseModel):
+    id: int
+    source_type: Literal["github", "upload"]
+    source_name: str
+    title: str
+
+
+class KnowledgeSyncOut(BaseModel):
+    added: int
+    updated: int
+    unchanged: int
+    failed: int
+    removed: int
 
 
 class TaskBatchItemIn(BaseModel):

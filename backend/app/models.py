@@ -9,12 +9,14 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Integer,
+    Index,
     String,
     Table,
     Text,
     UniqueConstraint,
     func,
 )
+from sqlalchemy.dialects.mysql import LONGTEXT
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
@@ -113,4 +115,35 @@ class AIPlannerDailyUsage(Base):
     input_tokens: Mapped[int] = mapped_column(BigInteger(), default=0, server_default="0")
     output_tokens: Mapped[int] = mapped_column(BigInteger(), default=0, server_default="0")
     total_tokens: Mapped[int] = mapped_column(BigInteger(), default=0, server_default="0")
+    knowledge_context_chars: Mapped[int] = mapped_column(Integer(), default=0, server_default="0")
     updated_at: Mapped[datetime] = mapped_column(DateTime(), server_default=func.now(), onupdate=func.now())
+
+
+class KnowledgeDocument(Base):
+    __tablename__ = "knowledge_documents"
+    __table_args__ = (
+        CheckConstraint("source_type IN ('github','upload')", name="ck_knowledge_source_type"),
+        CheckConstraint(
+            "parse_status IN ('ready','truncated','failed','unparseable','removed')",
+            name="ck_knowledge_parse_status",
+        ),
+        UniqueConstraint("source_key_hash", name="uq_knowledge_source_key_hash"),
+        Index("ix_knowledge_source_active_status", "source_type", "source_name", "is_active", "parse_status"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    source_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    source_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    source_path: Mapped[str] = mapped_column(String(1024), nullable=False)
+    source_key_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    content_text: Mapped[str] = mapped_column(Text().with_variant(LONGTEXT(), "mysql"), nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_blob_sha: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    git_commit_sha: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    source_updated_at: Mapped[datetime | None] = mapped_column(DateTime(), nullable=True)
+    synced_at: Mapped[datetime] = mapped_column(DateTime(), server_default=func.now(), nullable=False)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("members.id", ondelete="SET NULL"), nullable=True)
+    parse_status: Mapped[str] = mapped_column(String(20), nullable=False)
+    parse_error: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean(), default=True, server_default="1", nullable=False)

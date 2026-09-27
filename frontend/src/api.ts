@@ -1,10 +1,14 @@
 import type {
   AIPlannerAccess,
   AIPlannerDraft,
+  AIPlannerInput,
   InvitationInfo,
   InviteResult,
   Member,
   MemberSummary,
+  KnowledgeDocument,
+  KnowledgeOption,
+  KnowledgeSyncSummary,
   Role,
   Task,
   TaskBatchPayload,
@@ -25,7 +29,9 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
     ...init,
     headers: {
-      ...(init?.body ? { "Content-Type": "application/json" } : {}),
+      ...(init?.body && !(typeof FormData !== "undefined" && init.body instanceof FormData)
+        ? { "Content-Type": "application/json" }
+        : {}),
       ...init?.headers,
     },
   })
@@ -77,11 +83,23 @@ export const api = {
   enableMember: (memberId: number) => request<Member>(`/api/members/${memberId}/enable`, { method: "POST" }),
 
   aiPlannerAccess: () => request<AIPlannerAccess>("/api/ai/planner/access"),
-  generateAIPlan: (description: string) =>
+  generateAIPlan: (payload: AIPlannerInput) =>
     request<AIPlannerDraft>("/api/ai/planner", {
       method: "POST",
-      body: JSON.stringify({ description }),
+      body: JSON.stringify(payload),
     }),
+
+  knowledgeDocuments: () => request<KnowledgeDocument[]>("/api/knowledge"),
+  knowledgeOptions: () => request<KnowledgeOption[]>("/api/knowledge/options"),
+  syncGitHubKnowledge: () =>
+    request<KnowledgeSyncSummary>("/api/knowledge/sync/github", { method: "POST" }),
+  uploadKnowledgeDocument: (file: File) => {
+    const form = new FormData()
+    form.append("file", file)
+    return request<KnowledgeDocument>("/api/knowledge/uploads", { method: "POST", body: form })
+  },
+  deleteKnowledgeDocument: (documentId: number) =>
+    request<void>(`/api/knowledge/${documentId}`, { method: "DELETE" }),
 
   taskAssignees: () => request<MemberSummary[]>("/api/tasks/assignees"),
   tasks: (scope: TaskView = "mine") => request<Task[]>(`/api/tasks?scope=${scope}`),

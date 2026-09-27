@@ -30,6 +30,12 @@ jobs:
           AI_BASE_URL=
           AI_API_KEY=ci-placeholder
           AI_MODEL=ci-placeholder
+          KNOWLEDGE_ENABLED=true
+          KNOWLEDGE_GITHUB_REPO=
+          KNOWLEDGE_GITHUB_BRANCH=main
+          KNOWLEDGE_GITHUB_TOKEN=
+          KNOWLEDGE_GITHUB_PATHS=docs,knowledge
+          KNOWLEDGE_STORAGE_HOST_DIR=/tmp/tarsgo-knowledge-ci
           EOF
           echo "CI_ADMIN_PASSWORD=$ADMIN_PASSWORD" >> "$GITHUB_ENV"
           echo "CI_MYSQL_PASSWORD=$MYSQL_PASSWORD" >> "$GITHUB_ENV"
@@ -112,6 +118,9 @@ jobs:
 
       - name: Verify AI provider adapters
         run: docker compose exec -T api python -m tests.test_ai_providers
+
+      - name: Verify knowledge sources and planner context
+        run: docker compose exec -T api python -m tests.test_knowledge
 
       - name: Restart database
         run: |

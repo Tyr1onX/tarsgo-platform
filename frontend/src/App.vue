@@ -7,6 +7,9 @@ import type {
   AIPlannerTaskDraft,
   InvitationInfo,
   InviteResult,
+  KnowledgeDocument,
+  KnowledgeOption,
+  KnowledgeSyncSummary,
   Member,
   MemberSummary,
   Role,
@@ -36,9 +39,18 @@ const taskView = ref<TaskView>("mine")
 const claimableCount = ref(0)
 const aiPlannerAvailable = ref(false)
 const plannerDescription = ref("")
+const plannerItemTitle = ref("")
+const plannerCurrentContext = ref("")
+const plannerKnowledgeOptions = ref<KnowledgeOption[]>([])
+const plannerKnowledgeIds = ref<number[]>([])
 const plannerDraft = ref<AIPlannerDraft | null>(null)
 const plannerGenerating = ref(false)
 const plannerPublishing = ref(false)
+const knowledgeDocuments = ref<KnowledgeDocument[]>([])
+const knowledgeUploading = ref(false)
+const knowledgeSyncing = ref(false)
+const knowledgeSyncSummary = ref<KnowledgeSyncSummary | null>(null)
+const knowledgeUploadRef = ref<HTMLInputElement | null>(null)
 
 const memberName = ref("")
 const memberEmail = ref("")
@@ -230,6 +242,19 @@ async function loadPlannerAccess() {
   }
 }
 
+async function loadPlannerKnowledgeOptions() {
+  plannerKnowledgeOptions.value = []
+  try {
+    plannerKnowledgeOptions.value = await api.knowledgeOptions()
+  } catch {
+    // Knowledge lookup is optional; planner generation remains available.
+  }
+}
+
+async function loadKnowledgeDocuments() {
+  knowledgeDocuments.value = await api.knowledgeDocuments()
+}
+
 async function loadCurrentUser() {
   try {
     user.value = await api.me()
@@ -293,6 +318,13 @@ async function loadRoute() {
         navigate("/")
         return
       }
+      await loadPlannerKnowledgeOptions()
+    } else if (path.value === "/knowledge") {
+      if (!isAdmin.value) {
+        navigate("/")
+        return
+      }
+      await loadKnowledgeDocuments()
     } else if (path.value === "/team") {
       if (!isAdmin.value) {
         navigate("/")
@@ -556,7 +588,12 @@ async function generateAIPlan() {
   error.value = ""
   plannerGenerating.value = true
   try {
-    const draft = await api.generateAIPlan(description)
+    const draft = await api.generateAIPlan({
+      description,
+      item_title: plannerItemTitle.value.trim() || undefined,
+      current_event_context: plannerCurrentContext.value.trim() || undefined,
+      current_event_document_ids: plannerKnowledgeIds.value,
+    })
     if (draft.item.deadline) draft.item.deadline = toLocalInput(draft.item.deadline)
     plannerDraft.value = draft
   } catch (reason) {
@@ -600,6 +637,9 @@ async function publishAIPlan() {
     })
     plannerDraft.value = null
     plannerDescription.value = ""
+    plannerItemTitle.value = ""
+    plannerCurrentContext.value = ""
+    plannerKnowledgeIds.value = []
     notice.value = `已创建事项和 ${result.tasks.length} 个分工`
     navigateTasks("all")
   } catch (reason) {
@@ -607,6 +647,69 @@ async function publishAIPlan() {
   } finally {
     plannerPublishing.value = false
   }
+}
+
+async function syncGitHubKnowledge() {
+  knowledgeSyncing.value = true
+  error.value = ""
+  try {
+    knowledgeSyncSummary.value = await api.syncGitHubKnowledge()
+    await loadKnowledgeDocuments()
+    await loadPlannerKnowledgeOptions()
+  } catch (reason) {
+    error.value = messageOf(reason)
+  } finally {
+    knowledgeSyncing.value = false
+  }
+}
+
+async function uploadKnowledgeFile(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+  knowledgeUploading.value = true
+  error.value = ""
+  try {
+    await api.uploadKnowledgeDocument(file)
+    await loadKnowledgeDocuments()
+    await loadPlannerKnowledgeOptions()
+    notice.value = `已添加资料：${file.name}`
+  } catch (reason) {
+    error.value = messageOf(reason)
+  } finally {
+    input.value = ""
+    knowledgeUploading.value = false
+  }
+}
+
+async function removeKnowledgeDocument(document: KnowledgeDocument) {
+  if (!window.confirm(`删除知识条目“${document.title}”？`)) return
+  error.value = ""
+  try {
+    await api.deleteKnowledgeDocument(document.id)
+    plannerKnowledgeIds.value = plannerKnowledgeIds.value.filter((id) => id !== document.id)
+    await loadKnowledgeDocuments()
+    await loadPlannerKnowledgeOptions()
+  } catch (reason) {
+    error.value = messageOf(reason)
+  }
+}
+
+function knowledgeStatusLabel(document: KnowledgeDocument) {
+  if (!document.is_active || document.parse_status === "removed") return "已从来源移除"
+  const labels = {
+    ready: "可检索",
+    truncated: "已截断，可检索",
+    failed: "解析失败",
+    unparseable: "未提取到文字",
+    removed: "已从来源移除",
+  }
+  const label = labels[document.parse_status]
+  return document.parse_error ? `${label} · ${document.parse_error}` : label
+}
+
+function chooseKnowledgeFile() {
+  knowledgeUploadRef.value?.click()
 }
 
 async function logout() {
@@ -866,6 +969,10 @@ onBeforeUnmount(() => window.removeEventListener("popstate", handlePopState))
 
         <section class="planner-input">
           <label>
+            已确定的事项标题（可选）
+            <input v-model="plannerItemTitle" maxlength="200" placeholder="例如：秋季校园科技展" />
+          </label>
+          <label>
             你准备做什么？
             <textarea
               v-model="plannerDescription"
@@ -874,6 +981,26 @@ onBeforeUnmount(() => window.removeEventListener("popstate", handlePopState))
               placeholder="例如：10 月 12 日去小学做科技展，需要机器人展示、讲解、直播、摄影、周边发放，活动结束后整理素材。具体人员暂时还没定，之后开放认领。"
             />
           </label>
+          <div class="current-event-materials">
+            <h2>补充本次活动资料（可选）</h2>
+            <label>
+              本次活动通知、安排、时间地点等
+              <textarea
+                v-model="plannerCurrentContext"
+                maxlength="5000"
+                rows="5"
+                placeholder="粘贴本次活动已经确认的资料。这里的内容优先于团队历史经验。"
+              />
+            </label>
+            <fieldset v-if="plannerKnowledgeOptions.length" class="knowledge-picker">
+              <legend>选择已上传资料作为本次事项资料</legend>
+              <label v-for="option in plannerKnowledgeOptions" :key="option.id" class="check-row">
+                <input v-model="plannerKnowledgeIds" type="checkbox" :value="option.id" :disabled="!plannerKnowledgeIds.includes(option.id) && plannerKnowledgeIds.length >= 5" />
+                {{ option.title }} <small class="muted">{{ option.source_name }}</small>
+              </label>
+            </fieldset>
+            <small class="muted">系统还会自动参考相关团队资料和历史经验。选作本次资料的文件不会因此复制进长期知识库。</small>
+          </div>
           <div class="planner-input-actions">
             <button class="primary" type="button" :disabled="plannerGenerating" @click="generateAIPlan">
               {{ plannerGenerating ? "正在生成…" : "生成方案" }}
@@ -1278,7 +1405,10 @@ onBeforeUnmount(() => window.removeEventListener("popstate", handlePopState))
       </template>
 
       <template v-else-if="path === '/team'">
-        <div class="page-title"><h1>团队</h1></div>
+        <div class="page-title">
+          <h1>团队</h1>
+          <button type="button" @click="navigate('/knowledge')">团队知识</button>
+        </div>
         <form class="management-form" @submit.prevent="submitMemberInvite">
           <h2>邀请成员</h2>
           <label>
@@ -1343,6 +1473,44 @@ onBeforeUnmount(() => window.removeEventListener("popstate", handlePopState))
               </div>
             </div>
           </div>
+        </section>
+      </template>
+
+      <template v-else-if="path === '/knowledge'">
+        <div class="page-title">
+          <div>
+            <h1>团队知识</h1>
+            <p>只同步和提取资料，不会改写 GitHub 原文件。支持 Markdown、TXT、DOCX 和可提取文字的 PDF。</p>
+          </div>
+          <button type="button" @click="navigate('/team')">返回团队</button>
+        </div>
+        <section class="knowledge-actions">
+          <button class="primary" type="button" :disabled="knowledgeSyncing" @click="syncGitHubKnowledge">
+            {{ knowledgeSyncing ? "正在同步…" : "同步 GitHub" }}
+          </button>
+          <button type="button" :disabled="knowledgeUploading" @click="chooseKnowledgeFile">
+            {{ knowledgeUploading ? "正在上传…" : "上传文档" }}
+          </button>
+          <input ref="knowledgeUploadRef" class="visually-hidden" type="file" accept=".md,.txt,.docx,.pdf" @change="uploadKnowledgeFile" />
+          <small>单个文件最大 10 MB；扫描版 PDF 不做 OCR。</small>
+        </section>
+        <p v-if="knowledgeSyncSummary" class="message success">
+          同步完成：新增 {{ knowledgeSyncSummary.added }}，更新 {{ knowledgeSyncSummary.updated }}，未变化 {{ knowledgeSyncSummary.unchanged }}，失败 {{ knowledgeSyncSummary.failed }}，已移除 {{ knowledgeSyncSummary.removed }}。
+        </p>
+        <section>
+          <div class="section-heading"><h2>来源文件</h2><span>{{ knowledgeDocuments.length }} 条</span></div>
+          <div v-if="knowledgeDocuments.length" class="knowledge-list">
+            <article v-for="document in knowledgeDocuments" :key="document.id" class="knowledge-row">
+              <div>
+                <span class="state">{{ document.source_type === 'github' ? 'GitHub' : '上传' }} · {{ knowledgeStatusLabel(document) }}</span>
+                <h3>{{ document.display_name }}</h3>
+                <small>{{ document.source_type === 'github' ? document.source_name : document.title }}</small>
+                <small>更新于 {{ formatDate(document.synced_at) }}</small>
+              </div>
+              <button class="danger-text" type="button" @click="removeKnowledgeDocument(document)">删除</button>
+            </article>
+          </div>
+          <div v-else class="empty"><p>还没有团队资料。</p></div>
         </section>
       </template>
     </div>

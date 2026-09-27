@@ -49,6 +49,33 @@ def call(client, path, *, method="GET", data=None, expected=200):
     return json.loads(payload)
 
 
+def upload_markdown(client, *, content=None, filename="ci-fixture.md", expected=201):
+    boundary = "tarsgo-knowledge-smoke-boundary"
+    if content is None:
+        content = b"# CI fixture\nCurrent event material for authorization smoke."
+    body = (
+        f"--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
+        "Content-Type: text/markdown\r\n\r\n"
+    ).encode() + content + f"\r\n--{boundary}--\r\n".encode()
+    request = Request(
+        BASE_URL + "/api/knowledge/uploads",
+        data=body,
+        method="POST",
+        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+    )
+    try:
+        with client.open(request, timeout=10) as response:
+            payload = response.read()
+            status = response.status
+    except HTTPError as error:
+        payload = error.read()
+        status = error.code
+    if status != expected:
+        raise AssertionError(f"POST /api/knowledge/uploads: expected {expected}, got {status}: {payload.decode()}")
+    return json.loads(payload) if payload else None
+
+
 def login(email, password, *, expected=200):
     client = opener()
     result = call(
@@ -111,8 +138,18 @@ def run_workflow():
     call(opener(), "/api/auth/me", expected=401)
     call(opener(), "/api/tasks?scope=all", expected=401)
     call(opener(), "/api/members", expected=401)
+    call(opener(), "/api/knowledge", expected=401)
+    call(opener(), "/api/knowledge/options", expected=401)
+    call(opener(), "/api/knowledge/sync/github", method="POST", expected=401)
 
     admin = login(ADMIN_EMAIL, admin_password)
+    assert isinstance(call(admin, "/api/knowledge"), list)
+    uploaded_knowledge = upload_markdown(admin)
+    assert uploaded_knowledge["title"] == "ci-fixture"
+    knowledge_options = call(admin, "/api/knowledge/options")
+    assert any(option["id"] == uploaded_knowledge["id"] for option in knowledge_options)
+    upload_markdown(admin, content=b"x" * (10 * 1024 * 1024 + 64 * 1024), filename="too-large.txt", expected=413)
+    call(admin, f"/api/knowledge/{uploaded_knowledge['id']}", method="DELETE", expected=204)
 
     manager_invite = invite(admin, "王五", MANAGER_EMAIL, "manager")
     manager_id = manager_invite["member"]["id"]
@@ -131,6 +168,11 @@ def run_workflow():
     second = login(SECOND_MEMBER_EMAIL, second_password)
 
     call(manager, "/api/members", expected=403)
+    call(manager, "/api/knowledge", expected=403)
+    call(manager, "/api/knowledge/options", expected=403)
+    call(manager, "/api/knowledge/sync/github", method="POST", expected=403)
+    call(manager, "/api/knowledge/999999", method="DELETE", expected=403)
+    upload_markdown(manager, expected=403)
     call(owner, "/api/members", expected=403)
     call(owner, "/api/tasks/assignees", expected=403)
 

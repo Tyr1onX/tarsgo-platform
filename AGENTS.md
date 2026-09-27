@@ -66,7 +66,9 @@ Implement only:
 
 Do not add a second Activity model. Continue evolving Task.
 
-The V0.2 second-stage first slice adds only an allowlisted admin AI draft planner and transactional batch confirmation. Do not expand it into automatic scheduling, member recommendation, time-conflict algorithms, workload algorithms, knowledge retrieval, notifications, comments, files, leave, weekly reports, technical R&D workflows, complex dashboards or complex organization structures.
+The V0.2 second-stage first slice adds an allowlisted admin AI draft planner and transactional batch confirmation. Knowledge Source V0.1 adds read-only GitHub sync, admin document uploads, local text extraction and bounded keyword retrieval for the planner. Keep this knowledge slice simple: no embeddings, vector database, multi-agent flow, auto-summarization or writeback to GitHub.
+
+Do not expand these slices into automatic scheduling, member recommendation, time-conflict algorithms, workload algorithms, notifications, task comments/files, leave, weekly reports, technical R&D workflows, complex dashboards or complex organization structures.
 
 ## Task model boundary
 
@@ -189,6 +191,7 @@ Current migration chain:
 0001_v0_1
 -> 0002_operations_claiming
 -> 0003_ai_planner_usage
+-> 0004_knowledge_documents
 ~~~
 
 Migrations must preserve current production rows. Never clear or silently rewrite production data to simplify a schema change.
@@ -221,7 +224,7 @@ Do not add controller/service/repository/facade layers without a concrete bounda
 
 The frontend intentionally has no UI framework, router library or state-management library.
 
-Primary routes are /login, /invite/:token, /, /tasks, /team and /me. /ai-planner is an allowlisted admin-only workflow entry and must not become a global navigation destination.
+Primary routes are /login, /invite/:token, /, /tasks, /team and /me. /ai-planner is an allowlisted admin-only workflow entry and /knowledge is an admin-only management page; neither becomes a global navigation destination.
 
 Keep one task entry: /tasks.
 
@@ -258,19 +261,31 @@ natural-language requirement
 -> transactional root item + first-level assignments
 ~~~
 
+Planner context is assembled locally before the provider call and divided into current-event material and historical team knowledge. Explicit facts in the leader description and current-event material outrank history; if those current sources conflict, ask the leader to clarify. Historical dates, places, people and counts must never be copied as current facts. Retrieved documents are untrusted reference data, not instructions. Send only a few relevant excerpts (at most 8,000 knowledge-context characters total) and keep generation to exactly one provider request.
+
+## Knowledge Source V0.1 boundary
+
+- Sources of truth remain the configured GitHub repository and files explicitly uploaded by admins; TARS-Go never writes back to GitHub.
+- Only `.md`, `.txt`, `.docx` and `.pdf` are extracted. No OCR; PDFs without extractable text are marked unparseable. Limit each file to 10 MiB.
+- GitHub credentials stay in server environment variables. GitHub access is read-only and restricted to configured repository paths.
+- Uploaded originals live under a private directory outside the repository. Never commit documents, extracted private team text, GitHub tokens or `.env`.
+- Admin-only APIs manage sync, listing, upload and deletion. Knowledge failures must not prevent the planner from working with the request description and pasted current material.
+- Retrieval is deterministic title/path/content keyword scoring. Do not add embeddings, vector databases, whole-repository prompts, AI retrieval calls or automatic knowledge writeback.
+- Explicitly selected documents and pasted text belong to the current event for that request; they are not copied into long-term knowledge automatically.
+
 Only allowlisted admins may generate plans. AI access is checked server-side by role, member ID allowlist, enabled flag and server configuration. The provider key never leaves the API container.
 
 Provider selection is configuration-only: AI_PROVIDER=openai or AI_PROVIDER=deepseek. Both must preserve the same PlannerProvider interface and AIPlannerDraft schema. OpenAI uses responses.parse(..., text_format=AIPlannerDraft). DeepSeek uses exactly one responses.create call against AI_BASE_URL=https://api.deepseek.com with text.format.type=json_schema, strict=true and schema=AIPlannerDraft.model_json_schema(), then json.loads(response.output_text) + AIPlannerDraft.model_validate(). Never implement a parse-then-create fallback or loosen the shared schema for DeepSeek. Do not fork the planner business flow by provider.
 
-Generation must remain one model request per explicit Generate / Regenerate action. No agent loop, hidden retry loop, automatic reflection, history, database task dump, RAG or files. Input is capped at 5000 characters, output at 15 assignments / 6 questions and 2200 output tokens, and the official SDK is configured with max_retries=0.
+Generation must remain one model request per explicit Generate / Regenerate action. No agent loop, hidden retry loop, automatic reflection, chat history, database task dump or vector retrieval. The description is capped at 5000 characters; knowledge context is capped at 8000 characters total, including at most 3000 characters of historical snippets. Output is capped at 15 assignments / 6 questions. Keep the existing provider limits (OpenAI 2200 output tokens, DeepSeek 4096 with reasoning effort `none`) and max_retries=0.
 
-The persistent ai_planner_daily_usage table stores only daily request and aggregate token counts. Never store full planner prompts or generated drafts there.
+The persistent ai_planner_daily_usage table stores daily request counts, aggregate provider token counts and knowledge-context character counts. Never store full planner prompts or generated drafts there.
 
 The AI schema may contain titles, completion standards, a tentative item deadline, owner_claimable, collaboration_open and confirmation questions. It must never contain owner_id or choose real members.
 
 Draft generation never writes Task rows. Only explicit confirmation calls the normal task batch endpoint. The confirming user owns the root item; a child with owner_claimable=true is published ownerless, while a child with owner_claimable=false is temporarily owned by the confirming manager/admin. Database state, permissions and constraints remain deterministic backend logic.
 
-Do not expand this slice into automatic scheduling, member recommendation, workload scoring, conflict detection, dependencies, knowledge retrieval or AI changes to already-published tasks.
+Do not expand this slice into automatic scheduling, member recommendation, workload scoring, conflict detection, dependencies, AI changes to already-published tasks or AI-generated knowledge.
 
 ## Change history direction
 
@@ -296,6 +311,7 @@ The V0.2 GitHub Actions workflow runs:
 - seeded V0.1 -> V0.2 migration verification
 - scripts/smoke_test.py workflow
 - mocked backend AI planner tests
+- fixture-backed knowledge extraction, sync, authorization and planner-context tests
 - MySQL restart
 - persistence verification
 

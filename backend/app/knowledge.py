@@ -74,6 +74,10 @@ class KnowledgeSourceError(KnowledgeError):
     pass
 
 
+class GitHubPathNotFound(KnowledgeSourceError):
+    """A configured GitHub contents path does not exist at the requested ref."""
+
+
 class UploadRejected(KnowledgeError):
     def __init__(self, status_code: int, detail: str):
         super().__init__(detail)
@@ -353,7 +357,7 @@ class ReadOnlyGitHubClient:
         owner, name = self.repository.split("/", 1)
         self.api_root = f"https://api.github.com/repos/{quote(owner, safe='')}/{quote(name, safe='')}"
 
-    def _json(self, endpoint: str) -> dict | list:
+    def _json(self, endpoint: str, *, missing_path_is_ok: bool = False) -> dict | list:
         headers = {
             "Accept": "application/vnd.github+json",
             "User-Agent": "TARS-Go-Knowledge-Sync",
@@ -371,7 +375,11 @@ class ReadOnlyGitHubClient:
             if not isinstance(decoded, (dict, list)):
                 raise KnowledgeSourceError("GitHub 响应无效")
             return decoded
-        except (HTTPError, URLError, TimeoutError, OSError, json.JSONDecodeError):
+        except HTTPError as exc:
+            if exc.code == 404 and missing_path_is_ok:
+                raise GitHubPathNotFound("GitHub 允许目录不存在") from None
+            raise KnowledgeSourceError("GitHub 仓库暂时无法读取") from None
+        except (URLError, TimeoutError, OSError, json.JSONDecodeError):
             raise KnowledgeSourceError("GitHub 仓库暂时无法读取") from None
 
     def commit_sha(self, branch: str) -> str:
@@ -383,7 +391,10 @@ class ReadOnlyGitHubClient:
 
     def list_directory(self, path: str, ref: str) -> list[dict]:
         encoded_path = quote(path, safe="/")
-        data = self._json(f"/contents/{encoded_path}?ref={quote(ref, safe='')}&per_page=1000")
+        data = self._json(
+            f"/contents/{encoded_path}?ref={quote(ref, safe='')}&per_page=1000",
+            missing_path_is_ok=True,
+        )
         if isinstance(data, dict):
             return [data]
         if not all(isinstance(entry, dict) for entry in data):
@@ -411,7 +422,12 @@ def _allowed_github_entries(client: GitHubReader, commit_sha: str, prefixes: tup
         if path in visited:
             continue
         visited.add(path)
-        entries = client.list_directory(path, commit_sha)
+        try:
+            entries = client.list_directory(path, commit_sha)
+        except GitHubPathNotFound:
+            if path in prefixes:
+                continue
+            raise
         if len(entries) >= 1_000:
             raise KnowledgeSourceError("GitHub 单个目录条目超过同步上限")
         for entry in entries:

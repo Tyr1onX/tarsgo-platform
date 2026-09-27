@@ -6,6 +6,7 @@ import tempfile
 import uuid
 from pathlib import Path
 from unittest.mock import patch
+from urllib.error import HTTPError, URLError
 
 from docx import Document
 from fastapi import HTTPException
@@ -36,7 +37,8 @@ from app.schemas import AIPlannerDraft, AIPlannerItemDraft, AIPlannerRequest, AI
 
 
 class FixtureGitHub:
-    def __init__(self, documents: dict[str, bytes]):
+    def __init__(self, documents: dict[str, bytes], *, missing_paths: set[str] | None = None):
+        self.missing_paths = missing_paths or set()
         self.set_documents(documents)
 
     def set_documents(self, documents: dict[str, bytes]) -> None:
@@ -48,6 +50,8 @@ class FixtureGitHub:
         return "a" * 40
 
     def list_directory(self, path: str, ref: str) -> list[dict]:
+        if path in self.missing_paths:
+            raise knowledge.GitHubPathNotFound("fixture path missing")
         children: dict[str, dict] = {}
         prefix = path.rstrip("/") + "/"
         for document_path, content in self.documents.items():
@@ -264,6 +268,78 @@ def main() -> None:
             removed = db.scalar(select(KnowledgeDocument).where(KnowledgeDocument.source_path == "docs/event-sop.md", KnowledgeDocument.source_name == repository))
             assert removed is not None and not removed.is_active and removed.parse_status == "removed"
             assert log_token not in stream.getvalue()
+
+            # Configured missing paths are skipped, while present paths still sync.
+            partial = FixtureGitHub(
+                {"weekly-reports/report.md": "本周活动复盘。".encode()},
+                missing_paths={"docs"},
+            )
+            with patch.dict(os.environ, {"KNOWLEDGE_GITHUB_PATHS": "weekly-reports,docs"}):
+                partial_result = sync_github_documents(
+                    db, repository=repository, branch="main", token=log_token, client=partial
+                )
+            assert partial_result["added"] == 1 and partial_result["failed"] == 0
+
+            nested_missing = FixtureGitHub(
+                {"weekly-reports/nested/report.md": "嵌套目录资料。".encode()},
+                missing_paths={"weekly-reports/nested"},
+            )
+            with patch.dict(os.environ, {"KNOWLEDGE_GITHUB_PATHS": "weekly-reports"}):
+                try:
+                    sync_github_documents(
+                        db, repository=repository, branch="main", token=log_token, client=nested_missing
+                    )
+                except knowledge.GitHubPathNotFound:
+                    pass
+                else:
+                    raise AssertionError("only configured paths may be skipped")
+
+            # All configured paths may be missing; this is a valid empty sync.
+            all_missing = FixtureGitHub(
+                {}, missing_paths={"missing-one", "missing-two"}
+            )
+            with patch.dict(os.environ, {"KNOWLEDGE_GITHUB_PATHS": "missing-one,missing-two"}):
+                empty_result = sync_github_documents(
+                    db, repository=repository, branch="main", token=log_token, client=all_missing
+                )
+            assert empty_result == {"added": 0, "updated": 0, "unchanged": 0, "failed": 0, "removed": 0}
+
+            # Only a 404 while listing an allowed path is skippable. Repository,
+            # authorization/rate-limit and network errors remain source failures.
+            github_client = knowledge.ReadOnlyGitHubClient(repository, token=log_token)
+
+            def response_error(status: int) -> HTTPError:
+                return HTTPError("https://api.github.com/fixture", status, "fixture", {}, io.BytesIO())
+
+            with patch.object(knowledge, "urlopen", side_effect=response_error(404)):
+                try:
+                    github_client.list_directory("docs", "a" * 40)
+                except knowledge.GitHubPathNotFound:
+                    pass
+                else:
+                    raise AssertionError("a missing contents path should be distinguished")
+
+            for failing_request in (
+                patch.object(knowledge, "urlopen", side_effect=response_error(404)),
+                patch.object(knowledge, "urlopen", side_effect=response_error(403)),
+                patch.object(knowledge, "urlopen", side_effect=response_error(429)),
+                patch.object(knowledge, "urlopen", side_effect=URLError("fixture network failure")),
+            ):
+                with failing_request:
+                    try:
+                        github_client.commit_sha("main")
+                    except knowledge.KnowledgeSourceError:
+                        pass
+                    else:
+                        raise AssertionError("repository access and network errors must fail")
+
+            with patch.object(knowledge, "urlopen", side_effect=response_error(403)):
+                try:
+                    github_client.list_directory("docs", "a" * 40)
+                except knowledge.KnowledgeSourceError as exc:
+                    assert not isinstance(exc, knowledge.GitHubPathNotFound)
+                else:
+                    raise AssertionError("authorization failures must not be skipped")
 
             # API representations omit content, private paths and all credential fields.
             uploaded_out = KnowledgeDocumentOut.model_validate(knowledge_router._document_output(upload))

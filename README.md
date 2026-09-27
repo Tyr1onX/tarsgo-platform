@@ -100,7 +100,7 @@ Historical tasks may continue to reference disabled members. Existing assignment
 - / — “what do I need to do now?” home view
 - /tasks — single task entry for every role
 - /ai-planner — allowlisted admin-only AI planning workspace; not global navigation
-- /knowledge — admin-only GitHub and document knowledge management; not global navigation
+- /knowledge — admin-only GitHub and document knowledge management; visible in the desktop main navigation
 - /team — admin-only member account management
 - /me — personal information, system role and logout
 

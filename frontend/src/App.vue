@@ -845,6 +845,14 @@ onBeforeUnmount(() => window.removeEventListener("popstate", handlePopState))
         >
           团队
         </button>
+        <button
+          v-if="isAdmin"
+          :class="{ active: path === '/knowledge' }"
+          type="button"
+          @click="navigate('/knowledge')"
+        >
+          知识
+        </button>
         <button :class="{ active: path === '/me' }" type="button" @click="navigate('/me')">
           我的
         </button>

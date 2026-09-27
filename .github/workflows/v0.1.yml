@@ -55,7 +55,7 @@ jobs:
           curl --retry 30 --retry-delay 2 --retry-all-errors -fsS http://127.0.0.1/api/health
           curl -fsS http://127.0.0.1/login | grep -q 'id="app"'
 
-      - name: Verify V0.1 to V0.2 migration
+      - name: Verify seeded migration through current head
         run: |
           docker compose exec -T db mysql -uroot -p"$CI_MYSQL_ROOT_PASSWORD" -e "
             DROP DATABASE IF EXISTS tarsgo_migration;
@@ -80,11 +80,14 @@ jobs:
               IF(parent_id IS NULL, 'NULL', parent_id), '|',
               owner_claimable, '|',
               collaboration_open, '|',
-              deliverable
+              deliverable, '|',
+              JSON_LENGTH(execution_points), '|',
+              JSON_LENGTH(cautions), '|',
+              JSON_LENGTH(prerequisites)
             )
             FROM tasks WHERE id = 100;
           ")"
-          test "$RESULT" = "101|NULL|0|0|旧版交付"
+          test "$RESULT" = "101|NULL|0|0|旧版交付|0|0|0"
           docker compose exec -T db mysql -uroot -p"$CI_MYSQL_ROOT_PASSWORD" -e "DROP DATABASE tarsgo_migration;"
 
       - name: Create initial administrator

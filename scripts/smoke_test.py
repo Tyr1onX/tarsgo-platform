@@ -214,6 +214,9 @@ def run_workflow():
         manager,
         title=CLAIM_CHILD_TITLE,
         parent_id=root["id"],
+        execution_points=["按清单逐项检查", "确认控制功能正常"],
+        cautions=["备用配件一并清点"],
+        prerequisites=["展示项目清单已确认"],
         owner_id=None,
         owner_claimable=True,
         collaboration_open=True,
@@ -222,6 +225,16 @@ def run_workflow():
     assert claim_child["parent_id"] == root["id"]
     assert claim_child["owner"] is None
     assert claim_child["owner_claimable"] is True
+    assert claim_child["execution_points"] == ["按清单逐项检查", "确认控制功能正常"]
+    assert claim_child["cautions"] == ["备用配件一并清点"]
+    assert claim_child["prerequisites"] == ["展示项目清单已确认"]
+    claim_child = call(
+        manager,
+        f"/api/tasks/{claim_child['id']}",
+        method="PATCH",
+        data={"cautions": ["出发前再次清点备用配件"]},
+    )
+    assert claim_child["cautions"] == ["出发前再次清点备用配件"]
 
     collaboration_child = create_task(
         manager,
@@ -254,12 +267,23 @@ def run_workflow():
     all_for_owner = call(owner, "/api/tasks?scope=all")
     all_ids = {item["id"] for item in all_for_owner}
     assert {root["id"], claim_child["id"], collaboration_child["id"]} <= all_ids
+    member_visible_child = next(item for item in all_for_owner if item["id"] == claim_child["id"])
+    assert member_visible_child["execution_points"] == ["按清单逐项检查", "确认控制功能正常"]
+    assert member_visible_child["cautions"] == ["出发前再次清点备用配件"]
+    assert member_visible_child["prerequisites"] == ["展示项目清单已确认"]
 
     call(
         owner,
         f"/api/tasks/{root['id']}",
         method="PATCH",
         data={"title": "成员不应能修改结构"},
+        expected=403,
+    )
+    call(
+        owner,
+        f"/api/tasks/{claim_child['id']}",
+        method="PATCH",
+        data={"execution_points": ["成员不应能改结构"]},
         expected=403,
     )
 
@@ -374,6 +398,9 @@ def verify_persistence():
     assert claim_child["parent_id"] == root["id"]
     assert claim_child["owner"]["id"] == by_email[OWNER_EMAIL]["id"]
     assert claim_child["status"] == "doing"
+    assert claim_child["execution_points"] == ["按清单逐项检查", "确认控制功能正常"]
+    assert claim_child["cautions"] == ["出发前再次清点备用配件"]
+    assert claim_child["prerequisites"] == ["展示项目清单已确认"]
     assert collaboration_child["parent_id"] == root["id"]
     assert collaboration_child["collaboration_open"] is True
     assert releasable["status"] == "done"

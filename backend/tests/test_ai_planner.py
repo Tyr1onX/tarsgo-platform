@@ -21,6 +21,7 @@ from app.schemas import (
     AIPlannerDraft,
     AIPlannerItemDraft,
     AIPlannerRequest,
+    AIPlannerRefineRequest,
     AIPlannerTaskDraft,
     TaskBatchChildIn,
     TaskBatchCreate,
@@ -29,19 +30,20 @@ from app.schemas import (
 
 
 class FakeProvider:
-    def __init__(self):
+    def __init__(self, draft=None):
         self.calls = 0
         self.description = ""
+        self.draft = draft
     def generate(self, description: str) -> PlannerGeneration:
         self.calls += 1
         self.description = description
         return PlannerGeneration(
-            draft=AIPlannerDraft(
+            draft=self.draft or AIPlannerDraft(
                 item=AIPlannerItemDraft(title="小学科技展", deliverable="完成现场展示并收齐活动素材。", deadline=None),
                 tasks=[
-                    AIPlannerTaskDraft(title="机器人与展示设备准备", deliverable="设备可正常展示并完成装车。", owner_claimable=True, collaboration_open=False),
-                    AIPlannerTaskDraft(title="现场摄影", deliverable="原图完整上传。", owner_claimable=True, collaboration_open=True),
-                    AIPlannerTaskDraft(title="活动资料归档", deliverable="素材按活动归档。", owner_claimable=True, collaboration_open=False),
+                    AIPlannerTaskDraft(title="机器人与展示设备准备", deliverable="设备可正常展示并完成装车。", execution_points=["核对展示清单", "检查设备状态"], cautions=["配件一并清点"], prerequisites=["参展项目清单已确认"], owner_claimable=True, collaboration_open=False),
+                    AIPlannerTaskDraft(title="现场摄影", deliverable="原图完整上传。", execution_points=["拍摄主要展示环节"], cautions=[], prerequisites=[], owner_claimable=True, collaboration_open=True),
+                    AIPlannerTaskDraft(title="活动资料归档", deliverable="素材按活动归档。", execution_points=[], cautions=[], prerequisites=[], owner_claimable=True, collaboration_open=False),
                 ],
                 questions=["活动当天的最终结束时间是什么？"],
             ),
@@ -142,6 +144,13 @@ def main() -> None:
         assert provider.calls == 1 and before == after
         draft = result.draft
         assert not hasattr(draft.tasks[0], "owner_id")
+        assert draft.tasks[0].execution_points and draft.tasks[0].cautions and draft.tasks[0].prerequisites
+        denied_refine = AIPlannerRefineRequest(
+            description=request.description,
+            draft=draft,
+            instruction="检查遗漏",
+        )
+        expect_http(403, lambda: planner_router.refine_plan(denied_refine, current=manager, db=db, provider=FakeProvider()))
 
         attachment_facts = "文件《科技展通知.txt》：\n本次活动日期为 10 月 12 日，地点为力旺实验小学。"
         attachment_request = AIPlannerRequest(
@@ -160,6 +169,68 @@ def main() -> None:
         assert "科技展通知.txt" in attachment_provider.description
         assert "10 月 12 日" in attachment_provider.description
 
+        original_dump = result.draft.model_dump(mode="json")
+        scoped_output = AIPlannerDraft(
+            item=AIPlannerItemDraft(title="模型不应覆盖事项标题", deliverable="忽略", deadline=None),
+            tasks=[AIPlannerTaskDraft(
+                title="更适合新人执行的摄影任务",
+                deliverable="活动关键环节影像均已采集并上传。",
+                execution_points=["提前确认设备可用", "按活动流程补齐关键环节"],
+                cautions=["保留设备电量余量"],
+                prerequisites=["获取活动流程"],
+                owner_claimable=False,
+                collaboration_open=False,
+            )],
+            questions=["不应覆盖原问题"],
+        )
+        scoped_provider = FakeProvider(draft=scoped_output)
+        scoped = planner_router.refine_plan(
+            AIPlannerRefineRequest(
+                description=request.description,
+                draft=result.draft,
+                instruction="让新人拿到后更容易执行",
+                scope_task_index=1,
+            ),
+            current=admin,
+            db=db,
+            provider=scoped_provider,
+        )
+        assert scoped_provider.calls == 1
+        assert "只调整第 2 张任务卡" in scoped_provider.description
+        assert scoped.draft.item.title == original_dump["item"]["title"]
+        assert scoped.draft.questions == result.draft.questions
+        assert scoped.draft.tasks[0].model_dump() == result.draft.tasks[0].model_dump()
+        assert scoped.draft.tasks[2].model_dump() == result.draft.tasks[2].model_dump()
+        assert scoped.draft.tasks[1].title == "更适合新人执行的摄影任务"
+        assert scoped.draft.tasks[1].owner_claimable is result.draft.tasks[1].owner_claimable
+        assert scoped.draft.tasks[1].collaboration_open is result.draft.tasks[1].collaboration_open
+
+        global_output = AIPlannerDraft(
+            item=AIPlannerItemDraft(title="精简后的科技展", deliverable="方案可执行。", deadline=None),
+            tasks=[AIPlannerTaskDraft(
+                title="整合后的展示执行",
+                deliverable="展示环节已完成。",
+                execution_points=["准备并检查展示设备"],
+                cautions=[], prerequisites=[], owner_claimable=True, collaboration_open=False,
+            )],
+            questions=[],
+        )
+        global_provider = FakeProvider(draft=global_output)
+        global_result = planner_router.refine_plan(
+            AIPlannerRefineRequest(
+                description=request.description,
+                draft=result.draft,
+                instruction="把方案精简成一个完整的展示执行任务",
+            ),
+            current=admin,
+            db=db,
+            provider=global_provider,
+        )
+        assert global_provider.calls == 1
+        assert "全局调整" in global_provider.description
+        assert global_result.draft.item.title == "精简后的科技展"
+        assert len(global_result.draft.tasks) == 1 and global_result.draft.questions == []
+
         expect_http(502, lambda: planner_router.generate_plan(request, current=admin, db=db, provider=InvalidProvider()))
 
         draft.item.title = "小学科技展（人工确认）"
@@ -167,7 +238,7 @@ def main() -> None:
         draft.item.deadline = datetime(2026, 10, 12, 18, 0)
         draft.tasks.pop(1)
         draft.tasks[0].title = "展示设备准备（人工修改）"
-        draft.tasks.append(AIPlannerTaskDraft(title="现场直播", deliverable="直播稳定完成并保存回放。", owner_claimable=False, collaboration_open=True))
+        draft.tasks.append(AIPlannerTaskDraft(title="现场直播", deliverable="直播稳定完成并保存回放。", execution_points=["确认直播链路"], cautions=[], prerequisites=[], owner_claimable=False, collaboration_open=True))
 
         result = tasks_router.create_task_batch(
             TaskBatchCreate(
@@ -186,6 +257,14 @@ def main() -> None:
         assert claimable.owner is None and claimable.owner_claimable
         owned = next(t for t in result.tasks if t.title == "现场直播")
         assert owned.owner is not None and owned.owner.id == admin.id and not owned.owner_claimable
+        assert claimable.execution_points == ["核对展示清单", "检查设备状态"]
+        assert claimable.cautions == ["配件一并清点"]
+        assert claimable.prerequisites == ["参展项目清单已确认"]
+        db.expire_all()
+        persisted_claimable = db.get(Task, claimable.id)
+        assert persisted_claimable.execution_points == ["核对展示清单", "检查设备状态"]
+        assert persisted_claimable.cautions == ["配件一并清点"]
+        assert persisted_claimable.prerequisites == ["参展项目清单已确认"]
 
         rollback_title = "AI 批量事务回滚测试"
         payload = TaskBatchCreate(

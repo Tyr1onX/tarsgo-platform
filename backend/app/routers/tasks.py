@@ -31,6 +31,9 @@ def _task_out(task: Task) -> TaskOut:
         parent_id=task.parent_id,
         title=task.title,
         deliverable=task.deliverable,
+        execution_points=task.execution_points or [],
+        cautions=task.cautions or [],
+        prerequisites=task.prerequisites or [],
         owner=MemberSummary.model_validate(task.owner) if task.owner else None,
         owner_claimable=task.owner_claimable,
         collaborators=[MemberSummary.model_validate(member) for member in task.collaborators],
@@ -89,6 +92,9 @@ def _build_task(db: Session, payload: TaskCreate, current: Member) -> Task:
         parent_id=payload.parent_id,
         title=payload.title,
         deliverable=payload.deliverable,
+        execution_points=payload.execution_points,
+        cautions=payload.cautions,
+        prerequisites=payload.prerequisites,
         owner_id=payload.owner_id,
         owner_claimable=payload.owner_claimable,
         collaboration_open=payload.collaboration_open,
@@ -166,6 +172,9 @@ def create_task_batch(
                     TaskCreate(
                         title=child.title,
                         deliverable=child.deliverable,
+                        execution_points=child.execution_points,
+                        cautions=child.cautions,
+                        prerequisites=child.prerequisites,
                         owner_id=None if child.owner_claimable else current.id,
                         owner_claimable=child.owner_claimable,
                         collaborator_ids=[],
@@ -208,7 +217,10 @@ def update_task(
         db.expire(task)
         return _task_out(_get_task(db, task.id))
 
-    required_non_null = {"title", "deliverable", "collaborator_ids", "owner_claimable", "collaboration_open", "deadline", "status"}
+    required_non_null = {
+        "title", "deliverable", "execution_points", "cautions", "prerequisites",
+        "collaborator_ids", "owner_claimable", "collaboration_open", "deadline", "status",
+    }
     if any(field in fields and getattr(payload, field) is None for field in required_non_null):
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="任务字段不能设为空")
 
@@ -219,7 +231,10 @@ def update_task(
     if "owner_id" in fields and resulting_owner_id is not None:
         _load_active_members(db, {resulting_owner_id})
 
-    for field in ("title", "deliverable", "owner_claimable", "collaboration_open", "deadline", "status"):
+    for field in (
+        "title", "deliverable", "execution_points", "cautions", "prerequisites",
+        "owner_claimable", "collaboration_open", "deadline", "status",
+    ):
         if field in fields:
             setattr(task, field, getattr(payload, field))
 

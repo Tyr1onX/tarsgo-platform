@@ -3,6 +3,7 @@ import type {
   AIPlannerExtractedFile,
   AIPlannerResult,
   AIPlannerInput,
+  AIPlannerRefineInput,
   InvitationInfo,
   InviteResult,
   Member,
@@ -50,6 +51,9 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 export interface TaskPayload {
   title: string
   deliverable?: string
+  execution_points?: string[]
+  cautions?: string[]
+  prerequisites?: string[]
   owner_id: number | null
   owner_claimable: boolean
   collaborator_ids: number[]
@@ -85,6 +89,11 @@ export const api = {
   aiPlannerAccess: () => request<AIPlannerAccess>("/api/ai/planner/access"),
   generateAIPlan: (payload: AIPlannerInput) =>
     request<AIPlannerResult>("/api/ai/planner", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  refineAIPlan: (payload: AIPlannerRefineInput) =>
+    request<AIPlannerResult>("/api/ai/planner/refine", {
       method: "POST",
       body: JSON.stringify(payload),
     }),

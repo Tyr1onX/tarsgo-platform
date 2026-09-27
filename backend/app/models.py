@@ -10,9 +10,11 @@ from sqlalchemy import (
     ForeignKey,
     Integer,
     Index,
+    JSON,
     String,
     Table,
     Text,
+    text,
     UniqueConstraint,
     func,
 )
@@ -89,6 +91,15 @@ class Task(Base):
     parent_id: Mapped[int | None] = mapped_column(ForeignKey("tasks.id"), nullable=True)
     title: Mapped[str] = mapped_column(String(200))
     deliverable: Mapped[str] = mapped_column(Text())
+    execution_points: Mapped[list[str]] = mapped_column(
+        JSON(), default=list, server_default=text("(JSON_ARRAY())"), nullable=False
+    )
+    cautions: Mapped[list[str]] = mapped_column(
+        JSON(), default=list, server_default=text("(JSON_ARRAY())"), nullable=False
+    )
+    prerequisites: Mapped[list[str]] = mapped_column(
+        JSON(), default=list, server_default=text("(JSON_ARRAY())"), nullable=False
+    )
     owner_id: Mapped[int | None] = mapped_column(ForeignKey("members.id"), nullable=True)
     owner_claimable: Mapped[bool] = mapped_column(Boolean(), default=False, server_default="0")
     collaboration_open: Mapped[bool] = mapped_column(Boolean(), default=False, server_default="0")

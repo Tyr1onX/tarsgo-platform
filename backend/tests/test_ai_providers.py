@@ -25,6 +25,9 @@ def draft() -> AIPlannerDraft:
             AIPlannerTaskDraft(
                 title="现场摄影",
                 deliverable="活动原图完整上传。",
+                execution_points=["按活动流程采集关键环节"],
+                cautions=["确认设备电量充足"],
+                prerequisites=["获取已确认的活动流程"],
                 owner_claimable=True,
                 collaboration_open=True,
             )
@@ -112,6 +115,14 @@ def assert_generation_prompt_contract() -> None:
         "两个 task 是否确认同一件事",
         "两个 deliverable 是否重复要求同一产物",
         "如果已生成“确认参展项目及技术负责人”，不得再问“是否已确定带哪些机器人或展示项目”",
+        "execution_points 最多 6 条",
+        "cautions 最多 5 条",
+        "prerequisites 最多 4 条",
+        "它们是给人阅读的提示，不是系统依赖或阻塞关系",
+        "团队 SOP 可用于补充必要的执行要点和前置条件",
+        "历史经验可用于提出与当前明确需求直接相关的注意事项",
+        "不得编造“团队以前发生过”的事故、遗漏或失败",
+        "只调整第 N 张任务卡",
     )
     for guidance in required_guidance:
         assert guidance in SYSTEM_PROMPT, guidance
@@ -171,6 +182,12 @@ def main() -> None:
     assert text_format["type"] == "json_schema"
     assert text_format["strict"] is True
     assert text_format["schema"] == AIPlannerDraft.model_json_schema()
+    task_schema = text_format["schema"]["$defs"]["AIPlannerTaskDraft"]
+    assert {"execution_points", "cautions", "prerequisites"} <= set(task_schema["required"])
+    assert task_schema["properties"]["execution_points"]["maxItems"] == 6
+    assert task_schema["properties"]["execution_points"]["items"]["maxLength"] == 240
+    assert task_schema["properties"]["cautions"]["maxItems"] == 5
+    assert task_schema["properties"]["prerequisites"]["maxItems"] == 4
     assert deepseek_generation.draft == draft()
     assert deepseek_generation.input_tokens == 101
     assert deepseek_generation.output_tokens == 79

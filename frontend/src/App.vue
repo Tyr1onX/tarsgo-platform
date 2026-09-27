@@ -48,6 +48,11 @@ const plannerFileInput = ref<HTMLInputElement | null>(null)
 const plannerDraft = ref<AIPlannerDraft | null>(null)
 const plannerGenerating = ref(false)
 const plannerPublishing = ref(false)
+const plannerTaskDetailsText = ref<{ execution_points: string; cautions: string; prerequisites: string }[]>([])
+const plannerRefineOpenIndex = ref<number | null>(null)
+const plannerRefineInstruction = ref("")
+const plannerGlobalInstruction = ref("")
+const plannerRefining = ref(false)
 const knowledgeDocuments = ref<KnowledgeDocument[]>([])
 const knowledgeUploading = ref(false)
 const knowledgeSyncing = ref(false)
@@ -63,6 +68,9 @@ const editingTaskId = ref<number | null>(null)
 const parentTaskId = ref<number | null>(null)
 const taskTitle = ref("")
 const taskDeliverable = ref("")
+const taskExecutionPointsText = ref("")
+const taskCautionsText = ref("")
+const taskPrerequisitesText = ref("")
 const taskOwnerMode = ref<"assigned" | "claimable">("assigned")
 const taskOwnerId = ref<number | null>(null)
 const taskOwnerClaimable = ref(false)
@@ -169,6 +177,32 @@ function childTasks(parentId: number) {
   return tasks.value.filter((task) => task.parent_id === parentId)
 }
 
+function taskDetailSections(task: Task) {
+  return [
+    { title: "执行要点", items: task.execution_points ?? [] },
+    { title: "注意事项", items: task.cautions ?? [] },
+    { title: "前置条件", items: task.prerequisites ?? [] },
+  ].filter((section) => section.items.length)
+}
+
+function parseTaskLines(value: string) {
+  return value.split("\n").map((line) => line.trim()).filter(Boolean)
+}
+
+function taskLineLimitMessage() {
+  const limits = [
+    [taskExecutionPointsText.value, 6, "执行要点"],
+    [taskCautionsText.value, 5, "注意事项"],
+    [taskPrerequisitesText.value, 4, "前置条件"],
+  ] as const
+  for (const [value, max, label] of limits) {
+    const lines = parseTaskLines(value)
+    if (lines.length > max) return `${label}最多填写 ${max} 条。`
+    if (lines.some((line) => line.length > 240)) return `${label}每条最多 240 字。`
+  }
+  return ""
+}
+
 function isCollaborator(task: Task) {
   return task.collaborators.some((member) => member.id === user.value?.id)
 }
@@ -178,6 +212,9 @@ function resetTaskForm() {
   parentTaskId.value = null
   taskTitle.value = ""
   taskDeliverable.value = ""
+  taskExecutionPointsText.value = ""
+  taskCautionsText.value = ""
+  taskPrerequisitesText.value = ""
   taskOwnerMode.value = "assigned"
   taskOwnerId.value = activeMembers.value[0]?.id ?? null
   taskOwnerClaimable.value = false
@@ -212,6 +249,9 @@ function editTask(task: Task) {
   parentTaskId.value = task.parent_id
   taskTitle.value = task.title
   taskDeliverable.value = task.deliverable
+  taskExecutionPointsText.value = (task.execution_points ?? []).join("\n")
+  taskCautionsText.value = (task.cautions ?? []).join("\n")
+  taskPrerequisitesText.value = (task.prerequisites ?? []).join("\n")
   taskOwnerMode.value = task.owner ? "assigned" : "claimable"
   taskOwnerId.value = task.owner?.id ?? activeMembers.value[0]?.id ?? null
   taskOwnerClaimable.value = task.owner_claimable
@@ -440,6 +480,14 @@ async function submitTask() {
     error.value = "请选择负责人"
     return
   }
+  const lineLimitError = taskLineLimitMessage()
+  if (lineLimitError) {
+    error.value = lineLimitError
+    return
+  }
+  const executionPoints = parseTaskLines(taskExecutionPointsText.value)
+  const cautions = parseTaskLines(taskCautionsText.value)
+  const prerequisites = parseTaskLines(taskPrerequisitesText.value)
 
   try {
     if (editingTaskId.value) {
@@ -449,6 +497,9 @@ async function submitTask() {
       const payload: Parameters<typeof api.updateTask>[1] = {}
       if (taskTitle.value !== original.title) payload.title = taskTitle.value
       if (taskDeliverable.value !== original.deliverable) payload.deliverable = taskDeliverable.value
+      if (JSON.stringify(executionPoints) !== JSON.stringify(original.execution_points ?? [])) payload.execution_points = executionPoints
+      if (JSON.stringify(cautions) !== JSON.stringify(original.cautions ?? [])) payload.cautions = cautions
+      if (JSON.stringify(prerequisites) !== JSON.stringify(original.prerequisites ?? [])) payload.prerequisites = prerequisites
       if (desiredOwnerId !== original.owner?.id) payload.owner_id = desiredOwnerId
       if (desiredOwnerClaimable !== original.owner_claimable) {
         payload.owner_claimable = desiredOwnerClaimable
@@ -476,6 +527,9 @@ async function submitTask() {
         parent_id: parentTaskId.value,
         title: taskTitle.value,
         deliverable: taskDeliverable.value,
+        execution_points: executionPoints,
+        cautions,
+        prerequisites,
         owner_id: desiredOwnerId,
         owner_claimable: desiredOwnerClaimable,
         collaborator_ids: taskCollaboratorIds.value,
@@ -647,6 +701,7 @@ function onPlannerDrop(event: DragEvent) {
 
 function editPlannerRequest() {
   plannerDraft.value = null
+  plannerRefineOpenIndex.value = null
   error.value = ""
 }
 
@@ -654,6 +709,9 @@ function newPlannerTask(): AIPlannerTaskDraft {
   return {
     title: "",
     deliverable: "",
+    execution_points: [],
+    cautions: [],
+    prerequisites: [],
     owner_claimable: true,
     collaboration_open: false,
   }
@@ -661,10 +719,56 @@ function newPlannerTask(): AIPlannerTaskDraft {
 
 function addPlannerTask() {
   plannerDraft.value?.tasks.push(newPlannerTask())
+  plannerTaskDetailsText.value.push({ execution_points: "", cautions: "", prerequisites: "" })
 }
 
 function removePlannerTask(index: number) {
   plannerDraft.value?.tasks.splice(index, 1)
+  plannerTaskDetailsText.value.splice(index, 1)
+  if (plannerRefineOpenIndex.value === index) plannerRefineOpenIndex.value = null
+  else if (plannerRefineOpenIndex.value !== null && plannerRefineOpenIndex.value > index) plannerRefineOpenIndex.value -= 1
+}
+
+function resetPlannerTaskDetails(draft: AIPlannerDraft) {
+  plannerTaskDetailsText.value = draft.tasks.map((task) => ({
+    execution_points: (task.execution_points ?? []).join("\n"),
+    cautions: (task.cautions ?? []).join("\n"),
+    prerequisites: (task.prerequisites ?? []).join("\n"),
+  }))
+}
+
+function syncPlannerTaskDetails() {
+  if (!plannerDraft.value) return
+  plannerDraft.value.tasks.forEach((task, index) => {
+    const text = plannerTaskDetailsText.value[index]
+    if (!text) return
+    task.execution_points = parseTaskLines(text.execution_points)
+    task.cautions = parseTaskLines(text.cautions)
+    task.prerequisites = parseTaskLines(text.prerequisites)
+  })
+}
+
+function plannerTaskLineLimitMessage() {
+  for (const [index, text] of plannerTaskDetailsText.value.entries()) {
+    const limits = [
+      [text.execution_points, 6, "执行要点"],
+      [text.cautions, 5, "注意事项"],
+      [text.prerequisites, 4, "前置条件"],
+    ] as const
+    for (const [value, max, label] of limits) {
+      const lines = parseTaskLines(value)
+      if (lines.length > max) return `第 ${index + 1} 项${label}最多填写 ${max} 条。`
+      if (lines.some((line) => line.length > 240)) return `第 ${index + 1} 项${label}每条最多 240 字。`
+    }
+  }
+  return ""
+}
+
+function setPlannerDraft(draft: AIPlannerDraft) {
+  if (draft.item.deadline) draft.item.deadline = toLocalInput(draft.item.deadline)
+  plannerDraft.value = draft
+  resetPlannerTaskDetails(draft)
+  plannerRefineOpenIndex.value = null
 }
 
 async function generateAIPlan() {
@@ -681,9 +785,7 @@ async function generateAIPlan() {
       description,
       current_event_context: plannerAttachmentContext.value || undefined,
     })
-    const draft = result.draft
-    if (draft.item.deadline) draft.item.deadline = toLocalInput(draft.item.deadline)
-    plannerDraft.value = draft
+    setPlannerDraft(result.draft)
   } catch (reason) {
     error.value = messageOf(reason)
   } finally {
@@ -711,6 +813,12 @@ async function publishAIPlan() {
     error.value = "每个分工都需要填写标题。"
     return
   }
+  const lineLimitError = plannerTaskLineLimitMessage()
+  if (lineLimitError) {
+    error.value = lineLimitError
+    return
+  }
+  syncPlannerTaskDetails()
 
   error.value = ""
   plannerPublishing.value = true
@@ -724,6 +832,9 @@ async function publishAIPlan() {
       tasks: draft.tasks.map((task) => ({
         title: task.title.trim(),
         deliverable: task.deliverable.trim(),
+        execution_points: task.execution_points,
+        cautions: task.cautions,
+        prerequisites: task.prerequisites,
         owner_claimable: task.owner_claimable,
         collaboration_open: task.collaboration_open,
       })),
@@ -738,6 +849,43 @@ async function publishAIPlan() {
     error.value = messageOf(reason)
   } finally {
     plannerPublishing.value = false
+  }
+}
+
+async function refineAIPlan(index?: number, instructionOverride?: string) {
+  const draft = plannerDraft.value
+  if (!draft || plannerRefining.value) return
+  const instruction = (instructionOverride ?? (index === undefined ? plannerGlobalInstruction.value : plannerRefineInstruction.value)).trim()
+  if (!instruction) {
+    error.value = "请先写下希望如何调整。"
+    return
+  }
+  if (index === undefined) plannerRefineOpenIndex.value = null
+  else plannerRefineOpenIndex.value = index
+  const lineLimitError = plannerTaskLineLimitMessage()
+  if (lineLimitError) {
+    error.value = lineLimitError
+    return
+  }
+  syncPlannerTaskDetails()
+  error.value = ""
+  plannerRefining.value = true
+  try {
+    const result = await api.refineAIPlan({
+      description: plannerDescription.value.trim(),
+      item_title: draft.item.title.trim() || undefined,
+      current_event_context: plannerAttachmentContext.value || undefined,
+      draft,
+      instruction,
+      ...(index === undefined ? {} : { scope_task_index: index }),
+    })
+    setPlannerDraft(result.draft)
+    plannerGlobalInstruction.value = ""
+    plannerRefineInstruction.value = ""
+  } catch (reason) {
+    error.value = messageOf(reason)
+  } finally {
+    plannerRefining.value = false
   }
 }
 
@@ -996,11 +1144,11 @@ onBeforeUnmount(() => window.removeEventListener("popstate", handlePopState))
           <p>BASE / OVERVIEW · 你好，{{ user?.name }}</p>
           <h1>我现在需要做什么</h1>
           <div class="hero-actions">
-            <button v-if="isManager" class="hero-action" type="button" @click="startNewTask()">
-              ＋ 新建事项
+            <button v-if="aiPlannerAvailable" class="primary" type="button" @click="startAIPlanner">
+              AI 规划任务
             </button>
-            <button v-if="aiPlannerAvailable" class="hero-action" type="button" @click="startAIPlanner">
-              AI 帮我规划
+            <button v-if="isManager" class="hero-action" type="button" @click="startNewTask()">
+              手动创建
             </button>
           </div>
         </section>
@@ -1025,6 +1173,12 @@ onBeforeUnmount(() => window.removeEventListener("popstate", handlePopState))
                 <span class="state">{{ task.parent_id ? "分工" : "事项" }} · {{ statusLabels[task.status] }}</span>
                 <h3>{{ task.title }}</h3>
                 <p v-if="task.deliverable">{{ task.deliverable }}</p>
+                <div v-if="taskDetailSections(task).length" class="task-detail-list">
+                  <section v-for="section in taskDetailSections(task)" :key="section.title">
+                    <strong>{{ section.title }}</strong>
+                    <ul><li v-for="item in section.items" :key="item">{{ item }}</li></ul>
+                  </section>
+                </div>
                 <small>
                   {{ task.owner ? task.owner.name + " 负责" : "待认领" }}
                   · 截止 {{ formatDate(task.deadline) }}
@@ -1145,6 +1299,16 @@ onBeforeUnmount(() => window.removeEventListener("popstate", handlePopState))
             <button class="planner-back-link" type="button" @click="editPlannerRequest">← 修改原始需求</button>
             <span>AI 草案</span>
           </div>
+          <details class="planner-global-refine">
+            <summary>用 AI 调整整体方案</summary>
+            <label>
+              想怎样调整？
+              <textarea v-model="plannerGlobalInstruction" rows="2" maxlength="1000" placeholder="例如：把现场展示和技术保障合并，保留必要的交接任务。" />
+            </label>
+            <button class="secondary" type="button" :disabled="plannerRefining || plannerPublishing" @click="refineAIPlan()">
+              {{ plannerRefining && plannerRefineOpenIndex === null ? "正在调整…" : "调整整体方案" }}
+            </button>
+          </details>
           <div class="planner-section">
             <div class="section-heading"><h2>事项</h2></div>
             <div class="planner-fields">
@@ -1185,6 +1349,18 @@ onBeforeUnmount(() => window.removeEventListener("popstate", handlePopState))
                   完成标准（可选）
                   <textarea v-model="task.deliverable" maxlength="5000" rows="3" />
                 </label>
+                <label>
+                  执行要点（每行一条，最多 6 条）
+                  <textarea v-model="plannerTaskDetailsText[index].execution_points" rows="3" placeholder="按顺序写关键步骤；没有就留空" />
+                </label>
+                <label>
+                  注意事项（每行一条，最多 5 条）
+                  <textarea v-model="plannerTaskDetailsText[index].cautions" rows="2" placeholder="只写与当前任务直接相关的提醒" />
+                </label>
+                <label>
+                  前置条件（每行一条，最多 4 条）
+                  <textarea v-model="plannerTaskDetailsText[index].prerequisites" rows="2" placeholder="开始前必须满足的条件；不是任务依赖" />
+                </label>
                 <div class="planner-options">
                   <div class="planner-option">
                     <label class="check-row">
@@ -1197,6 +1373,25 @@ onBeforeUnmount(() => window.removeEventListener("popstate", handlePopState))
                     <input v-model="task.collaboration_open" type="checkbox" />
                     开放成员自行加入协作
                   </label>
+                </div>
+                <div class="planner-card-ai">
+                  <button class="text-action" type="button" :disabled="plannerRefining" @click="plannerRefineOpenIndex = plannerRefineOpenIndex === index ? null : index; plannerRefineInstruction = ''">
+                    {{ plannerRefineOpenIndex === index ? "收起 AI 调整" : "AI 调整" }}
+                  </button>
+                  <div v-if="plannerRefineOpenIndex === index" class="planner-card-ai-panel">
+                    <label>
+                      希望这张卡如何调整？
+                      <textarea v-model="plannerRefineInstruction" rows="2" maxlength="1000" placeholder="例如：让新人拿到后更容易执行" />
+                    </label>
+                    <div class="planner-refine-actions">
+                      <button class="secondary" type="button" :disabled="plannerRefining" @click="refineAIPlan(index, '补充执行要点')">补充执行要点</button>
+                      <button class="secondary" type="button" :disabled="plannerRefining" @click="refineAIPlan(index, '检查容易遗漏的点')">检查遗漏</button>
+                      <button class="secondary" type="button" :disabled="plannerRefining" @click="refineAIPlan(index, '简化这张任务卡，保留最必要的信息')">简化</button>
+                      <button class="primary" type="button" :disabled="plannerRefining || !plannerRefineInstruction.trim()" @click="refineAIPlan(index)">
+                        {{ plannerRefining ? "正在调整…" : "提交调整" }}
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </article>
             </div>
@@ -1225,8 +1420,8 @@ onBeforeUnmount(() => window.removeEventListener("popstate", handlePopState))
         <div class="page-title">
           <h1>任务</h1>
           <div class="page-title-actions">
-            <button v-if="aiPlannerAvailable" type="button" @click="startAIPlanner">AI 帮我规划</button>
-            <button v-if="isManager" type="button" @click="startNewTask()">新建事项</button>
+            <button v-if="aiPlannerAvailable" class="primary" type="button" @click="startAIPlanner">AI 规划任务</button>
+            <button v-if="isManager" class="text-action" type="button" @click="startNewTask()">手动创建</button>
           </div>
         </div>
 
@@ -1293,6 +1488,21 @@ onBeforeUnmount(() => window.removeEventListener("popstate", handlePopState))
                 />
               </label>
 
+              <label>
+                执行要点（每行一条，最多 6 条）
+                <textarea v-model="taskExecutionPointsText" rows="3" placeholder="按清单核对设备；检查供电与控制状态" />
+              </label>
+
+              <label>
+                注意事项（每行一条，最多 5 条）
+                <textarea v-model="taskCautionsText" rows="3" placeholder="填写与本项工作直接相关的提醒" />
+              </label>
+
+              <label>
+                前置条件（每行一条，最多 4 条）
+                <textarea v-model="taskPrerequisitesText" rows="2" placeholder="填写开始前必须具备的条件" />
+              </label>
+
               <fieldset>
                 <legend>协作者</legend>
                 <label
@@ -1339,6 +1549,12 @@ onBeforeUnmount(() => window.removeEventListener("popstate", handlePopState))
                 <span class="state">事项 · {{ statusLabels[task.status] }}</span>
                 <h3>{{ task.title }}</h3>
                 <p v-if="task.deliverable">{{ task.deliverable }}</p>
+                <div v-if="taskDetailSections(task).length" class="task-detail-list">
+                  <section v-for="section in taskDetailSections(task)" :key="section.title">
+                    <strong>{{ section.title }}</strong>
+                    <ul><li v-for="item in section.items" :key="item">{{ item }}</li></ul>
+                  </section>
+                </div>
                 <small>
                   {{ task.owner ? "总负责人 " + task.owner.name : "总负责人待认领" }}
                   · 截止 {{ formatDate(task.deadline) }}
@@ -1404,6 +1620,12 @@ onBeforeUnmount(() => window.removeEventListener("popstate", handlePopState))
                     <span class="state">{{ statusLabels[child.status] }}</span>
                     <h4>{{ child.title }}</h4>
                     <p v-if="child.deliverable">{{ child.deliverable }}</p>
+                    <div v-if="taskDetailSections(child).length" class="task-detail-list">
+                      <section v-for="section in taskDetailSections(child)" :key="section.title">
+                        <strong>{{ section.title }}</strong>
+                        <ul><li v-for="item in section.items" :key="item">{{ item }}</li></ul>
+                      </section>
+                    </div>
                     <small>
                       {{ child.owner ? child.owner.name + " 负责" : "待认领" }}
                       · 截止 {{ formatDate(child.deadline) }}
@@ -1466,6 +1688,12 @@ onBeforeUnmount(() => window.removeEventListener("popstate", handlePopState))
                 <span class="state">分工 · {{ statusLabels[task.status] }}</span>
                 <h3>{{ task.title }}</h3>
                 <p v-if="task.deliverable">{{ task.deliverable }}</p>
+                <div v-if="taskDetailSections(task).length" class="task-detail-list">
+                  <section v-for="section in taskDetailSections(task)" :key="section.title">
+                    <strong>{{ section.title }}</strong>
+                    <ul><li v-for="item in section.items" :key="item">{{ item }}</li></ul>
+                  </section>
+                </div>
                 <small>
                   {{ task.owner ? task.owner.name + " 负责" : "待认领" }}
                   · 截止 {{ formatDate(task.deadline) }}
@@ -1527,9 +1755,8 @@ onBeforeUnmount(() => window.removeEventListener("popstate", handlePopState))
             <p v-if="taskView === 'mine'">目前没有你负责或参与的任务。</p>
             <p v-else-if="taskView === 'claimable'">新的可认领任务出现后，会显示在这里。</p>
             <p v-else>还没有正式发布的运营事项。</p>
-            <button v-if="isManager && taskView === 'all'" class="primary" type="button" @click="startNewTask()">
-              新建事项
-            </button>
+            <button v-if="aiPlannerAvailable && taskView === 'all'" class="primary" type="button" @click="startAIPlanner">AI 规划任务</button>
+            <button v-if="isManager && taskView === 'all'" class="text-action" type="button" @click="startNewTask()">手动创建</button>
           </div>
         </section>
       </template>

@@ -87,7 +87,7 @@ class CapturingProvider:
         return PlannerGeneration(
             draft=AIPlannerDraft(
                 item=AIPlannerItemDraft(title="校园科技展", deliverable="完成现场展示", deadline=None),
-                tasks=[AIPlannerTaskDraft(title="现场布置", deliverable="布置完成", owner_claimable=True, collaboration_open=False)],
+                tasks=[AIPlannerTaskDraft(title="现场布置", deliverable="布置完成", execution_points=[], cautions=[], prerequisites=[], owner_claimable=True, collaboration_open=False)],
                 questions=["请确认结束时间。"],
             ),
             input_tokens=10,
@@ -474,6 +474,8 @@ def main() -> None:
             generation_result = planner_router.generate_plan(payload, current=admin, db=db, provider=provider)
             assert provider.calls == 1
             assert provider.input.index("【本次事项资料】") < provider.input.index("【团队历史经验】")
+            assert "资料《校园科技展复盘" in provider.input
+            assert "历史地点为西区操场" in provider.input
             assert generation_result.draft.item.title == "校园科技展"
             assert generation_result.current_event_documents[0].id == upload.id
             assert 1 <= len(generation_result.historical_documents) <= 6

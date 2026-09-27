@@ -22,6 +22,9 @@ export interface Task {
   parent_id: number | null
   title: string
   deliverable: string
+  execution_points: string[]
+  cautions: string[]
+  prerequisites: string[]
   owner: MemberSummary | null
   owner_claimable: boolean
   collaborators: MemberSummary[]
@@ -60,6 +63,9 @@ export interface AIPlannerItemDraft {
 export interface AIPlannerTaskDraft {
   title: string
   deliverable: string
+  execution_points: string[]
+  cautions: string[]
+  prerequisites: string[]
   owner_claimable: boolean
   collaboration_open: boolean
 }
@@ -67,6 +73,11 @@ export interface AIPlannerDraft {
   item: AIPlannerItemDraft
   tasks: AIPlannerTaskDraft[]
   questions: string[]
+}
+export interface AIPlannerRefineInput extends AIPlannerInput {
+  draft: AIPlannerDraft
+  instruction: string
+  scope_task_index?: number
 }
 export interface TaskBatchPayload {
   item: { title: string; deliverable: string; deadline: string }

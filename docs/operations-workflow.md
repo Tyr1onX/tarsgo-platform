@@ -91,6 +91,9 @@ V0.2 第一阶段继续演化现有 Task：
 - collaborators：指定协作者。
 - collaboration_open：是否允许成员自主加入 / 退出协作。
 - deliverable：完成标准，可为空。
+- execution_points：最多 6 条简短执行要点。
+- cautions：最多 5 条与任务相关的注意事项。
+- prerequisites：最多 4 条前置条件说明；仅供阅读，不形成系统依赖或阻塞。
 - deadline：每个事项和分工都保存自己的明确截止时间。
 
 子任务创建时，前端可以预填父事项截止时间，但数据库不做隐式继承。

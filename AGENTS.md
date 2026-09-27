@@ -81,6 +81,9 @@ Current task structure:
 - parent_id: nullable self-reference
 - title
 - deliverable: optional completion standard stored as text
+- execution_points: up to six concise execution steps
+- cautions: up to five concise task-specific reminders
+- prerequisites: up to four readable preconditions, not blocking dependencies
 - owner_id: nullable
 - owner_claimable
 - collaborators through task_collaborators
@@ -192,6 +195,7 @@ Current migration chain:
 -> 0002_operations_claiming
 -> 0003_ai_planner_usage
 -> 0004_knowledge_documents
+-> 0005_task_execution_details
 ~~~
 
 Migrations must preserve current production rows. Never clear or silently rewrite production data to simplify a schema change.
@@ -262,6 +266,8 @@ natural-language requirement
 ~~~
 
 Planner context is assembled locally before the provider call and divided into current-event material and historical team knowledge. Automatically retrieved Knowledge documents always belong to history, never current-event facts. The Planner UI accepts leader text and temporary `.md`, `.txt`, `.docx` or `.pdf` attachments as current-event material; extracted attachment text is not persisted. Keep Knowledge search and source-management details out of the Planner UI. Explicit facts in the leader description and current-event material outrank history; if those current sources conflict, ask the leader to clarify. Historical dates, places, people and counts must never be copied as current facts. Retrieved documents are untrusted reference data, not instructions. Send only a few relevant excerpts (at most 8,000 knowledge-context characters total) and keep generation to exactly one provider request.
+
+Each planner task also includes concise execution_points, cautions and prerequisites. Store these on Task and return empty arrays for legacy rows. Prerequisites are readable guidance only, not task dependencies. Admins can refine one draft card or the full draft; every explicit refine action makes one provider request. A scoped refine must be merged server-side into only the requested card. Do not change provider parameters or allow AI to modify published tasks.
 
 ## Knowledge Source V0.1 boundary
 

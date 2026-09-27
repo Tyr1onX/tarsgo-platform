@@ -79,6 +79,9 @@ Current task fields include:
 
 - title
 - optional completion standard (deliverable)
+- execution points (up to 6 short strings)
+- cautions (up to 5 short strings)
+- prerequisites (up to 4 short strings; readable guidance, not blocking dependencies)
 - optional owner
 - owner_claimable
 - collaborators
@@ -172,7 +175,7 @@ Access requires all of:
 
 The frontend only shows the entry when /api/ai/planner/access says it is available. The planner POST endpoint performs the authoritative checks again.
 
-Planner uses a two-state workflow: a natural-language composer with optional temporary document attachments, followed by an editable structured draft. It supports `.md`, `.txt`, `.docx` and `.pdf` files up to 10 MiB each; extraction is temporary, does not write to Knowledge, and does not use OCR. The planner automatically searches a bounded set of local Knowledge Source documents in the background, without showing source lists or retrieval controls in the Planner UI. One Generate action makes exactly one SDK model request. There is no agent loop, automatic reflection, database task dump or vector retrieval. Input description is capped at 5000 characters, current-event material at 5000 characters, knowledge context at 8000 characters, and output at 15 assignments / 6 questions. The official OpenAI Python SDK is configured with automatic retries disabled. A persistent per-member UTC-day counter caps planning at 20 attempts per day and stores aggregate input/output/total token usage and knowledge-context character counts without storing prompt or draft text.
+Planner uses a natural-language composer followed by an editable structured draft. Each assignment includes a completion standard, concise execution points, cautions and prerequisites. Prerequisites are readable guidance only, not database dependencies. Admins can use one-card or full-draft natural-language refine; each action makes exactly one SDK model request, and scoped changes are merged into only their target card. It supports `.md`, `.txt`, `.docx` and `.pdf` files up to 10 MiB each; extraction is temporary, does not write to Knowledge, and does not use OCR. The planner automatically searches a bounded set of local Knowledge Source documents in the background, without showing source lists or retrieval controls in the Planner UI. There is no agent loop, automatic reflection, database task dump or vector retrieval. Input description is capped at 5000 characters, current-event material at 5000 characters, knowledge context at 8000 characters, and output at 15 assignments / 6 questions. The official OpenAI Python SDK is configured with automatic retries disabled. A persistent per-member UTC-day counter caps planning and refinement at 20 attempts per day and stores aggregate input/output/total token usage and knowledge-context character counts without storing prompt or draft text.
 
 ### AI planner configuration
 
@@ -205,6 +208,7 @@ Current Alembic chain:
 -> 0002_operations_claiming
 -> 0003_ai_planner_usage
 -> 0004_knowledge_documents
+-> 0005_task_execution_details
 ~~~
 
 It upgrades the existing V0.1 tasks table without deleting data:
@@ -217,6 +221,7 @@ It upgrades the existing V0.1 tasks table without deleting data:
 - existing completion standards and statuses remain unchanged
 
 CI includes a real 0001_v0_1 -> 0002_operations_claiming compatibility check using seeded legacy data.
+The latest migration adds JSON arrays for execution points, cautions and prerequisites, backfilled as empty arrays for existing tasks.
 
 ## Knowledge Source V0.1
 

@@ -35,6 +35,8 @@ Planner 自动检索团队历史知识，但规划页面不展示关联资料清
 
 分工草案可修改标题、完成标准、删除 / 新增、是否开放负责人认领、是否开放自主协作。
 
+分工草案还包括执行要点（最多 6 条）、注意事项（最多 5 条）和前置条件（最多 4 条）；草案未确认创建前不会持久化。管理员可用自然语言调整单张任务卡，也可调整整体草案。每次调整只调用模型一次；单卡调整由后端只合并目标卡，其他事项、问题和任务保持原样。
+
 确认问题只用于人工检查，不写入数据库。
 
 ## 结构化输出
@@ -48,6 +50,9 @@ AI 通过后端 Pydantic schema 返回严格结构化数据，不先生成 Markd
 - item.deadline（不确定时为 null）
 - tasks[].title
 - tasks[].deliverable
+- tasks[].execution_points（最多 6 条，每条最多 240 字）
+- tasks[].cautions（最多 5 条，每条最多 240 字）
+- tasks[].prerequisites（最多 4 条，每条最多 240 字；不构成系统依赖）
 - tasks[].owner_claimable
 - tasks[].collaboration_open
 - questions[]
@@ -120,6 +125,7 @@ DeepSeek 使用 `AI_BASE_URL=https://api.deepseek.com`，模型仍由 `AI_MODEL`
 
 - 一次“生成方案”只调用模型一次
 - “重新生成”是用户明确触发的另一笔单次请求
+- 单卡或全局自然语言调整每次同样只进行一次模型请求
 - 不做 agent loop
 - 不做自动反思 / 二次检查 / 自动改写
 - SDK max_retries=0，避免隐藏自动重试造成额外调用

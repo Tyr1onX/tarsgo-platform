@@ -1,11 +1,28 @@
 from datetime import datetime
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator, model_validator
 
 Role = Literal["admin", "manager", "member"]
 MemberStatus = Literal["invited", "active", "disabled"]
 TaskStatus = Literal["todo", "doing", "done"]
+TaskDetailText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=240)]
+
+
+def _clean_task_details(values: list[str] | None, *, max_items: int, field_name: str) -> list[str] | None:
+    if values is None:
+        return None
+    result: list[str] = []
+    for value in values:
+        text = value.strip()
+        if not text:
+            continue
+        if len(text) > 240:
+            raise ValueError(f"{field_name}单条内容不能超过 240 字")
+        result.append(text)
+    if len(result) > max_items:
+        raise ValueError(f"{field_name}最多 {max_items} 条")
+    return result
 
 
 def normalize_email(value: str) -> str:
@@ -82,6 +99,9 @@ class MemberSummary(BaseModel):
 class TaskCreate(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     deliverable: str = Field(default="", max_length=5000)
+    execution_points: list[TaskDetailText] = Field(default_factory=list, max_length=6)
+    cautions: list[TaskDetailText] = Field(default_factory=list, max_length=5)
+    prerequisites: list[TaskDetailText] = Field(default_factory=list, max_length=4)
     owner_id: int | None = None
     owner_claimable: bool = False
     collaborator_ids: list[int] = Field(default_factory=list)
@@ -103,6 +123,21 @@ class TaskCreate(BaseModel):
     def strip_deliverable(cls, value: str) -> str:
         return value.strip()
 
+    @field_validator("execution_points")
+    @classmethod
+    def clean_execution_points(cls, value: list[str]) -> list[str]:
+        return _clean_task_details(value, max_items=6, field_name="执行要点") or []
+
+    @field_validator("cautions")
+    @classmethod
+    def clean_cautions(cls, value: list[str]) -> list[str]:
+        return _clean_task_details(value, max_items=5, field_name="注意事项") or []
+
+    @field_validator("prerequisites")
+    @classmethod
+    def clean_prerequisites(cls, value: list[str]) -> list[str]:
+        return _clean_task_details(value, max_items=4, field_name="前置条件") or []
+
     @model_validator(mode="after")
     def validate_owner(self):
         if self.owner_id is None and not self.owner_claimable:
@@ -113,6 +148,9 @@ class TaskCreate(BaseModel):
 class TaskUpdate(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=200)
     deliverable: str | None = Field(default=None, max_length=5000)
+    execution_points: list[TaskDetailText] | None = Field(default=None, max_length=6)
+    cautions: list[TaskDetailText] | None = Field(default=None, max_length=5)
+    prerequisites: list[TaskDetailText] | None = Field(default=None, max_length=4)
     owner_id: int | None = None
     owner_claimable: bool | None = None
     collaborator_ids: list[int] | None = None
@@ -135,12 +173,30 @@ class TaskUpdate(BaseModel):
     def strip_optional_deliverable(cls, value: str | None) -> str | None:
         return None if value is None else value.strip()
 
+    @field_validator("execution_points")
+    @classmethod
+    def clean_optional_execution_points(cls, value: list[str] | None) -> list[str] | None:
+        return _clean_task_details(value, max_items=6, field_name="执行要点")
+
+    @field_validator("cautions")
+    @classmethod
+    def clean_optional_cautions(cls, value: list[str] | None) -> list[str] | None:
+        return _clean_task_details(value, max_items=5, field_name="注意事项")
+
+    @field_validator("prerequisites")
+    @classmethod
+    def clean_optional_prerequisites(cls, value: list[str] | None) -> list[str] | None:
+        return _clean_task_details(value, max_items=4, field_name="前置条件")
+
 
 class TaskOut(BaseModel):
     id: int
     parent_id: int | None
     title: str
     deliverable: str
+    execution_points: list[str] = Field(default_factory=list)
+    cautions: list[str] = Field(default_factory=list)
+    prerequisites: list[str] = Field(default_factory=list)
     owner: MemberSummary | None
     owner_claimable: bool
     collaborators: list[MemberSummary]
@@ -222,6 +278,9 @@ class AIPlannerTaskDraft(BaseModel):
     model_config = ConfigDict(extra="forbid")
     title: str = Field(min_length=1, max_length=200)
     deliverable: str = Field(max_length=1000)
+    execution_points: list[TaskDetailText] = Field(max_length=6)
+    cautions: list[TaskDetailText] = Field(max_length=5)
+    prerequisites: list[TaskDetailText] = Field(max_length=4)
     owner_claimable: bool
     collaboration_open: bool
 
@@ -237,6 +296,21 @@ class AIPlannerTaskDraft(BaseModel):
     @classmethod
     def strip_task_deliverable(cls, value: str) -> str:
         return value.strip()
+
+    @field_validator("execution_points")
+    @classmethod
+    def clean_execution_points(cls, value: list[str]) -> list[str]:
+        return _clean_task_details(value, max_items=6, field_name="执行要点") or []
+
+    @field_validator("cautions")
+    @classmethod
+    def clean_cautions(cls, value: list[str]) -> list[str]:
+        return _clean_task_details(value, max_items=5, field_name="注意事项") or []
+
+    @field_validator("prerequisites")
+    @classmethod
+    def clean_prerequisites(cls, value: list[str]) -> list[str]:
+        return _clean_task_details(value, max_items=4, field_name="前置条件") or []
 
 
 class AIPlannerDraft(BaseModel):
@@ -257,6 +331,29 @@ class AIPlannerDraft(BaseModel):
                 raise ValueError("确认问题过长")
             result.append(text)
         return result
+
+
+class AIPlannerRefineRequest(AIPlannerRequest):
+    model_config = ConfigDict(extra="forbid")
+    draft: AIPlannerDraft
+    instruction: str = Field(min_length=1, max_length=1000)
+    scope_task_index: int | None = Field(default=None, ge=0, le=14)
+
+    @field_validator("instruction")
+    @classmethod
+    def strip_instruction(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("请输入调整要求")
+        return value
+
+    @model_validator(mode="after")
+    def validate_refine_draft(self):
+        if self.scope_task_index is not None and self.scope_task_index >= len(self.draft.tasks):
+            raise ValueError("指定的分工不存在")
+        if len(self.draft.model_dump_json()) > 30_000:
+            raise ValueError("当前草案过长，请先删减后再调整")
+        return self
 
 
 class AIPlannerAccessOut(BaseModel):
@@ -329,6 +426,9 @@ class TaskBatchChildIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     title: str = Field(min_length=1, max_length=200)
     deliverable: str = Field(default="", max_length=5000)
+    execution_points: list[TaskDetailText] = Field(default_factory=list, max_length=6)
+    cautions: list[TaskDetailText] = Field(default_factory=list, max_length=5)
+    prerequisites: list[TaskDetailText] = Field(default_factory=list, max_length=4)
     owner_claimable: bool = True
     collaboration_open: bool = False
 
@@ -344,6 +444,21 @@ class TaskBatchChildIn(BaseModel):
     @classmethod
     def strip_batch_child_deliverable(cls, value: str) -> str:
         return value.strip()
+
+    @field_validator("execution_points")
+    @classmethod
+    def clean_execution_points(cls, value: list[str]) -> list[str]:
+        return _clean_task_details(value, max_items=6, field_name="执行要点") or []
+
+    @field_validator("cautions")
+    @classmethod
+    def clean_cautions(cls, value: list[str]) -> list[str]:
+        return _clean_task_details(value, max_items=5, field_name="注意事项") or []
+
+    @field_validator("prerequisites")
+    @classmethod
+    def clean_prerequisites(cls, value: list[str]) -> list[str]:
+        return _clean_task_details(value, max_items=4, field_name="前置条件") or []
 
 
 class TaskBatchCreate(BaseModel):

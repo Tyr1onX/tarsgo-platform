@@ -91,8 +91,7 @@ def _generate_openai_structured(client: OpenAI, description: str) -> PlannerGene
             instructions=SYSTEM_PROMPT,
             input=f"今天日期：{date.today().isoformat()}\n负责人描述：\n{description}",
             text_format=AIPlannerDraft,
-            max_output_tokens=DEEPSEEK_MAX_OUTPUT_TOKENS,
-            reasoning={"effort": "none"},
+            max_output_tokens=MAX_OUTPUT_TOKENS,
             store=False,
         )
     except APITimeoutError as exc:
@@ -125,7 +124,8 @@ def _generate_deepseek_structured(client: OpenAI, description: str) -> PlannerGe
                     "schema": AIPlannerDraft.model_json_schema(),
                 }
             },
-            max_output_tokens=MAX_OUTPUT_TOKENS,
+            max_output_tokens=DEEPSEEK_MAX_OUTPUT_TOKENS,
+            reasoning={"effort": "none"},
             store=False,
         )
     except APITimeoutError as exc:

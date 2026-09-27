@@ -31,14 +31,6 @@ services:
       AI_BASE_URL: ${AI_BASE_URL:-}
       AI_API_KEY: ${AI_API_KEY:-}
       AI_MODEL: ${AI_MODEL:-}
-      KNOWLEDGE_ENABLED: ${KNOWLEDGE_ENABLED:-false}
-      KNOWLEDGE_GITHUB_REPO: ${KNOWLEDGE_GITHUB_REPO:-}
-      KNOWLEDGE_GITHUB_BRANCH: ${KNOWLEDGE_GITHUB_BRANCH:-main}
-      KNOWLEDGE_GITHUB_TOKEN: ${KNOWLEDGE_GITHUB_TOKEN:-}
-      KNOWLEDGE_GITHUB_PATHS: ${KNOWLEDGE_GITHUB_PATHS:-docs,knowledge}
-      KNOWLEDGE_STORAGE_DIR: /opt/tarsgo-knowledge
-    volumes:
-      - ${KNOWLEDGE_STORAGE_HOST_DIR:-/opt/tarsgo-knowledge}:/opt/tarsgo-knowledge
     depends_on:
       db:
         condition: service_healthy

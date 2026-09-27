@@ -45,12 +45,6 @@ export interface InvitationInfo {
 }
 
 export interface AIPlannerAccess { available: boolean }
-export interface AIPlannerInput {
-  description: string
-  item_title?: string
-  current_event_context?: string
-  current_event_document_ids?: number[]
-}
 export interface AIPlannerItemDraft {
   title: string
   deliverable: string
@@ -74,31 +68,4 @@ export interface TaskBatchPayload {
 export interface TaskBatchResult {
   item: Task
   tasks: Task[]
-}
-
-export type KnowledgeParseStatus = "ready" | "truncated" | "failed" | "unparseable" | "removed"
-export interface KnowledgeDocument {
-  id: number
-  source_type: "github" | "upload"
-  source_name: string
-  display_name: string
-  title: string
-  parse_status: KnowledgeParseStatus
-  parse_error: string | null
-  is_active: boolean
-  synced_at: string
-  source_updated_at: string | null
-}
-export interface KnowledgeOption {
-  id: number
-  source_type: "github" | "upload"
-  source_name: string
-  title: string
-}
-export interface KnowledgeSyncSummary {
-  added: number
-  updated: number
-  unchanged: number
-  failed: number
-  removed: number
 }

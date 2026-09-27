@@ -255,7 +255,8 @@ def _safe_upload_name(filename: str | None) -> str:
 def private_storage_dir(override: str | Path | None = None) -> Path:
     raw = override if override is not None else os.getenv("KNOWLEDGE_STORAGE_DIR", "/opt/tarsgo-knowledge")
     root = Path(raw).expanduser().resolve()
-    repository = Path(__file__).resolve().parents[2]
+    module_path = Path(__file__).resolve()
+    repository = module_path.parents[2] if module_path.parents[1].name == "backend" else module_path.parents[1]
     if root == repository or repository in root.parents:
         raise KnowledgeConfigError("知识文件存储目录必须位于仓库之外")
     root.mkdir(parents=True, exist_ok=True, mode=0o700)

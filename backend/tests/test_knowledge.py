@@ -4,6 +4,7 @@ import logging
 import os
 import tempfile
 import uuid
+from pathlib import Path
 from unittest.mock import patch
 
 from docx import Document
@@ -213,6 +214,16 @@ def main() -> None:
                 assert exc.status_code == 413
             else:
                 raise AssertionError("oversized upload should be rejected")
+
+            # Docker copies the backend package to /app/app, while local source lives under backend/app.
+            with patch.object(knowledge, "__file__", "/app/app/knowledge.py"):
+                assert knowledge.private_storage_dir(storage_temp.name) == Path(storage_temp.name).resolve()
+                try:
+                    knowledge.private_storage_dir("/app/private-data")
+                except knowledge.KnowledgeConfigError:
+                    pass
+                else:
+                    raise AssertionError("container application data must not be used as private storage")
 
             upload = create_uploaded_document(
                 db,

@@ -11,6 +11,7 @@ UNREQUESTED_TOPICS = {
     "budget": ("预算", "报销", "付费"),
     "procurement": ("采购",),
     "promotion": ("宣传", "周边"),
+    "unrequested_media_capture": ("摄影", "拍摄", "照片", "视频", "影像"),
 }
 CONFIRMATION_CONCEPTS = {
     "exhibition_project": ("展示项目", "参展项目", "参展内容", "展示内容", "演示项目", "演示形式", "机器人型号"),

@@ -101,6 +101,7 @@ def main() -> None:
     assert openai_calls.get("create_count", 0) == 0
     assert openai_calls["parse"]["text_format"] is AIPlannerDraft
     assert openai_calls["parse"]["max_output_tokens"] == 2200
+    assert "reasoning" not in openai_calls["parse"]
     assert openai_calls["parse"]["store"] is False
     assert openai_calls["parse"]["model"] == "ci-model"
     assert "base_url" not in openai_calls["client"]
@@ -116,7 +117,8 @@ def main() -> None:
     assert deepseek_calls.get("parse_count", 0) == 0
     assert deepseek_calls["client"]["base_url"] == DEEPSEEK_DEFAULT_BASE_URL
     assert deepseek_calls["create"]["model"] == "deepseek-flash"
-    assert deepseek_calls["create"]["max_output_tokens"] == 2200
+    assert deepseek_calls["create"]["max_output_tokens"] == 4096
+    assert deepseek_calls["create"]["reasoning"]["effort"] == "none"
     assert deepseek_calls["create"]["store"] is False
 
     text_format = deepseek_calls["create"]["text"]["format"]

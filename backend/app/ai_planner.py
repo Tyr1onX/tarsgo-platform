@@ -10,6 +10,7 @@ from pydantic import ValidationError
 from .schemas import AIPlannerDraft
 
 MAX_OUTPUT_TOKENS = 2200
+DEEPSEEK_MAX_OUTPUT_TOKENS = 4096
 REQUEST_TIMEOUT_SECONDS = 30.0
 DEEPSEEK_DEFAULT_BASE_URL = "https://api.deepseek.com"
 
@@ -90,7 +91,8 @@ def _generate_openai_structured(client: OpenAI, description: str) -> PlannerGene
             instructions=SYSTEM_PROMPT,
             input=f"今天日期：{date.today().isoformat()}\n负责人描述：\n{description}",
             text_format=AIPlannerDraft,
-            max_output_tokens=MAX_OUTPUT_TOKENS,
+            max_output_tokens=DEEPSEEK_MAX_OUTPUT_TOKENS,
+            reasoning={"effort": "none"},
             store=False,
         )
     except APITimeoutError as exc:

@@ -8,6 +8,7 @@ from app.ai_planner import (
     DeepSeekPlannerProvider,
     OpenAIPlannerProvider,
     PlannerInvalidResponse,
+    SYSTEM_PROMPT,
     get_planner_provider,
 )
 from app.schemas import AIPlannerDraft, AIPlannerItemDraft, AIPlannerTaskDraft
@@ -80,6 +81,27 @@ def expect_invalid(callback) -> None:
     raise AssertionError("expected PlannerInvalidResponse")
 
 
+def assert_generation_prompt_contract() -> None:
+    required_guidance = (
+        "最小但完整、能落地验收的责任分工",
+        "相对独立的责任单元，而不是一个动作步骤",
+        "做完后必须产生可观察的结果",
+        "通常由同一责任人连续完成，并共同形成一个结果，就合并为一个任务",
+        "deliverable 写成具体、可检查的结果",
+        "没有提到直播时，不生成直播设备检查、直播值守，也不询问直播平台",
+        "没有提到预算或采购时，不生成预算审批/采购任务，也不询问预算",
+        "未知信息不等于必须提问",
+        "团队可以在后续工作中确认",
+        "生成一个确认类任务",
+        "questions 可以为空，0 个问题完全合法",
+        "通常保持 0～3 个，不要为了接近最多 6 个而凑问题",
+        "不要因为历史资料中曾经做过某项，就默认本次一定需要",
+        "10 月 12 日去力旺实验小学参加科技展",
+    )
+    for guidance in required_guidance:
+        assert guidance in SYSTEM_PROMPT, guidance
+
+
 def run_with_fake(provider_name: str, *, output_text: str | None = None, base_url: str = ""):
     calls = {}
     configure(provider_name, base_url)
@@ -95,6 +117,11 @@ def run_with_fake(provider_name: str, *, output_text: str | None = None, base_ur
 
 
 def main() -> None:
+    assert_generation_prompt_contract()
+    zero_question_draft = draft().model_dump(mode="json")
+    zero_question_draft["questions"] = []
+    assert AIPlannerDraft.model_validate(zero_question_draft).questions == []
+
     openai_provider, openai_generation, openai_calls = run_with_fake("openai")
     assert isinstance(openai_provider, OpenAIPlannerProvider)
     assert openai_calls.get("parse_count") == 1
@@ -104,7 +131,9 @@ def main() -> None:
     assert "reasoning" not in openai_calls["parse"]
     assert openai_calls["parse"]["store"] is False
     assert openai_calls["parse"]["model"] == "ci-model"
+    assert openai_calls["parse"]["instructions"] == SYSTEM_PROMPT
     assert "base_url" not in openai_calls["client"]
+    assert openai_calls["client"]["max_retries"] == 0
     assert openai_generation.total_tokens == 180
 
     deepseek_provider, deepseek_generation, deepseek_calls = run_with_fake(
@@ -120,6 +149,8 @@ def main() -> None:
     assert deepseek_calls["create"]["max_output_tokens"] == 4096
     assert deepseek_calls["create"]["reasoning"]["effort"] == "none"
     assert deepseek_calls["create"]["store"] is False
+    assert deepseek_calls["create"]["instructions"] == SYSTEM_PROMPT
+    assert deepseek_calls["client"]["max_retries"] == 0
 
     text_format = deepseek_calls["create"]["text"]["format"]
     assert text_format["type"] == "json_schema"

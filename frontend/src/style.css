@@ -1,17 +1,18 @@
 :root {
-  --bg: #fafafa;
-  --surface: #ffffff;
-  --text: #171717;
-  --secondary: #4f4f4f;
-  --muted: #696969;
-  --faint: #858585;
-  --line: #e5e5e5;
-  --line-strong: #d6d6d6;
-  --hover: rgba(0, 0, 0, 0.025);
-  --danger: #9a342b;
-  --success: #2f6a3b;
-  --sidebar-width: 220px;
-  --content-width: 920px;
+  --bg: #f2f0eb;
+  --surface: #f8f7f3;
+  --text: #1b1a18;
+  --secondary: #57534d;
+  --muted: #716b63;
+  --faint: #918a80;
+  --line: #d9d5cd;
+  --line-strong: #c7c0b5;
+  --hover: rgba(27, 26, 24, 0.04);
+  --danger: #9a3f31;
+  --success: #49684d;
+  --accent: #c96b2c;
+  --sidebar-width: 232px;
+  --content-width: 960px;
   --ribbon-height: 3px;
   font-family:
     -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
@@ -57,7 +58,7 @@ button:focus-visible,
 input:focus-visible,
 textarea:focus-visible,
 select:focus-visible {
-  outline: 2px solid #315b8a;
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 
@@ -66,7 +67,7 @@ textarea,
 select {
   width: 100%;
   border: 1px solid var(--line-strong);
-  border-radius: 6px;
+  border-radius: 4px;
   background: var(--surface);
   padding: 11px 12px;
   color: inherit;
@@ -126,11 +127,27 @@ h3 {
 }
 
 .brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
   margin: 0;
   color: var(--text);
-  font-size: 13px;
-  font-weight: 650;
-  letter-spacing: -0.01em;
+  font-size: 12px;
+  font-weight: 720;
+  letter-spacing: 0.11em;
+}
+
+.brand::before,
+.sidebar-brand::before {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  background:
+    linear-gradient(var(--text), var(--text)) 0 0 / 8px 8px no-repeat,
+    linear-gradient(var(--text), var(--text)) 12px 0 / 6px 8px no-repeat,
+    linear-gradient(var(--text), var(--text)) 0 12px / 6px 6px no-repeat,
+    linear-gradient(var(--accent), var(--accent)) 10px 12px / 8px 6px no-repeat;
+  content: "";
 }
 
 .product-label {
@@ -177,19 +194,19 @@ h3 {
 
 .primary,
 .secondary {
-  border-radius: 6px;
+  border-radius: 4px;
   padding: 10px 14px;
   font-weight: 600;
 }
 
 .primary {
-  border: 1px solid #171717;
-  background: #171717;
+  border: 1px solid var(--text);
+  background: var(--text);
   color: #fff;
 }
 
 .primary:hover {
-  background: #292929;
+  background: #302d29;
 }
 
 .secondary {
@@ -209,7 +226,7 @@ h3 {
   right: 0;
   left: 0;
   height: var(--ribbon-height);
-  background: #d8d8d4;
+  background: var(--line-strong);
   pointer-events: none;
 }
 
@@ -217,17 +234,10 @@ h3 {
   position: absolute;
   top: 0;
   bottom: 0;
-  left: clamp(42px, 12vw, 180px);
-  width: 76px;
-  background: linear-gradient(
-    90deg,
-    #758896 0 25%,
-    #a28775 25% 50%,
-    #7f9485 50% 75%,
-    #8d829b 75% 100%
-  );
+  left: clamp(28px, 8vw, 112px);
+  width: 68px;
+  background: var(--accent);
   content: "";
-  opacity: 0.78;
 }
 
 .app-shell {
@@ -252,23 +262,29 @@ h3 {
 
 .sidebar-brand-block {
   display: grid;
-  gap: 2px;
+  gap: 8px;
 }
 
 .sidebar-brand {
   width: fit-content;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
   border: 0;
   background: transparent;
   padding: 0;
   color: var(--text);
-  font-size: 16px;
-  font-weight: 650;
-  letter-spacing: -0.025em;
+  font-size: 13px;
+  font-weight: 720;
+  letter-spacing: 0.11em;
 }
 
 .sidebar-brand-block > span {
+  max-width: 170px;
   color: var(--faint);
-  font-size: 11.5px;
+  font-size: 9.5px;
+  line-height: 1.45;
+  letter-spacing: 0.09em;
 }
 
 .sidebar-nav {
@@ -303,10 +319,10 @@ h3 {
   position: absolute;
   top: 50%;
   left: 4px;
-  width: 3px;
-  height: 3px;
-  border-radius: 50%;
-  background: currentColor;
+  width: 2px;
+  height: 14px;
+  border-radius: 1px;
+  background: var(--accent);
   content: "";
   transform: translateY(-50%);
 }
@@ -367,9 +383,11 @@ h3 {
 }
 
 .hero p {
-  margin-bottom: 5px;
-  color: var(--muted);
-  font-size: 13px;
+  margin-bottom: 8px;
+  color: var(--faint);
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
 }
 
 .hero h1 {
@@ -754,9 +772,9 @@ h3 {
   display: grid;
   gap: 13px;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: 4px;
   background: var(--surface);
-  padding: 17px 18px;
+  padding: 18px 19px;
 }
 
 .operation-main {
@@ -909,7 +927,7 @@ h3 {
     gap: 16px;
     padding: 0 18px;
     border-bottom: 1px solid var(--line);
-    background: rgba(250, 250, 250, 0.96);
+    background: rgba(242, 240, 235, 0.96);
     backdrop-filter: blur(10px);
   }
 
@@ -935,7 +953,7 @@ h3 {
     height: 62px;
     display: grid;
     border-top: 1px solid var(--line);
-    background: rgba(255, 255, 255, 0.97);
+    background: rgba(248, 247, 243, 0.97);
     backdrop-filter: blur(10px);
   }
 

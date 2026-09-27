@@ -641,7 +641,7 @@ onBeforeUnmount(() => window.removeEventListener("popstate", handlePopState))
 <template>
   <main v-if="path === '/login'" class="auth-shell">
     <form class="auth-form" @submit.prevent="submitLogin">
-      <p class="brand">TARS-GO</p>
+      <p class="brand">TARS BASE</p>
       <h1>登录</h1>
       <label>
         邮箱
@@ -664,7 +664,7 @@ onBeforeUnmount(() => window.removeEventListener("popstate", handlePopState))
 
   <main v-else-if="path.startsWith('/invite/')" class="auth-shell">
     <section class="auth-form">
-      <p class="brand">TARS-GO</p>
+      <p class="brand">TARS BASE</p>
       <template v-if="invitation">
         <h1>设置密码</h1>
         <div class="identity">
@@ -711,12 +711,12 @@ onBeforeUnmount(() => window.removeEventListener("popstate", handlePopState))
 
     <aside class="desktop-sidebar" aria-label="主导航">
       <div class="sidebar-brand-block">
-        <button class="sidebar-brand" type="button" @click="navigate('/')">TARS-GO</button>
-        <span>公共运营事务</span>
+        <button class="sidebar-brand" type="button" @click="navigate('/')">TARS BASE</button>
+        <span>JILIN UNIVERSITY · TARS-GO</span>
       </div>
 
       <nav class="sidebar-nav">
-        <button :class="{ active: path === '/' }" type="button" @click="navigate('/')">首页</button>
+        <button :class="{ active: path === '/' }" type="button" @click="navigate('/')">Base</button>
         <button :class="{ active: path === '/tasks' }" type="button" @click="navigateTasks('mine')">
           任务
         </button>
@@ -746,8 +746,8 @@ onBeforeUnmount(() => window.removeEventListener("popstate", handlePopState))
     </aside>
 
     <header class="mobile-topbar">
-      <span class="brand">TARS-GO</span>
-      <span class="product-label">公共运营事务</span>
+      <span class="brand">TARS BASE</span>
+      <span class="product-label">JLU · TARS-GO</span>
     </header>
 
     <div v-if="loading" class="page"><p>正在加载…</p></div>
@@ -758,7 +758,7 @@ onBeforeUnmount(() => window.removeEventListener("popstate", handlePopState))
 
       <template v-if="path === '/'">
         <section class="hero">
-          <p>你好，{{ user?.name }}</p>
+          <p>BASE / OVERVIEW · 你好，{{ user?.name }}</p>
           <h1>我现在需要做什么</h1>
           <div class="hero-actions">
             <button v-if="isManager" class="hero-action" type="button" @click="startNewTask()">
@@ -1328,7 +1328,7 @@ onBeforeUnmount(() => window.removeEventListener("popstate", handlePopState))
       aria-label="主导航"
       :style="{ gridTemplateColumns: `repeat(${isAdmin ? 4 : 3}, 1fr)` }"
     >
-      <button :class="{ active: path === '/' }" type="button" @click="navigate('/')">首页</button>
+      <button :class="{ active: path === '/' }" type="button" @click="navigate('/')">Base</button>
       <button :class="{ active: path === '/tasks' }" type="button" @click="navigateTasks('mine')">
         任务
       </button>

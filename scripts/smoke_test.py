@@ -139,15 +139,15 @@ def run_workflow():
     call(opener(), "/api/tasks?scope=all", expected=401)
     call(opener(), "/api/members", expected=401)
     call(opener(), "/api/knowledge", expected=401)
-    call(opener(), "/api/knowledge/options", expected=401)
+    call(opener(), "/api/knowledge/search?q=fixture", expected=401)
     call(opener(), "/api/knowledge/sync/github", method="POST", expected=401)
 
     admin = login(ADMIN_EMAIL, admin_password)
     assert isinstance(call(admin, "/api/knowledge"), list)
     uploaded_knowledge = upload_markdown(admin)
     assert uploaded_knowledge["title"] == "ci-fixture"
-    knowledge_options = call(admin, "/api/knowledge/options")
-    assert any(option["id"] == uploaded_knowledge["id"] for option in knowledge_options)
+    knowledge_results = call(admin, "/api/knowledge/search?q=fixture")
+    assert any(reference["id"] == uploaded_knowledge["id"] for reference in knowledge_results)
     upload_markdown(admin, content=b"x" * (10 * 1024 * 1024 + 64 * 1024), filename="too-large.txt", expected=413)
     call(admin, f"/api/knowledge/{uploaded_knowledge['id']}", method="DELETE", expected=204)
 
@@ -169,7 +169,7 @@ def run_workflow():
 
     call(manager, "/api/members", expected=403)
     call(manager, "/api/knowledge", expected=403)
-    call(manager, "/api/knowledge/options", expected=403)
+    call(manager, "/api/knowledge/search?q=fixture", expected=403)
     call(manager, "/api/knowledge/sync/github", method="POST", expected=403)
     call(manager, "/api/knowledge/999999", method="DELETE", expected=403)
     upload_markdown(manager, expected=403)

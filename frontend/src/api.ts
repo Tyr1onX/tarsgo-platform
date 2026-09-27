@@ -1,5 +1,6 @@
 import type {
   AIPlannerAccess,
+  AIPlannerExtractedFile,
   AIPlannerResult,
   AIPlannerInput,
   InvitationInfo,
@@ -7,7 +8,6 @@ import type {
   Member,
   MemberSummary,
   KnowledgeDocument,
-  KnowledgeReference,
   KnowledgeSyncSummary,
   Role,
   Task,
@@ -88,10 +88,16 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  extractPlannerFile: (file: File) => {
+    const form = new FormData()
+    form.append("file", file)
+    return request<AIPlannerExtractedFile>("/api/ai/planner/extract", {
+      method: "POST",
+      body: form,
+    })
+  },
 
   knowledgeDocuments: () => request<KnowledgeDocument[]>("/api/knowledge"),
-  searchKnowledge: (query: string) =>
-    request<KnowledgeReference[]>(`/api/knowledge/search?q=${encodeURIComponent(query)}`),
   syncGitHubKnowledge: () =>
     request<KnowledgeSyncSummary>("/api/knowledge/sync/github", { method: "POST" }),
   uploadKnowledgeDocument: (file: File) => {

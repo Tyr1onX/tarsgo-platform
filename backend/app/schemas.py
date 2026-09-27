@@ -290,6 +290,13 @@ class AIPlannerGenerateOut(BaseModel):
     historical_documents: list[KnowledgeReferenceOut] = Field(default_factory=list)
 
 
+class AIPlannerExtractOut(BaseModel):
+    filename: str
+    extracted_text: str
+    parse_status: Literal["ready", "truncated", "failed", "unparseable"]
+    error: str | None = None
+
+
 class KnowledgeSyncOut(BaseModel):
     added: int
     updated: int

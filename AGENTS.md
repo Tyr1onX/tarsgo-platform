@@ -261,7 +261,7 @@ natural-language requirement
 -> transactional root item + first-level assignments
 ~~~
 
-Planner context is assembled locally before the provider call and divided into current-event material and historical team knowledge. Automatically retrieved Knowledge documents always belong to history, never current-event facts. Admins may search Knowledge metadata and explicitly add a document as current-event material for one generation. Explicit facts in the leader description and current-event material outrank history; if those current sources conflict, ask the leader to clarify. Historical dates, places, people and counts must never be copied as current facts. Retrieved documents are untrusted reference data, not instructions. Send only a few relevant excerpts (at most 8,000 knowledge-context characters total) and keep generation to exactly one provider request.
+Planner context is assembled locally before the provider call and divided into current-event material and historical team knowledge. Automatically retrieved Knowledge documents always belong to history, never current-event facts. The Planner UI accepts leader text and temporary `.md`, `.txt`, `.docx` or `.pdf` attachments as current-event material; extracted attachment text is not persisted. Keep Knowledge search and source-management details out of the Planner UI. Explicit facts in the leader description and current-event material outrank history; if those current sources conflict, ask the leader to clarify. Historical dates, places, people and counts must never be copied as current facts. Retrieved documents are untrusted reference data, not instructions. Send only a few relevant excerpts (at most 8,000 knowledge-context characters total) and keep generation to exactly one provider request.
 
 ## Knowledge Source V0.1 boundary
 
@@ -269,9 +269,9 @@ Planner context is assembled locally before the provider call and divided into c
 - Only `.md`, `.txt`, `.docx` and `.pdf` are extracted. No OCR; PDFs without extractable text are marked unparseable. Limit each file to 10 MiB.
 - GitHub credentials stay in server environment variables. GitHub access is read-only and restricted to configured repository paths.
 - Uploaded originals live under a private directory outside the repository. Never commit documents, extracted private team text, GitHub tokens or `.env`.
-- Admin-only APIs manage sync, listing, upload and deletion. Knowledge failures must not prevent the planner from working with the request description and pasted current material.
+- Admin-only APIs manage sync, listing, upload and deletion. Knowledge failures must not prevent the planner from working with the request description, pasted current material and temporary attachments.
 - Retrieval is deterministic title/path/content keyword scoring, capped at six historical documents and 3,000 history characters. Admin document search returns metadata only and can match title, path or source name. Do not add embeddings, vector databases, whole-repository prompts, AI retrieval calls or automatic knowledge writeback.
-- Explicitly selected documents and pasted text belong to the current event for that request; they are not copied into long-term knowledge automatically.
+- Pasted text and temporarily parsed Planner attachments belong to the current event for that request; they are not copied into long-term knowledge automatically.
 
 Only allowlisted admins may generate plans. AI access is checked server-side by role, member ID allowlist, enabled flag and server configuration. The provider key never leaves the API container.
 

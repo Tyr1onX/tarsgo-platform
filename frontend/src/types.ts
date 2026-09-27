@@ -102,6 +102,12 @@ export interface AIPlannerResult {
   current_event_documents: KnowledgeReference[]
   historical_documents: KnowledgeReference[]
 }
+export interface AIPlannerExtractedFile {
+  filename: string
+  extracted_text: string
+  parse_status: "ready" | "truncated" | "failed" | "unparseable"
+  error: string | null
+}
 export interface KnowledgeSyncSummary {
   added: number
   updated: number

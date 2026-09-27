@@ -2,7 +2,7 @@ import logging
 import os
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -17,9 +17,24 @@ from ..ai_planner import (
 )
 from ..auth import get_current_member
 from ..db import get_db
-from ..knowledge import KnowledgeContext, build_planner_context, planner_input_text
+from ..knowledge import (
+    MAX_UPLOAD_BYTES,
+    KnowledgeContext,
+    UploadRejected,
+    _safe_upload_name,
+    build_planner_context,
+    extract_document_text,
+    planner_input_text,
+)
 from ..models import AIPlannerDailyUsage, Member
-from ..schemas import AIPlannerAccessOut, AIPlannerDraft, AIPlannerGenerateOut, AIPlannerRequest, KnowledgeReferenceOut
+from ..schemas import (
+    AIPlannerAccessOut,
+    AIPlannerDraft,
+    AIPlannerExtractOut,
+    AIPlannerGenerateOut,
+    AIPlannerRequest,
+    KnowledgeReferenceOut,
+)
 
 router = APIRouter(prefix="/api/ai/planner", tags=["ai-planner"])
 logger = logging.getLogger(__name__)
@@ -114,6 +129,30 @@ def _record_tokens(db: Session, member_id: int, usage_date, input_tokens: int, o
 @router.get("/access", response_model=AIPlannerAccessOut)
 def planner_access(current: Member = Depends(get_current_member)) -> AIPlannerAccessOut:
     return AIPlannerAccessOut(available=_has_access(current))
+
+
+@router.post("/extract", response_model=AIPlannerExtractOut)
+def extract_planner_material(
+    file: UploadFile = File(...),
+    current: Member = Depends(get_current_member),
+) -> AIPlannerExtractOut:
+    try:
+        _require_planner_access(current)
+        content = file.file.read(MAX_UPLOAD_BYTES + 1)
+        if len(content) > MAX_UPLOAD_BYTES:
+            raise UploadRejected(413, "单个文件不能超过 10 MiB")
+        filename = _safe_upload_name(file.filename)
+        extracted = extract_document_text(filename, content)
+        return AIPlannerExtractOut(
+            filename=filename,
+            extracted_text=extracted.content_text,
+            parse_status=extracted.parse_status,
+            error=extracted.parse_error,
+        )
+    except UploadRejected as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None
+    finally:
+        file.file.close()
 
 
 @router.post("", response_model=AIPlannerGenerateOut)

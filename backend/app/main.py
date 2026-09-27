@@ -15,13 +15,14 @@ app.include_router(ai_planner.router)
 app.include_router(knowledge.router)
 
 MAX_UPLOAD_REQUEST_BYTES = MAX_UPLOAD_BYTES + 64 * 1024
+DOCUMENT_UPLOAD_PATHS = {"/api/knowledge/uploads", "/api/ai/planner/extract"}
 
 
-class KnowledgeUploadTooLarge(Exception):
+class DocumentUploadTooLarge(Exception):
     pass
 
 
-class KnowledgeUploadSizeLimitMiddleware:
+class DocumentUploadSizeLimitMiddleware:
     def __init__(self, application):
         self.application = application
 
@@ -29,7 +30,7 @@ class KnowledgeUploadSizeLimitMiddleware:
         if (
             scope["type"] != "http"
             or scope["method"] != "POST"
-            or scope["path"] != "/api/knowledge/uploads"
+            or scope["path"] not in DOCUMENT_UPLOAD_PATHS
         ):
             await self.application(scope, receive, send)
             return
@@ -40,7 +41,7 @@ class KnowledgeUploadSizeLimitMiddleware:
         )
         try:
             if content_length is not None and int(content_length) > MAX_UPLOAD_REQUEST_BYTES:
-                response = JSONResponse(status_code=413, content={"detail": "单个文件不能超过 10MB"})
+                response = JSONResponse(status_code=413, content={"detail": "单个文件不能超过 10 MiB"})
                 await response(scope, receive, send)
                 return
         except ValueError:
@@ -54,18 +55,18 @@ class KnowledgeUploadSizeLimitMiddleware:
             if message["type"] == "http.request":
                 received_bytes += len(message.get("body", b""))
                 if received_bytes > MAX_UPLOAD_REQUEST_BYTES:
-                    raise KnowledgeUploadTooLarge
+                    raise DocumentUploadTooLarge
             return message
 
         await self.application(scope, limited_receive, send)
 
 
-@app.exception_handler(KnowledgeUploadTooLarge)
-async def knowledge_upload_too_large(_: Request, __: KnowledgeUploadTooLarge) -> JSONResponse:
-    return JSONResponse(status_code=413, content={"detail": "单个文件不能超过 10MB"})
+@app.exception_handler(DocumentUploadTooLarge)
+async def document_upload_too_large(_: Request, __: DocumentUploadTooLarge) -> JSONResponse:
+    return JSONResponse(status_code=413, content={"detail": "单个文件不能超过 10 MiB"})
 
 
-app.add_middleware(KnowledgeUploadSizeLimitMiddleware)
+app.add_middleware(DocumentUploadSizeLimitMiddleware)
 
 
 @app.get("/api/health")

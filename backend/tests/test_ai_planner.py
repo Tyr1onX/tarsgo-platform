@@ -1,15 +1,20 @@
+import io
 import os
 from datetime import datetime
 from unittest.mock import patch
 
 from fastapi import HTTPException
+from fastapi.testclient import TestClient
 from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
+from starlette.datastructures import UploadFile
 
 from app.ai_planner import PlannerGeneration, PlannerInvalidResponse
 from app.db import SessionLocal
-from app.models import AIPlannerDailyUsage, Member, Task
+from app.main import app
+from app.knowledge import MAX_UPLOAD_BYTES
+from app.models import AIPlannerDailyUsage, KnowledgeDocument, Member, Task
 from app.routers import ai_planner as planner_router
 from app.routers import tasks as tasks_router
 from app.schemas import (
@@ -26,8 +31,10 @@ from app.schemas import (
 class FakeProvider:
     def __init__(self):
         self.calls = 0
+        self.description = ""
     def generate(self, description: str) -> PlannerGeneration:
         self.calls += 1
+        self.description = description
         return PlannerGeneration(
             draft=AIPlannerDraft(
                 item=AIPlannerItemDraft(title="小学科技展", deliverable="完成现场展示并收齐活动素材。", deadline=None),
@@ -68,6 +75,47 @@ def main() -> None:
             "AI_MODEL": "ci-placeholder",
         })
 
+        anonymous_upload = TestClient(app).post(
+            "/api/ai/planner/extract",
+            files={"file": ("event.txt", b"A confirmed event date is October 12.")},
+        )
+        assert anonymous_upload.status_code == 401
+
+        manager_upload = UploadFile(filename="event.txt", file=io.BytesIO(b"event details"))
+        expect_http(
+            403,
+            lambda: planner_router.extract_planner_material(file=manager_upload, current=manager),
+        )
+        assert manager_upload.file.closed
+
+        documents_before = db.scalar(select(func.count(KnowledgeDocument.id))) or 0
+        planner_upload = UploadFile(
+            filename="../../current-event.txt",
+            file=io.BytesIO("本次活动时间为 10 月 12 日。".encode()),
+        )
+        extracted = planner_router.extract_planner_material(file=planner_upload, current=admin)
+        assert extracted.filename == "current-event.txt"
+        assert extracted.parse_status == "ready" and "10 月 12 日" in extracted.extracted_text
+        assert planner_upload.file.closed
+        assert (db.scalar(select(func.count(KnowledgeDocument.id))) or 0) == documents_before
+
+        unsupported_upload = UploadFile(filename="event.zip", file=io.BytesIO(b"archive"))
+        expect_http(415, lambda: planner_router.extract_planner_material(file=unsupported_upload, current=admin))
+        assert unsupported_upload.file.closed
+
+        oversized_upload = UploadFile(
+            filename="oversized.txt",
+            file=io.BytesIO(b"x" * (MAX_UPLOAD_BYTES + 1)),
+        )
+        expect_http(413, lambda: planner_router.extract_planner_material(file=oversized_upload, current=admin))
+        assert oversized_upload.file.closed
+
+        broken_upload = UploadFile(filename="broken.pdf", file=io.BytesIO(b"not a PDF"))
+        failed_extraction = planner_router.extract_planner_material(file=broken_upload, current=admin)
+        assert failed_extraction.parse_status == "failed"
+        assert failed_extraction.error and "解析" in failed_extraction.error
+        assert broken_upload.file.closed
+
         extra_admin = Member(name="测试管理员", email="planner-extra-admin@example.com", password_hash=None, role="admin", status="active")
         db.add(extra_admin)
         db.commit()
@@ -94,6 +142,23 @@ def main() -> None:
         assert provider.calls == 1 and before == after
         draft = result.draft
         assert not hasattr(draft.tasks[0], "owner_id")
+
+        attachment_facts = "文件《科技展通知.txt》：\n本次活动日期为 10 月 12 日，地点为力旺实验小学。"
+        attachment_request = AIPlannerRequest(
+            description="准备一次校园科技展示，请整理能先安排的工作。",
+            current_event_context=attachment_facts,
+        )
+        attachment_provider = FakeProvider()
+        planner_router.generate_plan(
+            attachment_request,
+            current=admin,
+            db=db,
+            provider=attachment_provider,
+        )
+        assert attachment_provider.calls == 1
+        assert "【本次事项资料】" in attachment_provider.description
+        assert "科技展通知.txt" in attachment_provider.description
+        assert "10 月 12 日" in attachment_provider.description
 
         expect_http(502, lambda: planner_router.generate_plan(request, current=admin, db=db, provider=InvalidProvider()))
 

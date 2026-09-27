@@ -9,6 +9,7 @@ from .schemas import AIPlannerDraft
 
 MAX_OUTPUT_TOKENS = 2200
 REQUEST_TIMEOUT_SECONDS = 30.0
+DEEPSEEK_DEFAULT_BASE_URL = "https://api.deepseek.com"
 
 SYSTEM_PROMPT = """你负责把高校机器人团队已经明确要做的运营事项整理成可编辑的执行草案。
 
@@ -55,39 +56,74 @@ class PlannerInvalidResponse(PlannerProviderError):
     pass
 
 
+def configured_provider_name() -> str:
+    return os.getenv("AI_PROVIDER", "openai").strip().lower() or "openai"
+
+
+def _client(*, base_url: str | None = None) -> OpenAI:
+    kwargs = {
+        "api_key": os.environ["AI_API_KEY"],
+        "timeout": REQUEST_TIMEOUT_SECONDS,
+        "max_retries": 0,
+    }
+    if base_url:
+        kwargs["base_url"] = base_url
+    return OpenAI(**kwargs)
+
+
+def _generate_structured(client: OpenAI, description: str) -> PlannerGeneration:
+    try:
+        response = client.responses.parse(
+            model=os.environ["AI_MODEL"],
+            instructions=SYSTEM_PROMPT,
+            input=f"今天日期：{date.today().isoformat()}\n负责人描述：\n{description}",
+            text_format=AIPlannerDraft,
+            max_output_tokens=MAX_OUTPUT_TOKENS,
+            store=False,
+        )
+    except APITimeoutError as exc:
+        raise PlannerTimeoutError from exc
+    except RateLimitError as exc:
+        raise PlannerRateLimitError from exc
+    except (APIConnectionError, APIError) as exc:
+        raise PlannerProviderError from exc
+    except Exception as exc:
+        raise PlannerInvalidResponse from exc
+
+    draft = response.output_parsed
+    if draft is None:
+        raise PlannerInvalidResponse
+
+    usage = response.usage
+    return PlannerGeneration(
+        draft=draft,
+        input_tokens=int(getattr(usage, "input_tokens", 0) or 0),
+        output_tokens=int(getattr(usage, "output_tokens", 0) or 0),
+        total_tokens=int(getattr(usage, "total_tokens", 0) or 0),
+    )
+
+
 class OpenAIPlannerProvider:
     def generate(self, description: str) -> PlannerGeneration:
-        client = OpenAI(api_key=os.environ["AI_API_KEY"], timeout=REQUEST_TIMEOUT_SECONDS, max_retries=0)
-        try:
-            response = client.responses.parse(
-                model=os.environ["AI_MODEL"],
-                instructions=SYSTEM_PROMPT,
-                input=f"今天日期：{date.today().isoformat()}\n负责人描述：\n{description}",
-                text_format=AIPlannerDraft,
-                max_output_tokens=MAX_OUTPUT_TOKENS,
-                store=False,
-            )
-        except APITimeoutError as exc:
-            raise PlannerTimeoutError from exc
-        except RateLimitError as exc:
-            raise PlannerRateLimitError from exc
-        except (APIConnectionError, APIError) as exc:
-            raise PlannerProviderError from exc
-        except Exception as exc:
-            raise PlannerInvalidResponse from exc
+        base_url = os.getenv("AI_BASE_URL", "").strip() or None
+        return _generate_structured(_client(base_url=base_url), description)
 
-        draft = response.output_parsed
-        if draft is None:
-            raise PlannerInvalidResponse
 
-        usage = response.usage
-        return PlannerGeneration(
-            draft=draft,
-            input_tokens=int(getattr(usage, "input_tokens", 0) or 0),
-            output_tokens=int(getattr(usage, "output_tokens", 0) or 0),
-            total_tokens=int(getattr(usage, "total_tokens", 0) or 0),
-        )
+class DeepSeekPlannerProvider:
+    def generate(self, description: str) -> PlannerGeneration:
+        base_url = os.getenv("AI_BASE_URL", "").strip() or DEEPSEEK_DEFAULT_BASE_URL
+        return _generate_structured(_client(base_url=base_url), description)
+
+
+class UnavailablePlannerProvider:
+    def generate(self, description: str) -> PlannerGeneration:
+        raise PlannerProviderError
 
 
 def get_planner_provider() -> PlannerProvider:
-    return OpenAIPlannerProvider()
+    provider = configured_provider_name()
+    if provider == "openai":
+        return OpenAIPlannerProvider()
+    if provider == "deepseek":
+        return DeepSeekPlannerProvider()
+    return UnavailablePlannerProvider()

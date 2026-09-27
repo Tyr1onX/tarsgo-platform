@@ -260,6 +260,8 @@ natural-language requirement
 
 Only allowlisted admins may generate plans. AI access is checked server-side by role, member ID allowlist, enabled flag and server configuration. The provider key never leaves the API container.
 
+Provider selection is configuration-only: AI_PROVIDER=openai or AI_PROVIDER=deepseek. Both must preserve the same PlannerProvider interface and AIPlannerDraft schema. DeepSeek uses the official OpenAI-compatible Responses API with AI_BASE_URL=https://api.deepseek.com. Do not fork the planner business flow by provider.
+
 Generation must remain one model request per explicit Generate / Regenerate action. No agent loop, hidden retry loop, automatic reflection, history, database task dump, RAG or files. Input is capped at 5000 characters, output at 15 assignments / 6 questions and 2200 output tokens, and the official SDK is configured with max_retries=0.
 
 The persistent ai_planner_daily_usage table stores only daily request and aggregate token counts. Never store full planner prompts or generated drafts there.

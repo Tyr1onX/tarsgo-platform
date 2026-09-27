@@ -26,6 +26,8 @@ jobs:
           MYSQL_ROOT_PASSWORD=$MYSQL_ROOT_PASSWORD
           AI_PLANNER_ENABLED=true
           AI_PLANNER_ALLOWED_MEMBER_IDS=1
+          AI_PROVIDER=openai
+          AI_BASE_URL=
           AI_API_KEY=ci-placeholder
           AI_MODEL=ci-placeholder
           EOF
@@ -107,6 +109,9 @@ jobs:
 
       - name: Verify AI planner
         run: docker compose exec -T api python -m tests.test_ai_planner
+
+      - name: Verify AI provider adapters
+        run: docker compose exec -T api python -m tests.test_ai_providers
 
       - name: Restart database
         run: |

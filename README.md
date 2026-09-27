@@ -180,11 +180,20 @@ Production .env adds:
 ~~~text
 AI_PLANNER_ENABLED=true
 AI_PLANNER_ALLOWED_MEMBER_IDS=<comma-separated member ids>
+AI_PROVIDER=openai
+AI_BASE_URL=
 AI_API_KEY=<server-side key>
 AI_MODEL=<structured-output-capable model>
+
+# DeepSeek:
+# AI_PROVIDER=deepseek
+# AI_BASE_URL=https://api.deepseek.com
+# AI_MODEL=deepseek-flash
 ~~~
 
 The repository contains only blank / disabled placeholders. The API key is never sent to the frontend or returned by API responses.
+
+Both OpenAI and DeepSeek adapters use the official OpenAI Python SDK. DeepSeek connects to its official OpenAI-compatible Responses API at https://api.deepseek.com and currently uses the same responses.parse(..., text_format=AIPlannerDraft) structured-output path as OpenAI.
 
 ## Database migration
 
@@ -308,6 +317,7 @@ Coverage includes:
 - mocked one-call structured draft generation without task writes
 - editable draft confirmation and atomic batch rollback
 - persistent AI request/token accounting
+- mocked OpenAI / DeepSeek provider selection, base URL and structured parse path
 
 ## Deliberately deferred
 

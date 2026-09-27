@@ -95,11 +95,14 @@ API key 只存在 API 容器环境变量中，不进入 Git、前端 bundle、AP
 
 ## Provider
 
-当前只接一个 provider：OpenAI 官方 Python SDK。
+当前使用 OpenAI 官方 Python SDK，并支持两个 provider adapter：
 
-使用 Responses API Structured Outputs / Pydantic parsing，让 provider 直接返回 AIPlannerDraft。
+- `AI_PROVIDER=openai`：OpenAI
+- `AI_PROVIDER=deepseek`：DeepSeek OpenAI-compatible API
 
-模型名称完全由 AI_MODEL 环境变量决定，不硬编码型号。当前实现不需要自定义 AI_BASE_URL，因此不增加该配置。
+二者保持同一个 `AIPlannerDraft`、同一套权限、频控和上层业务接口。
+
+DeepSeek 使用 `AI_BASE_URL=https://api.deepseek.com`，模型仍由 `AI_MODEL` 配置，例如 `deepseek-flash`。DeepSeek 官方 Responses API 已支持 `text.format=json_schema`，因此当前 adapter 继续直接使用 `responses.parse(..., text_format=AIPlannerDraft)`；若未来真实 API 兼容性发生变化，fallback 也只能封装在 DeepSeek adapter 内，不能改变上层 schema 或业务流程。
 
 ## 成本控制
 

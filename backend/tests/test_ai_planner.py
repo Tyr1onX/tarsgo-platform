@@ -12,7 +12,15 @@ from app.db import SessionLocal
 from app.models import AIPlannerDailyUsage, Member, Task
 from app.routers import ai_planner as planner_router
 from app.routers import tasks as tasks_router
-from app.schemas import AIPlannerDraft, AIPlannerItemDraft, AIPlannerRequest, AIPlannerTaskDraft, TaskBatchCreate, TaskBatchItemIn
+from app.schemas import (
+    AIPlannerDraft,
+    AIPlannerItemDraft,
+    AIPlannerRequest,
+    AIPlannerTaskDraft,
+    TaskBatchChildIn,
+    TaskBatchCreate,
+    TaskBatchItemIn,
+)
 
 
 class FakeProvider:
@@ -96,7 +104,14 @@ def main() -> None:
         draft.tasks.append(AIPlannerTaskDraft(title="现场直播", deliverable="直播稳定完成并保存回放。", owner_claimable=False, collaboration_open=True))
 
         result = tasks_router.create_task_batch(
-            TaskBatchCreate(item=TaskBatchItemIn(title=draft.item.title, deliverable=draft.item.deliverable, deadline=draft.item.deadline), tasks=draft.tasks),
+            TaskBatchCreate(
+                item=TaskBatchItemIn(
+                    title=draft.item.title,
+                    deliverable=draft.item.deliverable,
+                    deadline=draft.item.deadline,
+                ),
+                tasks=[TaskBatchChildIn.model_validate(task.model_dump()) for task in draft.tasks],
+            ),
             current=admin, db=db,
         )
         assert result.item.owner is not None and result.item.owner.id == admin.id
@@ -109,7 +124,14 @@ def main() -> None:
         rollback_title = "AI 批量事务回滚测试"
         payload = TaskBatchCreate(
             item=TaskBatchItemIn(title=rollback_title, deliverable="不应留下半套数据。", deadline=datetime(2026, 10, 13, 18, 0)),
-            tasks=[AIPlannerTaskDraft(title="第一个分工", deliverable="", owner_claimable=True, collaboration_open=False)],
+            tasks=[
+                TaskBatchChildIn(
+                    title="第一个分工",
+                    deliverable="",
+                    owner_claimable=True,
+                    collaboration_open=False,
+                )
+            ],
         )
         real_build = tasks_router._build_task
         calls = {"count": 0}

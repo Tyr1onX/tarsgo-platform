@@ -52,7 +52,7 @@ Do not introduce Redis, queues, microservices, Kubernetes, a separate API gatewa
 
 Frontend dependencies are locked with package-lock.json; Docker and CI use npm ci.
 
-## Current V0.2 first-stage scope
+## Current V0.2 scope
 
 Implement only:
 
@@ -66,7 +66,7 @@ Implement only:
 
 Do not add a second Activity model. Continue evolving Task.
 
-Do not implement AI APIs, automatic scheduling, time-conflict algorithms, task recommendations, workload algorithms, notifications, comments, files, leave, weekly reports, technical R&D workflows, complex dashboards or complex organization structures in this stage.
+The V0.2 second-stage first slice adds only an allowlisted admin AI draft planner and transactional batch confirmation. Do not expand it into automatic scheduling, member recommendation, time-conflict algorithms, workload algorithms, knowledge retrieval, notifications, comments, files, leave, weekly reports, technical R&D workflows, complex dashboards or complex organization structures.
 
 ## Task model boundary
 
@@ -188,6 +188,7 @@ Current migration chain:
 ~~~text
 0001_v0_1
 -> 0002_operations_claiming
+-> 0003_ai_planner_usage
 ~~~
 
 Migrations must preserve current production rows. Never clear or silently rewrite production data to simplify a schema change.
@@ -207,6 +208,7 @@ app/
 ├── models.py
 ├── schemas.py
 └── routers/
+    ├── ai_planner.py
     ├── auth.py
     ├── invitations.py
     ├── members.py
@@ -219,7 +221,7 @@ Do not add controller/service/repository/facade layers without a concrete bounda
 
 The frontend intentionally has no UI framework, router library or state-management library.
 
-Primary routes are /login, /invite/:token, /, /tasks, /team and /me.
+Primary routes are /login, /invite/:token, /, /tasks, /team and /me. /ai-planner is an allowlisted admin-only workflow entry and must not become a global navigation destination.
 
 Keep one task entry: /tasks.
 
@@ -241,15 +243,32 @@ Mobile is the primary layout. PC uses the same responsive UI.
 
 Do not split App.vue only for stylistic reasons. Do not add a UI framework, Pinia, a router migration, dashboard statistics or decorative controls without a real workflow need.
 
-## AI boundary
+## AI planner boundary
 
-AI is a future structured-advice layer, not a fact source.
+AI is a structured-advice layer, not a fact source.
 
-AI may later propose structured task drafts, granularity, time, dependencies, work estimates, execution guidance and task combinations. Humans must confirm suggestions before they become official work.
+The current implemented flow is:
 
-Database state, permissions, claiming conflicts and deterministic constraints must remain normal backend logic.
+~~~text
+natural-language requirement
+-> one structured AI draft
+-> human edits / removes / adds draft work
+-> backend validation
+-> explicit confirmation
+-> transactional root item + first-level assignments
+~~~
 
-Do not add an AI provider or LLM API in V0.2 first stage.
+Only allowlisted admins may generate plans. AI access is checked server-side by role, member ID allowlist, enabled flag and server configuration. The provider key never leaves the API container.
+
+Generation must remain one model request per explicit Generate / Regenerate action. No agent loop, hidden retry loop, automatic reflection, history, database task dump, RAG or files. Input is capped at 5000 characters, output at 15 assignments / 6 questions and 2200 output tokens, and the official SDK is configured with max_retries=0.
+
+The persistent ai_planner_daily_usage table stores only daily request and aggregate token counts. Never store full planner prompts or generated drafts there.
+
+The AI schema may contain titles, completion standards, a tentative item deadline, owner_claimable, collaboration_open and confirmation questions. It must never contain owner_id or choose real members.
+
+Draft generation never writes Task rows. Only explicit confirmation calls the normal task batch endpoint. The confirming user owns the root item; a child with owner_claimable=true is published ownerless, while a child with owner_claimable=false is temporarily owned by the confirming manager/admin. Database state, permissions and constraints remain deterministic backend logic.
+
+Do not expand this slice into automatic scheduling, member recommendation, workload scoring, conflict detection, dependencies, knowledge retrieval or AI changes to already-published tasks.
 
 ## Change history direction
 
@@ -274,6 +293,7 @@ The V0.2 GitHub Actions workflow runs:
 - real Docker Compose stack
 - seeded V0.1 -> V0.2 migration verification
 - scripts/smoke_test.py workflow
+- mocked backend AI planner tests
 - MySQL restart
 - persistence verification
 

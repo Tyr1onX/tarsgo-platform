@@ -11,7 +11,10 @@ Technical R&D workflows for mechanical, electrical or algorithm teams are not pa
 ## Current workflow
 
 ~~~text
-admin / manager publishes an operations item
+admin may optionally turn a natural-language requirement into an editable AI draft
+-> human edits / deletes / adds draft assignments
+-> confirmation atomically creates one operations item plus first-level assignments
+-> admin / manager may also publish an operations item manually
 -> item may be split into one level of execution tasks over time
 -> owner is assigned directly or opened for claiming
 -> collaborators are assigned directly or may join when collaboration is open
@@ -96,6 +99,7 @@ Historical tasks may continue to reference disabled members. Existing assignment
 - /invite/:token — one-time password setup
 - / — “what do I need to do now?” home view
 - /tasks — single task entry for every role
+- /ai-planner — allowlisted admin-only AI planning workspace; not global navigation
 - /team — admin-only member account management
 - /me — personal information, system role and logout
 
@@ -142,12 +146,54 @@ Member states are invited, active and disabled.
 
 Only active accounts can use task claiming or collaboration APIs because every action requires a valid active session.
 
-## Database migration
+## AI planner
 
-V0.2 adds Alembic revision:
+V0.2 second-stage first slice implements a small planning flow:
 
 ~~~text
-0002_operations_claiming
+natural-language requirement
+-> one structured AI draft
+-> human edits / removes / adds draft assignments
+-> deterministic backend validation
+-> explicit confirmation
+-> one root item + first-level assignments in one transaction
+~~~
+
+The planner is not a chatbot and never writes tasks during generation. It cannot return member IDs or assign real members.
+
+Access requires all of:
+
+- active authenticated user
+- system role admin
+- member ID listed in AI_PLANNER_ALLOWED_MEMBER_IDS
+- AI_PLANNER_ENABLED=true
+- server-side AI_API_KEY and AI_MODEL
+
+The frontend only shows the entry when /api/ai/planner/access says it is available. The planner POST endpoint performs the authoritative checks again.
+
+One Generate action makes exactly one SDK model request. There is no agent loop, automatic reflection, history upload, database task dump, RAG or file upload. Input is capped at 5000 characters, output at 15 assignments / 6 questions and 2200 output tokens. The official OpenAI Python SDK is configured with automatic retries disabled. A persistent per-member UTC-day counter caps planning at 20 attempts per day and stores aggregate input/output/total token usage without storing prompt or draft text.
+
+### AI planner configuration
+
+Production .env adds:
+
+~~~text
+AI_PLANNER_ENABLED=true
+AI_PLANNER_ALLOWED_MEMBER_IDS=<comma-separated member ids>
+AI_API_KEY=<server-side key>
+AI_MODEL=<structured-output-capable model>
+~~~
+
+The repository contains only blank / disabled placeholders. The API key is never sent to the frontend or returned by API responses.
+
+## Database migration
+
+Current Alembic chain:
+
+~~~text
+0001_v0_1
+-> 0002_operations_claiming
+-> 0003_ai_planner_usage
 ~~~
 
 It upgrades the existing V0.1 tasks table without deleting data:
@@ -257,12 +303,18 @@ Coverage includes:
 - disabled-member blocking
 - database restart persistence
 - V0.1 legacy-data migration
+- AI planner admin + allowlist authorization
+- missing AI configuration and overlong input
+- mocked one-call structured draft generation without task writes
+- editable draft confirmation and atomic batch rollback
+- persistent AI request/token accounting
 
 ## Deliberately deferred
 
 V0.2 first stage does **not** implement:
 
-- AI API / LLM provider
+- AI automatic scheduling
+- AI member selection / personnel recommendation
 - automatic scheduling
 - time-conflict calculation
 - task recommendation algorithms

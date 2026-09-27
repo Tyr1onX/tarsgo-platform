@@ -1,50 +1,4 @@
-name: V0.2 validation
-
-on:
-  push:
-    branches:
-      - main
-  pull_request:
-
-jobs:
-  validate:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Create runtime environment
-        run: |
-          MYSQL_PASSWORD="$(openssl rand -hex 18)"
-          MYSQL_ROOT_PASSWORD="$(openssl rand -hex 18)"
-          ADMIN_PASSWORD="$(openssl rand -hex 18)"
-          cat > .env <<EOF
-          APP_DOMAIN=:80
-          SESSION_COOKIE_SECURE=false
-          MYSQL_DATABASE=tarsgo
-          MYSQL_USER=tarsgo
-          MYSQL_PASSWORD=$MYSQL_PASSWORD
-          MYSQL_ROOT_PASSWORD=$MYSQL_ROOT_PASSWORD
-          AI_PLANNER_ENABLED=true
-          AI_PLANNER_ALLOWED_MEMBER_IDS=1
-          AI_PROVIDER=openai
-          AI_BASE_URL=
-          AI_API_KEY=ci-placeholder
-          AI_MODEL=ci-placeholder
-          EOF
-          echo "CI_ADMIN_PASSWORD=$ADMIN_PASSWORD" >> "$GITHUB_ENV"
-          echo "CI_MYSQL_PASSWORD=$MYSQL_PASSWORD" >> "$GITHUB_ENV"
-          echo "CI_MYSQL_ROOT_PASSWORD=$MYSQL_ROOT_PASSWORD" >> "$GITHUB_ENV"
-
-      - name: Build frontend
-        run: |
-          cd frontend
-          npm ci
-          npm run build
-
-      - name: Build and start
-        run: docker compose up -d --build
-
-      - name: Wait for application
+YªçŠx-®éÜj×¢ëiºÚ+Š§j[h‘éÜ¢éí×M5N‹Z–‹­¦ëeŠw¬Õ¹…µ”èXÀ¸ÈÙ…±¥‘…Ñ¥½¸()½¸è(€ÁÕÍ è(€€€‰É…¹¡•Ìè(€€€€€€´µ…¥¸(€ÁÕ±±}É•ÅÕ•ÍÐè()©½‰Ìè(€Ù…±¥‘…Ñ”è(€€€ÉÕ¹Ìµ½¸èÕ‰Õ¹ÑÔµ±…Ñ•ÍÐ(€€€ÍÑ•ÁÌè(€€€€€€´ÕÍ•Ìè…Ñ¥½¹Ì½¡•­½ÕÑØÐ((€€€€€€´¹…µ”èÉ•…Ñ”ÉÕ¹Ñ¥µ”•¹Ù¥É½¹µ•¹Ð(€€€€€€€ÉÕ¸èð(€€€€€€€€€5eME1}AMM]=Iôˆ¡½Á•¹ÍÍ°É…¹€µ¡•à€Äà¤ˆ(€€€€€€€€€5eME1}I==Q}AMM]=Iôˆ¡½Á•¹ÍÍ°É…¹€µ¡•à€Äà¤ˆ(€€€€€€€€€5%9}AMM]=Iôˆ¡½Á•¹ÍÍ°É…¹€µ¡•à€Äà¤ˆ(€€€€€€€€€…Ð€ø€¹•¹Ø€ðñ=(€€€€€€€€€AA}=5%8ôèàÀ(€€€€€€€€€MMM%=9}==-%}MUIõ™…±Í”(€€€€€€€€€5eME1}Q	MõÑ…ÉÍ¼(€€€€€€€€€5eME1}UMHõÑ…ÉÍ¼(€€€€€€€€€5eME1}AMM]=Iô‘5eME1}AMM]=I(€€€€€€€€€5eME1}I==Q}AMM]=Iô‘5eME1}I==Q}AMM]=I(€€€€€€€€€%}A199I}9	1õÑÉÕ”(€€€€€€€€€%}A199I}11=]}55	I}%LôÄ(€€€€€€€€€%}AI=Y%Hõ½Á•¹…¤(€€€€€€€€€%}	M}UI0ô(€€€€€€€€€%}A%}-dõ¤µÁ±…•¡½±‘•È(€€€€€€€€€%}5=0õ¤µÁ±…•¡½±‘•È(€€€€€€€€€-9=]1}9	1õÑÉÕ”(€€€€€€€€€-9=]1}%Q!U	}IA<ô(€€€€€€€€€-9=]1}%Q!U	}	I9 õµ…¥¸(€€€€€€€€€-9=]1}%Q!U	}Q=-8ô(€€€€€€€€€-9=]1}%Q!U	}AQ!Lõ‘½Ì±­¹½Ý±•‘”(€€€€€€€€€-9=]1}MQ=I}!=MQ}%Hô½ÑµÀ½Ñ…ÉÍ¼µ­¹½Ý±•‘”µ¤(€€€€€€€€€=(€€€€€€€€€•¡¼€‰%}5%9}AMM]=Iô‘5%9}AMM]=Iˆ€øø€ˆ‘%Q!U	}9Xˆ(€€€€€€€€€•¡¼€‰%}5eME1}AMM]=Iô‘5eME1}AMM]=Iˆ€øø€ˆ‘%Q!U	}9Xˆ(€€€€€€€€€•¡¼€‰%}5eME1}I==Q}AMM]=Iô‘5eME1}I==Q}AMM]=Iˆ€øø€ˆ‘%Q!U	}9Xˆ((€€€€€€´¹…µ”è	Õ¥±™É½¹Ñ•¹(€€€€€€€ÉÕ¸èð(€€€€€€€€€™É½¹Ñ•¹(€€€€€€€€€¹Á´¤(€€€€€€€€€¹Á´ÉÕ¸‰Õ¥±((€€€€€€´¹…µ”è	Õ¥±…¹ÍÑ…ÉÐ(€€€€€€€ÉÕ¸è‘½­•È½µÁ½Í”ÕÀ€µ€´µ‰Õ¥±((€€€€€€´¹…µ”è]…§[h‘éì¶»§q«^t for application
         run: |
           curl --retry 30 --retry-delay 2 --retry-all-errors -fsS http://127.0.0.1/api/health
           curl -fsS http://127.0.0.1/login | grep -q 'id="app"'
@@ -112,6 +66,9 @@ jobs:
 
       - name: Verify AI provider adapters
         run: docker compose exec -T api python -m tests.test_ai_providers
+
+      - name: Verify knowledge sources and planner context
+        run: docker compose exec -T api python -m tests.test_knowledge
 
       - name: Restart database
         run: |

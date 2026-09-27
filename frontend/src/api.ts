@@ -1,62 +1,4 @@
-import type {
-  AIPlannerAccess,
-  AIPlannerDraft,
-  InvitationInfo,
-  InviteResult,
-  Member,
-  MemberSummary,
-  Role,
-  Task,
-  TaskBatchPayload,
-  TaskBatchResult,
-  TaskStatus,
-  TaskView,
-} from "./types"
-
-export class ApiError extends Error {
-  status: number
-  constructor(status: number, message: string) {
-    super(message)
-    this.status = status
-  }
-}
-
-async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, {
-    ...init,
-    headers: {
-      ...(init?.body ? { "Content-Type": "application/json" } : {}),
-      ...init?.headers,
-    },
-  })
-  if (!response.ok) {
-    let message = "Êìç‰ΩúÂ§±Ë¥•"
-    try {
-      const data = (await response.json()) as { detail?: string }
-      if (data.detail) message = data.detail
-    } catch {}
-    throw new ApiError(response.status, message)
-  }
-  if (response.status === 204) return undefined as T
-  return response.json() as Promise<T>
-}
-
-export interface TaskPayload {
-  title: string
-  deliverable?: string
-  owner_id: number | null
-  owner_claimable: boolean
-  collaborator_ids: number[]
-  collaboration_open: boolean
-  parent_id?: number | null
-  deadline: string
-  status: TaskStatus
-}
-
-export const api = {
-  me: () => request<Member>("/api/auth/me"),
-  login: (email: string, password: string) =>
-    request<Member>("/api/auth/login", { method: "POST", body: JSON.stringify({ email, password }) }),
+Y™Áäx-ÆÈ‹j◊ù¢Îi∫⁄+äßj[hëÈ‹¢ÈÌ◊M5NãZñã≠¶Îeäw¨’•µ¡Ω…–Å—Â¡îÅÏ(ÄÅ%A±Öππï…ççïÕÃ∞(ÄÅ%A±Öππï……Öô–∞(ÄÅ%A±Öππï…%π¡’–∞(ÄÅ%πŸ•—Ö—•Ωπ%πôº∞(ÄÅ%πŸ•—ïIïÕ’±–∞(ÄÅ5ïµâï»∞(ÄÅ5ïµâï…M’µµÖ…‰∞(ÄÅ-πΩ›±ïëùïΩç’µïπ–∞(ÄÅ-πΩ›±ïëùï=¡—•Ω∏∞(ÄÅ-πΩ›±ïëùïMÂπçM’µµÖ…‰∞(ÄÅIΩ±î∞(ÄÅQÖÕ¨∞(ÄÅQÖÕ≠	Ö—ç°AÖÂ±ΩÖê∞(ÄÅQÖÕ≠	Ö—ç°IïÕ’±–∞(ÄÅQÖÕ≠M—Ö—’Ã∞(ÄÅQÖÕ≠Y•ï‹∞)ÙÅô…Ω¥Äà∏Ω—Â¡ïÃà()ï·¡Ω…–Åç±ÖÕÃÅ¡•……Ω»Åï·—ïπëÃÅ……Ω»ÅÏ(ÄÅÕ—Ö—’ÃËÅπ’µâï»(ÄÅçΩπÕ—…’ç—Ω»°Õ—Ö—’ÃËÅπ’µâï»∞ÅµïÕÕÖùîËÅÕ—…•πú§ÅÏ(ÄÄÄÅÕ’¡ï»°µïÕÕÖùî§(ÄÄÄÅ—°•ÃπÕ—Ö—’ÃÄÙÅÕ—Ö—’Ã(ÄÅÙ)Ù()ÖÕÂπåÅô’πç—•Ω∏Å…ï≈’ïÕ–ÒP¯°’…∞ËÅÕ—…•πú∞Å•π•–¸ËÅIï≈’ïÕ—%π•–§ËÅA…Ωµ•ÕîÒP¯ÅÏ(ÄÅçΩπÕ–Å…ïÕ¡ΩπÕîÄÙÅÖ›Ö•–Åôï—ç†°’…∞∞ÅÏ(ÄÄÄÄ∏∏π•π•–∞(ÄÄÄÅ°ïÖëï…ÃËÅÏ(ÄÄÄÄÄÄ∏∏∏°•π•–¸πâΩë‰ÄòòÄÑ°—Â¡ïΩòÅΩ…µÖ—ÑÄÑÙÙÄâ’πëïô•πïêàÄòòÅ•π•–πâΩë‰Å•πÕ—ÖπçïΩòÅΩ…µÖ—Ñ§(ÄÄÄÄÄÄÄÄ¸ÅÏÄâΩπ—ïπ–µQÂ¡îàËÄâÖ¡¡±•çÖ—•Ω∏Ω©ÕΩ∏àÅÙ(ÄÄÄÄÄÄÄÄËÅÌÙ§∞(ÄÄÄÄÄÄ∏∏π•π•–¸π°ïÖëï…Ã∞(ÄÄÄÅÙ∞(ÄÅÙ§(ÄÅ•òÄ†Ö…ïÕ¡ΩπÕîπΩ¨§ÅÏ(ÄÄÄÅ±ï–ÅµïÕÕÖùîÄÙÄãöN7íˆsñí«¢“îà(ÄÄÄÅ—…‰ÅÏ(ÄÄÄÄÄÅçΩπÕ–ÅëÖ—ÑÄÙÄ°Ö›Ö•–Å…ïÕ¡ΩπÕîπ©ÕΩ∏†§§ÅÖÃÅÏÅëï—Ö•∞¸ËÅÕ—…•πúÅÙ(ÄÄÄÄÄÅ•òÄ°ëÖ—Ñπëï—Ö•∞§ÅµïÕÕÖùîÄÙÅëÖ—Ñπëï—Ö•∞(ÄÄÄÅÙÅçÖ—ç†ÅÌÙ(ÄÄÄÅ—°…Ω‹Åπï‹Å¡•……Ω»°…ïÕ¡ΩπÕîπÕ—Ö—’Ã∞ÅµïÕÕÖùî§(ÄÅÙ(ÄÅ•òÄ°…ïÕ¡ΩπÕîπÕ—Ö—’ÃÄÙÙÙÄ»¿–§Å…ï—’…∏Å’πëïô•πïêÅÖÃÅP(ÄÅ…ï—’…∏Å…ïÕ¡ΩπÕîπ©ÕΩ∏†§ÅÖÃÅA…Ωµ•ÕîÒP¯)Ù()ï·¡Ω…–Å•π—ï…ôÖçîÅQÖÕ≠AÖÂ±ΩÖêÅÏ(ÄÅ—•—±îËÅÕ—…•πú(ÄÅëï±•Ÿï…Öâ±î¸ËÅÕ—…•πú(ÄÅΩ›πï…}•êËÅπ’µâï»ÅÅπ’±∞(ÄÅΩ›πï…}ç±Ö•µÖâ±îËÅâΩΩ±ïÖ∏(ÄÅçΩ±±ÖâΩ…Ö—Ω…}•ëÃËÅπ’µâï…mt(ÄÅçΩ±±ÖâΩ…Ö—•Ωπ}Ω¡ï∏ËÅâΩΩ±ïÖ∏(ÄÅ¡Ö…ïπ—}•ê¸ËÅπ’µâï»ÅÅπ’±∞(ÄÅëïÖë±•πîËÅÕ—…•πú(ÄÅÕ—Ö—’ÃËÅQÖÕ≠M—Ö—’Ã)Ù()ï·¡Ω…–ÅçΩπÕ–ÅÖ¡§ÄÙÅÏ(ÄÅµîËÄ†§ÄÙ¯Å…ï≈’ïÕ–Ò5ïµâï»¯†àΩÖ¡§ΩÖ’—†Ωµîà§∞(ÄÅ±Ωù•∏ËÄ°ïµÖ•∞ËÅÕ—…•πú∞Å¡ÖÕÕ›Ω…êËÅÕ—…•πú§ÄÙ¯(ÄÄÄÅ…ï≈’ïÕ–Ò5ïµâó[hëÈÏ∂ªßq´^v>("/api/auth/login", { method: "POST", body: JSON.stringify({ email, password }) }),
   logout: () => request<void>("/api/auth/logout", { method: "POST" }),
 
   invitation: (token: string) => request<InvitationInfo>(`/api/invitations/${encodeURIComponent(token)}`),
@@ -77,11 +19,23 @@ export const api = {
   enableMember: (memberId: number) => request<Member>(`/api/members/${memberId}/enable`, { method: "POST" }),
 
   aiPlannerAccess: () => request<AIPlannerAccess>("/api/ai/planner/access"),
-  generateAIPlan: (description: string) =>
+  generateAIPlan: (payload: AIPlannerInput) =>
     request<AIPlannerDraft>("/api/ai/planner", {
       method: "POST",
-      body: JSON.stringify({ description }),
+      body: JSON.stringify(payload),
     }),
+
+  knowledgeDocuments: () => request<KnowledgeDocument[]>("/api/knowledge"),
+  knowledgeOptions: () => request<KnowledgeOption[]>("/api/knowledge/options"),
+  syncGitHubKnowledge: () =>
+    request<KnowledgeSyncSummary>("/api/knowledge/sync/github", { method: "POST" }),
+  uploadKnowledgeDocument: (file: File) => {
+    const form = new FormData()
+    form.append("file", file)
+    return request<KnowledgeDocument>("/api/knowledge/uploads", { method: "POST", body: form })
+  },
+  deleteKnowledgeDocument: (documentId: number) =>
+    request<void>(`/api/knowledge/${documentId}`, { method: "DELETE" }),
 
   taskAssignees: () => request<MemberSummary[]>("/api/tasks/assignees"),
   tasks: (scope: TaskView = "mine") => request<Task[]>(`/api/tasks?scope=${scope}`),

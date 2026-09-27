@@ -170,9 +170,17 @@ class AIPlannerItemDraft(BaseModel):
     deliverable: str = Field(max_length=1000)
     deadline: datetime | None
 
-    @field_validator("title", "deliverable")
+    @field_validator("title")
     @classmethod
-    def strip_item_text(cls, value: str) -> str:
+    def strip_item_title(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("事项标题不能为空")
+        return value
+
+    @field_validator("deliverable")
+    @classmethod
+    def strip_item_deliverable(cls, value: str) -> str:
         return value.strip()
 
 
@@ -183,9 +191,17 @@ class AIPlannerTaskDraft(BaseModel):
     owner_claimable: bool
     collaboration_open: bool
 
-    @field_validator("title", "deliverable")
+    @field_validator("title")
     @classmethod
-    def strip_task_text(cls, value: str) -> str:
+    def strip_task_title(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("分工标题不能为空")
+        return value
+
+    @field_validator("deliverable")
+    @classmethod
+    def strip_task_deliverable(cls, value: str) -> str:
         return value.strip()
 
 
@@ -219,9 +235,17 @@ class TaskBatchItemIn(BaseModel):
     deliverable: str = Field(default="", max_length=5000)
     deadline: datetime
 
-    @field_validator("title", "deliverable")
+    @field_validator("title")
     @classmethod
-    def strip_batch_item_text(cls, value: str) -> str:
+    def strip_batch_item_title(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("事项标题不能为空")
+        return value
+
+    @field_validator("deliverable")
+    @classmethod
+    def strip_batch_item_deliverable(cls, value: str) -> str:
         return value.strip()
 
 
@@ -232,9 +256,17 @@ class TaskBatchChildIn(BaseModel):
     owner_claimable: bool = True
     collaboration_open: bool = False
 
-    @field_validator("title", "deliverable")
+    @field_validator("title")
     @classmethod
-    def strip_batch_child_text(cls, value: str) -> str:
+    def strip_batch_child_title(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("分工标题不能为空")
+        return value
+
+    @field_validator("deliverable")
+    @classmethod
+    def strip_batch_child_deliverable(cls, value: str) -> str:
         return value.strip()
 
 

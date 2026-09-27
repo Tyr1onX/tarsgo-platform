@@ -193,7 +193,7 @@ AI_MODEL=<structured-output-capable model>
 
 The repository contains only blank / disabled placeholders. The API key is never sent to the frontend or returned by API responses.
 
-Both OpenAI and DeepSeek adapters use the official OpenAI Python SDK. DeepSeek connects to its official OpenAI-compatible Responses API at https://api.deepseek.com and currently uses the same responses.parse(..., text_format=AIPlannerDraft) structured-output path as OpenAI.
+Both OpenAI and DeepSeek adapters use the official OpenAI Python SDK. OpenAI keeps using responses.parse(..., text_format=AIPlannerDraft). DeepSeek connects to its official OpenAI-compatible Responses API at https://api.deepseek.com but uses one responses.create request with text.format.type=json_schema, strict=true and AIPlannerDraft.model_json_schema(), then validates response.output_text locally with json.loads() and AIPlannerDraft.model_validate(). There is no parse-then-create fallback, so one Generate action still performs exactly one model request.
 
 ## Database migration
 
@@ -317,7 +317,7 @@ Coverage includes:
 - mocked one-call structured draft generation without task writes
 - editable draft confirmation and atomic batch rollback
 - persistent AI request/token accounting
-- mocked OpenAI / DeepSeek provider selection, base URL and structured parse path
+- mocked OpenAI parse path and DeepSeek create + json_schema + Pydantic validation path
 
 ## Deliberately deferred
 

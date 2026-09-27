@@ -1,9 +1,11 @@
+import json
 import os
 from dataclasses import dataclass
 from datetime import date
 from typing import Protocol
 
 from openai import APIConnectionError, APIError, APITimeoutError, OpenAI, RateLimitError
+from pydantic import ValidationError
 
 from .schemas import AIPlannerDraft
 
@@ -71,7 +73,17 @@ def _client(*, base_url: str | None = None) -> OpenAI:
     return OpenAI(**kwargs)
 
 
-def _generate_structured(client: OpenAI, description: str) -> PlannerGeneration:
+def _generation_from_response(response, draft: AIPlannerDraft) -> PlannerGeneration:
+    usage = response.usage
+    return PlannerGeneration(
+        draft=draft,
+        input_tokens=int(getattr(usage, "input_tokens", 0) or 0),
+        output_tokens=int(getattr(usage, "output_tokens", 0) or 0),
+        total_tokens=int(getattr(usage, "total_tokens", 0) or 0),
+    )
+
+
+def _generate_openai_structured(client: OpenAI, description: str) -> PlannerGeneration:
     try:
         response = client.responses.parse(
             model=os.environ["AI_MODEL"],
@@ -94,25 +106,57 @@ def _generate_structured(client: OpenAI, description: str) -> PlannerGeneration:
     if draft is None:
         raise PlannerInvalidResponse
 
-    usage = response.usage
-    return PlannerGeneration(
-        draft=draft,
-        input_tokens=int(getattr(usage, "input_tokens", 0) or 0),
-        output_tokens=int(getattr(usage, "output_tokens", 0) or 0),
-        total_tokens=int(getattr(usage, "total_tokens", 0) or 0),
-    )
+    return _generation_from_response(response, draft)
+
+
+def _generate_deepseek_structured(client: OpenAI, description: str) -> PlannerGeneration:
+    try:
+        response = client.responses.create(
+            model=os.environ["AI_MODEL"],
+            instructions=SYSTEM_PROMPT,
+            input=f"今天日期：{date.today().isoformat()}\n负责人描述：\n{description}",
+            text={
+                "format": {
+                    "type": "json_schema",
+                    "name": "ai_planner_draft",
+                    "strict": True,
+                    "schema": AIPlannerDraft.model_json_schema(),
+                }
+            },
+            max_output_tokens=MAX_OUTPUT_TOKENS,
+            store=False,
+        )
+    except APITimeoutError as exc:
+        raise PlannerTimeoutError from exc
+    except RateLimitError as exc:
+        raise PlannerRateLimitError from exc
+    except (APIConnectionError, APIError) as exc:
+        raise PlannerProviderError from exc
+
+    try:
+        output_text = response.output_text
+        if not output_text:
+            raise PlannerInvalidResponse
+        payload = json.loads(output_text)
+        draft = AIPlannerDraft.model_validate(payload)
+    except PlannerInvalidResponse:
+        raise
+    except (json.JSONDecodeError, ValidationError, TypeError, AttributeError) as exc:
+        raise PlannerInvalidResponse from exc
+
+    return _generation_from_response(response, draft)
 
 
 class OpenAIPlannerProvider:
     def generate(self, description: str) -> PlannerGeneration:
         base_url = os.getenv("AI_BASE_URL", "").strip() or None
-        return _generate_structured(_client(base_url=base_url), description)
+        return _generate_openai_structured(_client(base_url=base_url), description)
 
 
 class DeepSeekPlannerProvider:
     def generate(self, description: str) -> PlannerGeneration:
         base_url = os.getenv("AI_BASE_URL", "").strip() or DEEPSEEK_DEFAULT_BASE_URL
-        return _generate_structured(_client(base_url=base_url), description)
+        return _generate_deepseek_structured(_client(base_url=base_url), description)
 
 
 class UnavailablePlannerProvider:

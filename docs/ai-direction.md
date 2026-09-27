@@ -102,7 +102,18 @@ API key 只存在 API 容器环境变量中，不进入 Git、前端 bundle、AP
 
 二者保持同一个 `AIPlannerDraft`、同一套权限、频控和上层业务接口。
 
-DeepSeek 使用 `AI_BASE_URL=https://api.deepseek.com`，模型仍由 `AI_MODEL` 配置，例如 `deepseek-flash`。DeepSeek 官方 Responses API 已支持 `text.format=json_schema`，因此当前 adapter 继续直接使用 `responses.parse(..., text_format=AIPlannerDraft)`；若未来真实 API 兼容性发生变化，fallback 也只能封装在 DeepSeek adapter 内，不能改变上层 schema 或业务流程。
+DeepSeek 使用 `AI_BASE_URL=https://api.deepseek.com`，模型仍由 `AI_MODEL` 配置，例如 `deepseek-flash`。
+
+真实兼容性验证显示：普通 Responses API 可用，但 `responses.parse(..., text_format=AIPlannerDraft)` 返回的 `output_parsed` 为空。因此 DeepSeek adapter 不再调用 `responses.parse`，而是从第一次请求开始直接使用一次 `responses.create`：
+
+- `text.format.type=json_schema`
+- `strict=true`
+- `schema=AIPlannerDraft.model_json_schema()`
+- 读取 `response.output_text`
+- `json.loads(...)`
+- `AIPlannerDraft.model_validate(...)`
+
+空输出、非法 JSON 或 Pydantic 校验失败统一视为无效模型响应。不会先尝试 parse 再 fallback 到 create，因此一次生成仍然只发生一次模型 API 请求。OpenAI provider 不受影响，继续使用 `responses.parse(..., text_format=AIPlannerDraft)`。
 
 ## 成本控制
 

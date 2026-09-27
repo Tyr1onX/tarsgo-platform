@@ -21,6 +21,7 @@ def main() -> None:
                 "schema_valid": True,
                 "task_count": len(generation.draft.tasks),
                 "question_count": len(generation.draft.questions),
+                "model_calls": 1,
                 "usage": {
                     "input_tokens": generation.input_tokens,
                     "output_tokens": generation.output_tokens,

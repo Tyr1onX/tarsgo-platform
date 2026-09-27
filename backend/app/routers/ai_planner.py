@@ -19,7 +19,7 @@ from ..auth import get_current_member
 from ..db import get_db
 from ..knowledge import KnowledgeContext, build_planner_context, planner_input_text
 from ..models import AIPlannerDailyUsage, Member
-from ..schemas import AIPlannerAccessOut, AIPlannerDraft, AIPlannerRequest
+from ..schemas import AIPlannerAccessOut, AIPlannerDraft, AIPlannerGenerateOut, AIPlannerRequest, KnowledgeReferenceOut
 
 router = APIRouter(prefix="/api/ai/planner", tags=["ai-planner"])
 logger = logging.getLogger(__name__)
@@ -116,13 +116,13 @@ def planner_access(current: Member = Depends(get_current_member)) -> AIPlannerAc
     return AIPlannerAccessOut(available=_has_access(current))
 
 
-@router.post("", response_model=AIPlannerDraft)
+@router.post("", response_model=AIPlannerGenerateOut)
 def generate_plan(
     payload: AIPlannerRequest,
     current: Member = Depends(get_current_member),
     db: Session = Depends(get_db),
     provider: PlannerProvider = Depends(get_planner_provider),
-) -> AIPlannerDraft:
+) -> AIPlannerGenerateOut:
     _require_planner_access(current)
     try:
         context = build_planner_context(
@@ -131,6 +131,7 @@ def generate_plan(
             item_title=payload.item_title,
             current_event_context=payload.current_event_context,
             current_event_document_ids=payload.current_event_document_ids,
+            excluded_historical_document_ids=payload.excluded_historical_document_ids,
         )
     except Exception as exc:
         db.rollback()
@@ -160,4 +161,14 @@ def generate_plan(
         db.rollback()
         logger.warning("AI planner token accounting failed member_id=%s", current.id)
 
-    return generation.draft
+    return AIPlannerGenerateOut(
+        draft=generation.draft,
+        current_event_documents=[
+            KnowledgeReferenceOut.model_validate(reference.__dict__)
+            for reference in context.current_event_documents
+        ],
+        historical_documents=[
+            KnowledgeReferenceOut.model_validate(reference.__dict__)
+            for reference in context.historical_documents
+        ],
+    )

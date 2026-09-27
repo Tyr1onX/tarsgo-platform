@@ -8,7 +8,7 @@ import type {
   InvitationInfo,
   InviteResult,
   KnowledgeDocument,
-  KnowledgeOption,
+  KnowledgeReference,
   KnowledgeSyncSummary,
   Member,
   MemberSummary,
@@ -42,9 +42,15 @@ const aiPlannerAvailable = ref(false)
 const plannerDescription = ref("")
 const plannerItemTitle = ref("")
 const plannerCurrentContext = ref("")
-const plannerKnowledgeOptions = ref<KnowledgeOption[]>([])
-const plannerKnowledgeIds = ref<number[]>([])
+const plannerCurrentDocuments = ref<KnowledgeReference[]>([])
+const plannerKnowledgeSearchOpen = ref(false)
+const plannerKnowledgeSearchQuery = ref("")
+const plannerKnowledgeSearchResults = ref<KnowledgeReference[]>([])
+const plannerKnowledgeSearchBusy = ref(false)
+const plannerKnowledgeSearchError = ref("")
 const plannerDraft = ref<AIPlannerDraft | null>(null)
+const plannerHistoricalDocuments = ref<KnowledgeReference[]>([])
+const plannerExcludedHistoricalIds = ref<number[]>([])
 const plannerGenerating = ref(false)
 const plannerPublishing = ref(false)
 const knowledgeDocuments = ref<KnowledgeDocument[]>([])
@@ -243,15 +249,6 @@ async function loadPlannerAccess() {
   }
 }
 
-async function loadPlannerKnowledgeOptions() {
-  plannerKnowledgeOptions.value = []
-  try {
-    plannerKnowledgeOptions.value = await api.knowledgeOptions()
-  } catch {
-    // Knowledge lookup is optional; planner generation remains available.
-  }
-}
-
 async function loadKnowledgeDocuments() {
   knowledgeDocuments.value = await api.knowledgeDocuments()
 }
@@ -320,7 +317,6 @@ async function loadRoute() {
         navigate("/")
         return
       }
-      await loadPlannerKnowledgeOptions()
     } else if (path.value === "/knowledge") {
       if (!isAdmin.value) {
         navigate("/")
@@ -562,6 +558,57 @@ function startAIPlanner() {
   navigate("/ai-planner")
 }
 
+function knowledgeReferenceTitle(document: KnowledgeReference) {
+  return document.title.trim() || document.source_name
+}
+
+function knowledgeReferenceSource(document: KnowledgeReference) {
+  return document.source_label
+}
+
+async function searchPlannerKnowledge() {
+  const query = plannerKnowledgeSearchQuery.value.trim()
+  plannerKnowledgeSearchError.value = ""
+  plannerKnowledgeSearchResults.value = []
+  if (!query) {
+    plannerKnowledgeSearchError.value = "请输入标题、路径或来源名称进行搜索。"
+    return
+  }
+  plannerKnowledgeSearchBusy.value = true
+  try {
+    plannerKnowledgeSearchResults.value = await api.searchKnowledge(query)
+    if (!plannerKnowledgeSearchResults.value.length) plannerKnowledgeSearchError.value = "没有找到匹配的资料。"
+  } catch (reason) {
+    plannerKnowledgeSearchError.value = messageOf(reason)
+  } finally {
+    plannerKnowledgeSearchBusy.value = false
+  }
+}
+
+function addPlannerCurrentDocument(document: KnowledgeReference) {
+  if (plannerCurrentDocuments.value.some((entry) => entry.id === document.id)) return
+  if (plannerCurrentDocuments.value.length >= 5) {
+    plannerKnowledgeSearchError.value = "本次最多添加 5 份资料。"
+    return
+  }
+  plannerCurrentDocuments.value.push(document)
+  plannerKnowledgeSearchError.value = ""
+}
+
+function removePlannerCurrentDocument(documentId: number) {
+  plannerCurrentDocuments.value = plannerCurrentDocuments.value.filter((document) => document.id !== documentId)
+}
+
+function toggleHistoricalExclusion(documentId: number) {
+  plannerExcludedHistoricalIds.value = plannerExcludedHistoricalIds.value.includes(documentId)
+    ? plannerExcludedHistoricalIds.value.filter((id) => id !== documentId)
+    : [...plannerExcludedHistoricalIds.value, documentId]
+}
+
+const plannerExclusionsPending = computed(() =>
+  Boolean(plannerDraft.value && plannerExcludedHistoricalIds.value.length),
+)
+
 function newPlannerTask(): AIPlannerTaskDraft {
   return {
     title: "",
@@ -589,14 +636,18 @@ async function generateAIPlan() {
   error.value = ""
   plannerGenerating.value = true
   try {
-    const draft = await api.generateAIPlan({
+    const result = await api.generateAIPlan({
       description,
       item_title: plannerItemTitle.value.trim() || undefined,
       current_event_context: plannerCurrentContext.value.trim() || undefined,
-      current_event_document_ids: plannerKnowledgeIds.value,
+      current_event_document_ids: plannerCurrentDocuments.value.map((document) => document.id),
+      excluded_historical_document_ids: plannerExcludedHistoricalIds.value,
     })
+    const draft = result.draft
     if (draft.item.deadline) draft.item.deadline = toLocalInput(draft.item.deadline)
     plannerDraft.value = draft
+    plannerHistoricalDocuments.value = result.historical_documents
+    plannerExcludedHistoricalIds.value = []
   } catch (reason) {
     error.value = messageOf(reason)
   } finally {
@@ -640,7 +691,9 @@ async function publishAIPlan() {
     plannerDescription.value = ""
     plannerItemTitle.value = ""
     plannerCurrentContext.value = ""
-    plannerKnowledgeIds.value = []
+    plannerCurrentDocuments.value = []
+    plannerHistoricalDocuments.value = []
+    plannerExcludedHistoricalIds.value = []
     notice.value = `已创建事项和 ${result.tasks.length} 个分工`
     navigateTasks("all")
   } catch (reason) {
@@ -656,7 +709,6 @@ async function syncGitHubKnowledge() {
   try {
     knowledgeSyncSummary.value = await api.syncGitHubKnowledge()
     await loadKnowledgeDocuments()
-    await loadPlannerKnowledgeOptions()
   } catch (reason) {
     error.value = messageOf(reason)
   } finally {
@@ -673,7 +725,6 @@ async function uploadKnowledgeFile(event: Event) {
   try {
     await api.uploadKnowledgeDocument(file)
     await loadKnowledgeDocuments()
-    await loadPlannerKnowledgeOptions()
     notice.value = `已添加资料：${file.name}`
   } catch (reason) {
     error.value = messageOf(reason)
@@ -688,9 +739,8 @@ async function removeKnowledgeDocument(document: KnowledgeDocument) {
   error.value = ""
   try {
     await api.deleteKnowledgeDocument(document.id)
-    plannerKnowledgeIds.value = plannerKnowledgeIds.value.filter((id) => id !== document.id)
+    removePlannerCurrentDocument(document.id)
     await loadKnowledgeDocuments()
-    await loadPlannerKnowledgeOptions()
   } catch (reason) {
     error.value = messageOf(reason)
   }
@@ -1005,6 +1055,8 @@ onBeforeUnmount(() => window.removeEventListener("popstate", handlePopState))
           </label>
           <div class="current-event-materials">
             <h2>补充本次活动资料（可选）</h2>
+            <small class="muted">系统会自动参考相关团队资料和历史经验，但自动关联资料只作为历史参考。</small>
+            <small class="muted">只有你在这里粘贴或明确添加的资料，才会作为本次事项事实提供给 Planner。</small>
             <label>
               本次活动通知、安排、时间地点等
               <textarea
@@ -1014,14 +1066,43 @@ onBeforeUnmount(() => window.removeEventListener("popstate", handlePopState))
                 placeholder="粘贴本次活动已经确认的资料。这里的内容优先于团队历史经验。"
               />
             </label>
-            <fieldset v-if="plannerKnowledgeOptions.length" class="knowledge-picker">
-              <legend>选择已上传资料作为本次事项资料</legend>
-              <label v-for="option in plannerKnowledgeOptions" :key="option.id" class="check-row">
-                <input v-model="plannerKnowledgeIds" type="checkbox" :value="option.id" :disabled="!plannerKnowledgeIds.includes(option.id) && plannerKnowledgeIds.length >= 5" />
-                {{ option.title }} <small class="muted">{{ option.source_name }}</small>
-              </label>
-            </fieldset>
-            <small class="muted">系统还会自动参考相关团队资料和历史经验。选作本次资料的文件不会因此复制进长期知识库。</small>
+            <div class="knowledge-add">
+              <button class="secondary" type="button" @click="plannerKnowledgeSearchOpen = !plannerKnowledgeSearchOpen">
+                {{ plannerKnowledgeSearchOpen ? "收起资料搜索" : "添加本次事项资料" }}
+              </button>
+              <form v-if="plannerKnowledgeSearchOpen" class="knowledge-search" @submit.prevent="searchPlannerKnowledge">
+                <label>
+                  搜索知识库
+                  <input v-model="plannerKnowledgeSearchQuery" maxlength="120" placeholder="输入标题、路径或来源名称" />
+                </label>
+                <button class="secondary" type="submit" :disabled="plannerKnowledgeSearchBusy">
+                  {{ plannerKnowledgeSearchBusy ? "搜索中…" : "搜索" }}
+                </button>
+                <small v-if="plannerKnowledgeSearchError" class="muted knowledge-search-message">{{ plannerKnowledgeSearchError }}</small>
+                <div v-if="plannerKnowledgeSearchResults.length" class="knowledge-search-results">
+                  <article v-for="document in plannerKnowledgeSearchResults" :key="document.id" class="knowledge-search-result">
+                    <div>
+                      <strong>{{ knowledgeReferenceTitle(document) }}</strong>
+                      <small>{{ knowledgeReferenceSource(document) }}</small>
+                    </div>
+                    <button
+                      type="button"
+                      :disabled="plannerCurrentDocuments.some((entry) => entry.id === document.id) || plannerCurrentDocuments.length >= 5"
+                      @click="addPlannerCurrentDocument(document)"
+                    >
+                      {{ plannerCurrentDocuments.some((entry) => entry.id === document.id) ? "已添加" : "作为本次资料" }}
+                    </button>
+                  </article>
+                </div>
+              </form>
+              <div v-if="plannerCurrentDocuments.length" class="knowledge-current-list">
+                <small>已明确添加为本次事项资料（{{ plannerCurrentDocuments.length }}/5）</small>
+                <article v-for="document in plannerCurrentDocuments" :key="document.id" class="knowledge-reference-row">
+                  <span><strong>{{ knowledgeReferenceTitle(document) }}</strong><small>{{ knowledgeReferenceSource(document) }}</small></span>
+                  <button class="text-action" type="button" @click="removePlannerCurrentDocument(document.id)">移除</button>
+                </article>
+              </div>
+            </div>
           </div>
           <div class="planner-input-actions">
             <button class="primary" type="button" :disabled="plannerGenerating" @click="generateAIPlan">
@@ -1033,6 +1114,25 @@ onBeforeUnmount(() => window.removeEventListener("popstate", handlePopState))
         </section>
 
         <section v-if="plannerDraft" class="planner-draft">
+          <section class="planner-reference-summary">
+            <div>
+              <strong>本次规划自动参考了 {{ plannerHistoricalDocuments.length }} 份历史资料</strong>
+              <small>自动关联内容只作为团队历史经验，不会成为本次事项已确认事实。</small>
+            </div>
+            <details v-if="plannerHistoricalDocuments.length">
+              <summary>查看关联资料</summary>
+              <div class="planner-reference-list">
+                <article v-for="document in plannerHistoricalDocuments" :key="document.id" class="knowledge-reference-row">
+                  <span><strong>{{ knowledgeReferenceTitle(document) }}</strong><small>{{ knowledgeReferenceSource(document) }}</small></span>
+                  <button class="text-action" type="button" @click="toggleHistoricalExclusion(document.id)">
+                    {{ plannerExcludedHistoricalIds.includes(document.id) ? "恢复参考" : "重新生成时排除" }}
+                  </button>
+                </article>
+              </div>
+              <small class="muted">只显示资料名称和来源，不展示正文。排除或恢复会在你点击“重新生成”后生效。</small>
+            </details>
+            <small v-if="plannerExclusionsPending" class="knowledge-search-message">资料排除设置已更改，请重新生成后应用。</small>
+          </section>
           <div class="planner-section">
             <div class="section-heading"><h2>事项信息</h2></div>
             <div class="planner-fields">

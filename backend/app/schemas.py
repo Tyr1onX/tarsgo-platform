@@ -157,6 +157,7 @@ class AIPlannerRequest(BaseModel):
     item_title: str | None = Field(default=None, max_length=200)
     current_event_context: str | None = Field(default=None, max_length=5000)
     current_event_document_ids: list[int] = Field(default_factory=list, max_length=5)
+    excluded_historical_document_ids: list[int] = Field(default_factory=list, max_length=6)
 
     @field_validator("description")
     @classmethod
@@ -187,6 +188,13 @@ class AIPlannerRequest(BaseModel):
     def validate_document_ids(cls, value: list[int]) -> list[int]:
         if any(document_id < 1 for document_id in value) or len(set(value)) != len(value):
             raise ValueError("资料选择无效")
+        return value
+
+    @field_validator("excluded_historical_document_ids")
+    @classmethod
+    def validate_excluded_document_ids(cls, value: list[int]) -> list[int]:
+        if any(document_id < 1 for document_id in value) or len(set(value)) != len(value):
+            raise ValueError("资料排除项无效")
         return value
 
 
@@ -268,11 +276,18 @@ class KnowledgeDocumentOut(BaseModel):
     source_updated_at: datetime | None
 
 
-class KnowledgeOptionOut(BaseModel):
+class KnowledgeReferenceOut(BaseModel):
     id: int
     source_type: Literal["github", "upload"]
     source_name: str
+    source_label: str
     title: str
+
+
+class AIPlannerGenerateOut(BaseModel):
+    draft: AIPlannerDraft
+    current_event_documents: list[KnowledgeReferenceOut] = Field(default_factory=list)
+    historical_documents: list[KnowledgeReferenceOut] = Field(default_factory=list)
 
 
 class KnowledgeSyncOut(BaseModel):

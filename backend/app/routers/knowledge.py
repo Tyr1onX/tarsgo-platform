@@ -1,7 +1,7 @@
 import logging
 import os
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, load_only
@@ -16,10 +16,11 @@ from ..knowledge import (
     create_uploaded_document,
     delete_document,
     knowledge_enabled,
+    search_knowledge_documents,
     sync_github_documents,
 )
 from ..models import KnowledgeDocument, Member
-from ..schemas import KnowledgeDocumentOut, KnowledgeOptionOut, KnowledgeSyncOut
+from ..schemas import KnowledgeDocumentOut, KnowledgeReferenceOut, KnowledgeSyncOut
 
 
 router = APIRouter(prefix="/api/knowledge", tags=["knowledge"])
@@ -65,36 +66,23 @@ def list_documents(
     return [_document_output(document) for document in documents]
 
 
-@router.get("/options", response_model=list[KnowledgeOptionOut])
-def planner_options(
+@router.get("/search", response_model=list[KnowledgeReferenceOut])
+def search_documents(
+    q: str = Query(min_length=1, max_length=120),
     current: Member = Depends(require_admin),
     db: Session = Depends(get_db),
-) -> list[dict]:
+) -> list[KnowledgeReferenceOut]:
     if not knowledge_enabled():
         return []
-    rows = db.scalars(
-        select(KnowledgeDocument)
-        .options(load_only(
-            KnowledgeDocument.id,
-            KnowledgeDocument.source_type,
-            KnowledgeDocument.source_name,
-            KnowledgeDocument.title,
-        ))
-        .where(
-            KnowledgeDocument.is_active.is_(True),
-            KnowledgeDocument.parse_status.in_(("ready", "truncated")),
-        )
-        .order_by(KnowledgeDocument.title, KnowledgeDocument.id)
-        .limit(200)
-    ).all()
     return [
-        {
-            "id": row.id,
-            "source_type": row.source_type,
-            "source_name": row.source_name,
-            "title": row.title,
-        }
-        for row in rows
+        KnowledgeReferenceOut.model_validate({
+            "id": reference.id,
+            "source_type": reference.source_type,
+            "source_name": reference.source_name,
+            "source_label": reference.source_label,
+            "title": reference.title,
+        })
+        for reference in search_knowledge_documents(db, q)
     ]
 
 

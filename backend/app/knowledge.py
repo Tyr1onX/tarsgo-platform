@@ -96,10 +96,39 @@ class ExtractedText:
 class KnowledgeContext:
     current_event_text: str = ""
     historical_text: str = ""
+    current_event_documents: tuple["KnowledgeReference", ...] = ()
+    historical_documents: tuple["KnowledgeReference", ...] = ()
 
     @property
     def context_chars(self) -> int:
         return len(self.current_event_text) + len(self.historical_text)
+
+
+@dataclass(frozen=True)
+class KnowledgeReference:
+    id: int
+    source_type: str
+    source_name: str
+    source_label: str
+    title: str
+
+
+def _knowledge_reference(document: KnowledgeDocument) -> KnowledgeReference:
+    path = document.source_path or document.source_name
+    title = (document.title or "").strip() or PurePosixPath(path).name or document.source_name
+    if document.source_type == "github":
+        path_parts = [part for part in path.split("/") if part]
+        source_group = path_parts[0] if len(path_parts) > 1 else document.source_name.rsplit("/", 1)[-1]
+        source_label = f"{source_group} · GitHub"
+    else:
+        source_label = f"{document.source_name} · 上传"
+    return KnowledgeReference(
+        id=document.id,
+        source_type=document.source_type,
+        source_name=document.source_name,
+        source_label=source_label,
+        title=title[:200],
+    )
 
 
 class GitHubReader(Protocol):
@@ -658,9 +687,34 @@ def _search_terms(text: str) -> list[str]:
     return terms[:24]
 
 
+def _planner_search_query(item_title: str | None, description: str, current_event_context: str) -> str:
+    """Interleave terms so long input in one section cannot crowd the others out."""
+    sections = [
+        _search_terms(item_title or ""),
+        _search_terms(description),
+        _search_terms(current_event_context),
+    ]
+    terms: list[str] = []
+    seen: set[str] = set()
+    max_section_terms = max((len(section) for section in sections), default=0)
+    for index in range(max_section_terms):
+        for section in sections:
+            if index >= len(section):
+                continue
+            term = section[index]
+            if term in seen:
+                continue
+            terms.append(term)
+            seen.add(term)
+            if len(terms) >= 24:
+                return " ".join(terms)
+    return " ".join(terms)
+
+
 def _relevance_score(document: KnowledgeDocument, terms: list[str]) -> int:
     title = (document.title or "").casefold()
     path = (document.source_path or "").casefold()
+    source_name = (document.source_name or "").casefold()
     content = (document.content_text or "").casefold()
     score = 0
     for term in terms:
@@ -668,6 +722,8 @@ def _relevance_score(document: KnowledgeDocument, terms: list[str]) -> int:
             score += 8
         if term in path:
             score += 5
+        if term in source_name:
+            score += 3
         occurrences = content.count(term)
         score += min(occurrences, 3)
     return score
@@ -689,16 +745,16 @@ def _excerpt(content: str, terms: list[str], max_chars: int = 1_200) -> str:
     return excerpt
 
 
-def search_historical_knowledge(
+def search_historical_documents(
     db: Session,
     query: str,
     *,
     excluded_ids: set[int] | None = None,
     max_chars: int = MAX_HISTORY_CONTEXT_CHARS,
-) -> str:
+) -> tuple[str, tuple[KnowledgeReference, ...]]:
     terms = _search_terms(query)
     if not terms or max_chars <= 0:
-        return ""
+        return "", ()
     predicates = []
     for term in terms:
         pattern = f"%{term}%"
@@ -721,9 +777,11 @@ def search_historical_knowledge(
     ranked.sort(key=lambda value: (value[0], value[1].synced_at), reverse=True)
 
     snippets: list[str] = []
+    references: list[KnowledgeReference] = []
     used_chars = 0
     for _, document in ranked[:MAX_HISTORY_RESULTS]:
-        header = f"资料《{document.title[:120]}》\n"
+        reference = _knowledge_reference(document)
+        header = f"资料《{reference.title[:120]}》\n"
         available = max_chars - used_chars - len(header)
         if available <= 0:
             break
@@ -734,8 +792,75 @@ def search_historical_knowledge(
         if len(snippet) > available:
             snippet = snippet[:available]
         snippets.append(snippet)
+        references.append(reference)
         used_chars += len(snippet) + 2
-    return "\n\n".join(snippets)[:max_chars]
+    return "\n\n".join(snippets)[:max_chars], tuple(references)
+
+
+def search_historical_knowledge(
+    db: Session,
+    query: str,
+    *,
+    excluded_ids: set[int] | None = None,
+    max_chars: int = MAX_HISTORY_CONTEXT_CHARS,
+) -> str:
+    """Compatibility helper for callers that only need bounded history text."""
+    text, _ = search_historical_documents(
+        db, query, excluded_ids=excluded_ids, max_chars=max_chars
+    )
+    return text
+
+
+def search_knowledge_documents(
+    db: Session,
+    query: str,
+    *,
+    limit: int = 20,
+) -> list[KnowledgeReference]:
+    """Search document metadata for the explicit current-event picker."""
+    normalized = query.strip().casefold()
+    if not normalized:
+        return []
+    terms = _search_terms(normalized) or [normalized]
+    predicates = []
+    for term in terms:
+        pattern = f"%{term}%"
+        predicates.extend(
+            (
+                KnowledgeDocument.title.ilike(pattern),
+                KnowledgeDocument.source_path.ilike(pattern),
+                KnowledgeDocument.source_name.ilike(pattern),
+            )
+        )
+    rows = db.scalars(
+        select(KnowledgeDocument)
+        .where(
+            KnowledgeDocument.is_active.is_(True),
+            KnowledgeDocument.parse_status.in_(("ready", "truncated")),
+            or_(*predicates),
+        )
+        .order_by(KnowledgeDocument.synced_at.desc(), KnowledgeDocument.id.desc())
+        .limit(MAX_SEARCH_CANDIDATES)
+    ).all()
+    ranked: list[tuple[int, KnowledgeDocument]] = []
+    for document in rows:
+        title = (document.title or "").casefold()
+        path = (document.source_path or "").casefold()
+        source_name = (document.source_name or "").casefold()
+        score = sum(
+            (8 if term in title else 0)
+            + (5 if term in path else 0)
+            + (3 if term in source_name else 0)
+            for term in terms
+        )
+        if normalized in title:
+            score += 12
+        elif normalized in path or normalized in source_name:
+            score += 8
+        if score:
+            ranked.append((score, document))
+    ranked.sort(key=lambda item: (item[0], item[1].synced_at), reverse=True)
+    return [_knowledge_reference(document) for _, document in ranked[: max(1, min(limit, 20))]]
 
 
 def build_planner_context(
@@ -745,6 +870,7 @@ def build_planner_context(
     item_title: str | None,
     current_event_context: str | None,
     current_event_document_ids: list[int],
+    excluded_historical_document_ids: list[int] | None = None,
 ) -> KnowledgeContext:
     current_parts: list[str] = []
     pasted = (current_event_context or "").strip()
@@ -766,27 +892,37 @@ def build_planner_context(
         by_id = {row.id: row for row in rows}
         selected_documents = [by_id[document_id] for document_id in selected_ids if document_id in by_id]
 
+    current_references: list[KnowledgeReference] = []
     for document in selected_documents:
-        header = f"负责人选作本次资料《{document.title[:100]}》：\n"
+        reference = _knowledge_reference(document)
+        header = f"负责人选作本次资料《{reference.title[:100]}》：\n"
         available = MAX_CURRENT_CONTEXT_CHARS - used_current - len(header) - (2 if current_parts else 0)
         if available <= 0:
             break
         part = header + document.content_text[:available]
         current_parts.append(part)
+        current_references.append(reference)
         used_current += len(part) + 2
 
     current_text = "\n\n".join(current_parts)[:MAX_CURRENT_CONTEXT_CHARS]
     remaining_history = min(MAX_HISTORY_CONTEXT_CHARS, MAX_TOTAL_KNOWLEDGE_CONTEXT_CHARS - len(current_text))
     history = ""
+    historical_references: tuple[KnowledgeReference, ...] = ()
     if knowledge_enabled() and remaining_history > 0:
-        query = " ".join(part for part in (item_title or "", description) if part)
-        history = search_historical_knowledge(
+        query = _planner_search_query(item_title, description, pasted)
+        history, historical_references = search_historical_documents(
             db,
             query,
-            excluded_ids={document.id for document in selected_documents},
+            excluded_ids={document.id for document in selected_documents}
+            | set(excluded_historical_document_ids or []),
             max_chars=remaining_history,
         )
-    return KnowledgeContext(current_event_text=current_text, historical_text=history)
+    return KnowledgeContext(
+        current_event_text=current_text,
+        historical_text=history,
+        current_event_documents=tuple(current_references),
+        historical_documents=historical_references,
+    )
 
 
 def planner_input_text(description: str, item_title: str | None, context: KnowledgeContext) -> str:

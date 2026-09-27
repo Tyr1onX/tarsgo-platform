@@ -89,9 +89,10 @@ def main() -> None:
 
         before = db.scalar(select(func.count(Task.id))) or 0
         provider = FakeProvider()
-        draft = planner_router.generate_plan(request, current=admin, db=db, provider=provider)
+        result = planner_router.generate_plan(request, current=admin, db=db, provider=provider)
         after = db.scalar(select(func.count(Task.id))) or 0
         assert provider.calls == 1 and before == after
+        draft = result.draft
         assert not hasattr(draft.tasks[0], "owner_id")
 
         expect_http(502, lambda: planner_router.generate_plan(request, current=admin, db=db, provider=InvalidProvider()))

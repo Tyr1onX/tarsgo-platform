@@ -50,6 +50,7 @@ export interface AIPlannerInput {
   item_title?: string
   current_event_context?: string
   current_event_document_ids?: number[]
+  excluded_historical_document_ids?: number[]
 }
 export interface AIPlannerItemDraft {
   title: string
@@ -89,11 +90,17 @@ export interface KnowledgeDocument {
   synced_at: string
   source_updated_at: string | null
 }
-export interface KnowledgeOption {
+export interface KnowledgeReference {
   id: number
   source_type: "github" | "upload"
   source_name: string
+  source_label: string
   title: string
+}
+export interface AIPlannerResult {
+  draft: AIPlannerDraft
+  current_event_documents: KnowledgeReference[]
+  historical_documents: KnowledgeReference[]
 }
 export interface KnowledgeSyncSummary {
   added: number

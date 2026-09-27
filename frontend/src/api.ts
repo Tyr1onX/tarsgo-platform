@@ -1,13 +1,13 @@
 import type {
   AIPlannerAccess,
-  AIPlannerDraft,
+  AIPlannerResult,
   AIPlannerInput,
   InvitationInfo,
   InviteResult,
   Member,
   MemberSummary,
   KnowledgeDocument,
-  KnowledgeOption,
+  KnowledgeReference,
   KnowledgeSyncSummary,
   Role,
   Task,
@@ -84,13 +84,14 @@ export const api = {
 
   aiPlannerAccess: () => request<AIPlannerAccess>("/api/ai/planner/access"),
   generateAIPlan: (payload: AIPlannerInput) =>
-    request<AIPlannerDraft>("/api/ai/planner", {
+    request<AIPlannerResult>("/api/ai/planner", {
       method: "POST",
       body: JSON.stringify(payload),
     }),
 
   knowledgeDocuments: () => request<KnowledgeDocument[]>("/api/knowledge"),
-  knowledgeOptions: () => request<KnowledgeOption[]>("/api/knowledge/options"),
+  searchKnowledge: (query: string) =>
+    request<KnowledgeReference[]>(`/api/knowledge/search?q=${encodeURIComponent(query)}`),
   syncGitHubKnowledge: () =>
     request<KnowledgeSyncSummary>("/api/knowledge/sync/github", { method: "POST" }),
   uploadKnowledgeDocument: (file: File) => {

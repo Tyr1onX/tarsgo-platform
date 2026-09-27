@@ -1,6 +1,20 @@
-from datetime import datetime
+from datetime import date, datetime
 
-from sqlalchemy import Boolean, CheckConstraint, Column, DateTime, ForeignKey, String, Table, Text, func
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    CheckConstraint,
+    Column,
+    Date,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Table,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
@@ -84,3 +98,19 @@ class Task(Base):
     owner: Mapped[Member | None] = relationship(foreign_keys=[owner_id])
     creator: Mapped[Member] = relationship(foreign_keys=[created_by])
     collaborators: Mapped[list[Member]] = relationship(secondary=task_collaborators)
+
+
+class AIPlannerDailyUsage(Base):
+    __tablename__ = "ai_planner_daily_usage"
+    __table_args__ = (
+        UniqueConstraint("member_id", "usage_date", name="uq_ai_planner_usage_member_date"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    member_id: Mapped[int] = mapped_column(ForeignKey("members.id", ondelete="CASCADE"))
+    usage_date: Mapped[date] = mapped_column(Date())
+    request_count: Mapped[int] = mapped_column(Integer(), default=0, server_default="0")
+    input_tokens: Mapped[int] = mapped_column(BigInteger(), default=0, server_default="0")
+    output_tokens: Mapped[int] = mapped_column(BigInteger(), default=0, server_default="0")
+    total_tokens: Mapped[int] = mapped_column(BigInteger(), default=0, server_default="0")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(), server_default=func.now(), onupdate=func.now())

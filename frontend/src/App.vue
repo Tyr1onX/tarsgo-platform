@@ -3,6 +3,8 @@ import { computed, onBeforeUnmount, onMounted, ref } from "vue"
 
 import { ApiError, api } from "./api"
 import type {
+  AIPlannerDraft,
+  AIPlannerTaskDraft,
   InvitationInfo,
   InviteResult,
   Member,
@@ -32,6 +34,11 @@ const taskMembers = ref<MemberSummary[]>([])
 const latestInvite = ref<InviteResult | null>(null)
 const taskView = ref<TaskView>("mine")
 const claimableCount = ref(0)
+const aiPlannerAvailable = ref(false)
+const plannerDescription = ref("")
+const plannerDraft = ref<AIPlannerDraft | null>(null)
+const plannerGenerating = ref(false)
+const plannerPublishing = ref(false)
 
 const memberName = ref("")
 const memberEmail = ref("")
@@ -212,9 +219,21 @@ function sameIds(left: number[], right: number[]) {
   )
 }
 
+async function loadPlannerAccess() {
+  aiPlannerAvailable.value = false
+  if (user.value?.role !== "admin") return
+  try {
+    const access = await api.aiPlannerAccess()
+    aiPlannerAvailable.value = access.available
+  } catch {
+    aiPlannerAvailable.value = false
+  }
+}
+
 async function loadCurrentUser() {
   try {
     user.value = await api.me()
+    await loadPlannerAccess()
   } catch (reason) {
     if (reason instanceof ApiError && reason.status === 401) {
       user.value = null
@@ -269,6 +288,11 @@ async function loadRoute() {
       } else {
         tasks.value = await api.tasks(taskView.value)
       }
+    } else if (path.value === "/ai-planner") {
+      if (!isAdmin.value || !aiPlannerAvailable.value) {
+        navigate("/")
+        return
+      }
     } else if (path.value === "/team") {
       if (!isAdmin.value) {
         navigate("/")
@@ -298,6 +322,7 @@ async function submitLogin() {
   notice.value = ""
   try {
     user.value = await api.login(loginEmail.value, loginPassword.value)
+    await loadPlannerAccess()
     loginPassword.value = ""
     navigate("/")
   } catch (reason) {
@@ -498,12 +523,100 @@ async function leaveTask(task: Task) {
   }
 }
 
+
+function startAIPlanner() {
+  error.value = ""
+  navigate("/ai-planner")
+}
+
+function newPlannerTask(): AIPlannerTaskDraft {
+  return {
+    title: "",
+    deliverable: "",
+    owner_claimable: true,
+    collaboration_open: false,
+  }
+}
+
+function addPlannerTask() {
+  plannerDraft.value?.tasks.push(newPlannerTask())
+}
+
+function removePlannerTask(index: number) {
+  plannerDraft.value?.tasks.splice(index, 1)
+}
+
+async function generateAIPlan() {
+  const description = plannerDescription.value.trim()
+  if (description.length < 10) {
+    error.value = "请先补充一些事项背景，再生成方案。"
+    return
+  }
+
+  error.value = ""
+  plannerGenerating.value = true
+  try {
+    const draft = await api.generateAIPlan(description)
+    if (draft.item.deadline) draft.item.deadline = toLocalInput(draft.item.deadline)
+    plannerDraft.value = draft
+  } catch (reason) {
+    error.value = messageOf(reason)
+  } finally {
+    plannerGenerating.value = false
+  }
+}
+
+async function publishAIPlan() {
+  const draft = plannerDraft.value
+  if (!draft) return
+  if (!draft.item.title.trim()) {
+    error.value = "请填写事项标题。"
+    return
+  }
+  if (!draft.item.deadline) {
+    error.value = "请确认事项截止时间。"
+    return
+  }
+  if (draft.tasks.some((task) => !task.title.trim())) {
+    error.value = "每个分工都需要填写标题。"
+    return
+  }
+
+  error.value = ""
+  plannerPublishing.value = true
+  try {
+    const result = await api.createTaskBatch({
+      item: {
+        title: draft.item.title.trim(),
+        deliverable: draft.item.deliverable.trim(),
+        deadline: draft.item.deadline,
+      },
+      tasks: draft.tasks.map((task) => ({
+        title: task.title.trim(),
+        deliverable: task.deliverable.trim(),
+        owner_claimable: task.owner_claimable,
+        collaboration_open: task.collaboration_open,
+      })),
+    })
+    plannerDraft.value = null
+    plannerDescription.value = ""
+    notice.value = `已创建事项和 ${result.tasks.length} 个分工`
+    navigateTasks("all")
+  } catch (reason) {
+    error.value = messageOf(reason)
+  } finally {
+    plannerPublishing.value = false
+  }
+}
+
 async function logout() {
   await api.logout()
   user.value = null
   tasks.value = []
   members.value = []
   taskMembers.value = []
+  aiPlannerAvailable.value = false
+  plannerDraft.value = null
   navigate("/login")
 }
 
@@ -647,9 +760,14 @@ onBeforeUnmount(() => window.removeEventListener("popstate", handlePopState))
         <section class="hero">
           <p>你好，{{ user?.name }}</p>
           <h1>我现在需要做什么</h1>
-          <button v-if="isManager" class="hero-action" type="button" @click="startNewTask()">
-            ＋ 新建事项
-          </button>
+          <div class="hero-actions">
+            <button v-if="isManager" class="hero-action" type="button" @click="startNewTask()">
+              ＋ 新建事项
+            </button>
+            <button v-if="aiPlannerAvailable" class="hero-action" type="button" @click="startAIPlanner">
+              AI 帮我规划
+            </button>
+          </div>
         </section>
 
         <button
@@ -712,10 +830,119 @@ onBeforeUnmount(() => window.removeEventListener("popstate", handlePopState))
         </details>
       </template>
 
+
+      <template v-else-if="path === '/ai-planner'">
+        <div class="page-title planner-heading">
+          <div>
+            <h1>AI 规划事项</h1>
+            <p>把已经明确的活动需求写下来，AI 先整理成可编辑草案，不会自动发布。</p>
+          </div>
+          <button type="button" @click="navigate('/tasks')">返回任务</button>
+        </div>
+
+        <section class="planner-input">
+          <label>
+            你准备做什么？
+            <textarea
+              v-model="plannerDescription"
+              maxlength="5000"
+              rows="8"
+              placeholder="例如：10 月 12 日去小学做科技展，需要机器人展示、讲解、直播、摄影、周边发放，活动结束后整理素材。具体人员暂时还没定，之后开放认领。"
+            />
+          </label>
+          <div class="planner-input-actions">
+            <button class="primary" type="button" :disabled="plannerGenerating" @click="generateAIPlan">
+              {{ plannerGenerating ? "正在生成…" : "生成方案" }}
+            </button>
+            <button class="text-action" type="button" @click="startNewTask()">手动创建 →</button>
+            <small>最多 5000 字；每次生成只请求模型一次。</small>
+          </div>
+        </section>
+
+        <section v-if="plannerDraft" class="planner-draft">
+          <div class="planner-section">
+            <div class="section-heading"><h2>事项信息</h2></div>
+            <div class="planner-fields">
+              <label>
+                事项标题
+                <input v-model="plannerDraft.item.title" maxlength="200" />
+              </label>
+              <label>
+                完成标准（可选）
+                <textarea v-model="plannerDraft.item.deliverable" maxlength="5000" rows="3" />
+              </label>
+              <label>
+                截止时间
+                <input v-model="plannerDraft.item.deadline" type="datetime-local" required />
+              </label>
+            </div>
+          </div>
+
+          <div class="planner-section">
+            <div class="form-title">
+              <div>
+                <h2>执行分工</h2>
+                <small class="muted">可以修改、删除或继续补充分工。</small>
+              </div>
+              <button type="button" @click="addPlannerTask">＋ 添加分工</button>
+            </div>
+
+            <div v-if="plannerDraft.tasks.length" class="planner-task-list">
+              <article v-for="(task, index) in plannerDraft.tasks" :key="index" class="planner-task">
+                <div class="planner-task-head">
+                  <span>分工 {{ index + 1 }}</span>
+                  <button type="button" @click="removePlannerTask(index)">删除</button>
+                </div>
+                <label>
+                  标题
+                  <input v-model="task.title" maxlength="200" />
+                </label>
+                <label>
+                  完成标准（可选）
+                  <textarea v-model="task.deliverable" maxlength="5000" rows="2" />
+                </label>
+                <div class="planner-options">
+                  <label class="check-row">
+                    <input v-model="task.owner_claimable" type="checkbox" />
+                    开放负责人认领
+                  </label>
+                  <small v-if="!task.owner_claimable" class="muted">关闭后，确认发布时由你暂代负责人。</small>
+                  <label class="check-row">
+                    <input v-model="task.collaboration_open" type="checkbox" />
+                    开放成员自行加入协作
+                  </label>
+                </div>
+              </article>
+            </div>
+            <p v-else class="muted">当前没有分工，可以直接发布事项或手动添加。</p>
+          </div>
+
+          <div v-if="plannerDraft.questions.length" class="planner-section planner-questions">
+            <h2>需要你确认</h2>
+            <ul>
+              <li v-for="question in plannerDraft.questions" :key="question">{{ question }}</li>
+            </ul>
+            <small>这些问题只用于确认草案，不会写入任务数据库。</small>
+          </div>
+
+          <div class="planner-publish">
+            <button class="secondary" type="button" :disabled="plannerGenerating || plannerPublishing" @click="generateAIPlan">
+              重新生成
+            </button>
+            <button class="primary" type="button" :disabled="plannerPublishing" @click="publishAIPlan">
+              {{ plannerPublishing ? "正在创建…" : "确认并创建" }}
+            </button>
+          </div>
+        </section>
+      </template>
+
       <template v-else-if="path === '/tasks'">
         <div class="page-title">
           <h1>任务</h1>
-          <button v-if="isManager" type="button" @click="startNewTask()">新建事项</button>
+          <div class="page-title-actions">
+            <button v-if="aiPlannerAvailable" type="button" @click="startAIPlanner">AI 帮我规划</button>
+            <button v-if="isManager" type="button" @click="startNewTask()">新建事项</button>
+          </div>
         </div>
 
         <div class="view-tabs" role="tablist" aria-label="任务视图">

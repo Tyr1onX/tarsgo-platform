@@ -43,3 +43,29 @@ export interface InvitationInfo {
   email: string
   expires_at: string
 }
+
+export interface AIPlannerAccess { available: boolean }
+export interface AIPlannerItemDraft {
+  title: string
+  deliverable: string
+  deadline: string | null
+}
+export interface AIPlannerTaskDraft {
+  title: string
+  deliverable: string
+  owner_claimable: boolean
+  collaboration_open: boolean
+}
+export interface AIPlannerDraft {
+  item: AIPlannerItemDraft
+  tasks: AIPlannerTaskDraft[]
+  questions: string[]
+}
+export interface TaskBatchPayload {
+  item: { title: string; deliverable: string; deadline: string }
+  tasks: AIPlannerTaskDraft[]
+}
+export interface TaskBatchResult {
+  item: Task
+  tasks: Task[]
+}

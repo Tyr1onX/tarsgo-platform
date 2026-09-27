@@ -5,7 +5,14 @@ from sqlalchemy.orm import Session, selectinload
 from ..auth import get_current_member, require_manager
 from ..db import get_db
 from ..models import Member, Task, task_collaborators
-from ..schemas import MemberSummary, TaskCreate, TaskOut, TaskUpdate
+from ..schemas import (
+    MemberSummary,
+    TaskBatchCreate,
+    TaskBatchOut,
+    TaskCreate,
+    TaskOut,
+    TaskUpdate,
+)
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
@@ -40,15 +47,10 @@ def _load_active_members(db: Session, member_ids: set[int]) -> dict[int, Member]
         return {}
     members = {
         member.id: member
-        for member in db.scalars(
-            select(Member).where(Member.id.in_(member_ids), Member.status == "active")
-        )
+        for member in db.scalars(select(Member).where(Member.id.in_(member_ids), Member.status == "active"))
     }
     if members.keys() != member_ids:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="负责人或协作者不存在或未激活",
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="负责人或协作者不存在或未激活")
     return members
 
 
@@ -71,57 +73,10 @@ def _validate_parent(db: Session, parent_id: int | None) -> None:
 
 def _validate_owner_state(owner_id: int | None, owner_claimable: bool) -> None:
     if owner_id is None and not owner_claimable:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="任务必须指定负责人或开放负责人认领",
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="任务必须指定负责人或开放负责人认领")
 
 
-@router.get("", response_model=list[TaskOut])
-def list_tasks(
-    scope: str = Query(default="mine", pattern="^(mine|claimable|all)$"),
-    current: Member = Depends(get_current_member),
-    db: Session = Depends(get_db),
-) -> list[TaskOut]:
-    query = _task_query()
-    if scope == "mine":
-        query = query.where(
-            or_(
-                Task.owner_id == current.id,
-                Task.collaborators.any(Member.id == current.id),
-            )
-        )
-    elif scope == "claimable":
-        query = query.where(
-            Task.owner_id.is_(None),
-            Task.owner_claimable.is_(True),
-            Task.status != "done",
-        )
-
-    tasks = db.scalars(query.order_by(Task.deadline.asc(), Task.id.asc())).unique().all()
-    return [_task_out(task) for task in tasks]
-
-
-@router.get("/assignees", response_model=list[MemberSummary])
-def list_task_assignees(
-    _: Member = Depends(require_manager),
-    db: Session = Depends(get_db),
-) -> list[Member]:
-    return list(
-        db.scalars(
-            select(Member)
-            .where(Member.status == "active")
-            .order_by(Member.name.asc(), Member.id.asc())
-        )
-    )
-
-
-@router.post("", response_model=TaskOut, status_code=status.HTTP_201_CREATED)
-def create_task(
-    payload: TaskCreate,
-    current: Member = Depends(require_manager),
-    db: Session = Depends(get_db),
-) -> TaskOut:
+def _build_task(db: Session, payload: TaskCreate, current: Member) -> Task:
     _validate_parent(db, payload.parent_id)
     _validate_owner_state(payload.owner_id, payload.owner_claimable)
 
@@ -147,9 +102,90 @@ def create_task(
         if member_id != payload.owner_id
     ]
     db.add(task)
+    return task
+
+
+@router.get("", response_model=list[TaskOut])
+def list_tasks(
+    scope: str = Query(default="mine", pattern="^(mine|claimable|all)$"),
+    current: Member = Depends(get_current_member),
+    db: Session = Depends(get_db),
+) -> list[TaskOut]:
+    query = _task_query()
+    if scope == "mine":
+        query = query.where(or_(Task.owner_id == current.id, Task.collaborators.any(Member.id == current.id)))
+    elif scope == "claimable":
+        query = query.where(Task.owner_id.is_(None), Task.owner_claimable.is_(True), Task.status != "done")
+
+    tasks = db.scalars(query.order_by(Task.deadline.asc(), Task.id.asc())).unique().all()
+    return [_task_out(task) for task in tasks]
+
+
+@router.get("/assignees", response_model=list[MemberSummary])
+def list_task_assignees(_: Member = Depends(require_manager), db: Session = Depends(get_db)) -> list[Member]:
+    return list(db.scalars(select(Member).where(Member.status == "active").order_by(Member.name.asc(), Member.id.asc())))
+
+
+@router.post("", response_model=TaskOut, status_code=status.HTTP_201_CREATED)
+def create_task(payload: TaskCreate, current: Member = Depends(require_manager), db: Session = Depends(get_db)) -> TaskOut:
+    task = _build_task(db, payload, current)
     db.commit()
     db.expire(task)
     return _task_out(_get_task(db, task.id))
+
+
+@router.post("/batch", response_model=TaskBatchOut, status_code=status.HTTP_201_CREATED)
+def create_task_batch(
+    payload: TaskBatchCreate,
+    current: Member = Depends(require_manager),
+    db: Session = Depends(get_db),
+) -> TaskBatchOut:
+    try:
+        root = _build_task(
+            db,
+            TaskCreate(
+                title=payload.item.title,
+                deliverable=payload.item.deliverable,
+                owner_id=current.id,
+                owner_claimable=False,
+                collaborator_ids=[],
+                collaboration_open=False,
+                parent_id=None,
+                deadline=payload.item.deadline,
+                status="todo",
+            ),
+            current,
+        )
+        db.flush()
+
+        children: list[Task] = []
+        for child in payload.tasks:
+            children.append(
+                _build_task(
+                    db,
+                    TaskCreate(
+                        title=child.title,
+                        deliverable=child.deliverable,
+                        owner_id=None if child.owner_claimable else current.id,
+                        owner_claimable=child.owner_claimable,
+                        collaborator_ids=[],
+                        collaboration_open=child.collaboration_open,
+                        parent_id=root.id,
+                        deadline=payload.item.deadline,
+                        status="todo",
+                    ),
+                    current,
+                )
+            )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+    return TaskBatchOut(
+        item=_task_out(_get_task(db, root.id)),
+        tasks=[_task_out(_get_task(db, child.id)) for child in children],
+    )
 
 
 @router.patch("/{task_id}", response_model=TaskOut)
@@ -172,35 +208,18 @@ def update_task(
         db.expire(task)
         return _task_out(_get_task(db, task.id))
 
-    required_non_null = {
-        "title",
-        "deliverable",
-        "collaborator_ids",
-        "owner_claimable",
-        "collaboration_open",
-        "deadline",
-        "status",
-    }
+    required_non_null = {"title", "deliverable", "collaborator_ids", "owner_claimable", "collaboration_open", "deadline", "status"}
     if any(field in fields and getattr(payload, field) is None for field in required_non_null):
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="任务字段不能设为空")
 
     resulting_owner_id = payload.owner_id if "owner_id" in fields else task.owner_id
-    resulting_claimable = (
-        payload.owner_claimable if "owner_claimable" in fields else task.owner_claimable
-    )
+    resulting_claimable = payload.owner_claimable if "owner_claimable" in fields else task.owner_claimable
     _validate_owner_state(resulting_owner_id, bool(resulting_claimable))
 
     if "owner_id" in fields and resulting_owner_id is not None:
         _load_active_members(db, {resulting_owner_id})
 
-    for field in (
-        "title",
-        "deliverable",
-        "owner_claimable",
-        "collaboration_open",
-        "deadline",
-        "status",
-    ):
+    for field in ("title", "deliverable", "owner_claimable", "collaboration_open", "deadline", "status"):
         if field in fields:
             setattr(task, field, getattr(payload, field))
 
@@ -216,9 +235,7 @@ def update_task(
             if member_id != resulting_owner_id
         ]
     elif "owner_id" in fields and resulting_owner_id is not None:
-        task.collaborators = [
-            member for member in task.collaborators if member.id != resulting_owner_id
-        ]
+        task.collaborators = [member for member in task.collaborators if member.id != resulting_owner_id]
 
     db.commit()
     db.expire(task)
@@ -226,19 +243,10 @@ def update_task(
 
 
 @router.post("/{task_id}/claim", response_model=TaskOut)
-def claim_task_owner(
-    task_id: int,
-    current: Member = Depends(get_current_member),
-    db: Session = Depends(get_db),
-) -> TaskOut:
+def claim_task_owner(task_id: int, current: Member = Depends(get_current_member), db: Session = Depends(get_db)) -> TaskOut:
     result = db.execute(
         update(Task)
-        .where(
-            Task.id == task_id,
-            Task.owner_id.is_(None),
-            Task.owner_claimable.is_(True),
-            Task.status != "done",
-        )
+        .where(Task.id == task_id, Task.owner_id.is_(None), Task.owner_claimable.is_(True), Task.status != "done")
         .values(owner_id=current.id)
     )
     if result.rowcount != 1:
@@ -247,22 +255,13 @@ def claim_task_owner(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="任务不存在")
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="该任务当前不可认领")
 
-    db.execute(
-        delete(task_collaborators).where(
-            task_collaborators.c.task_id == task_id,
-            task_collaborators.c.member_id == current.id,
-        )
-    )
+    db.execute(delete(task_collaborators).where(task_collaborators.c.task_id == task_id, task_collaborators.c.member_id == current.id))
     db.commit()
     return _task_out(_get_task(db, task_id))
 
 
 @router.post("/{task_id}/unclaim", response_model=TaskOut)
-def unclaim_task_owner(
-    task_id: int,
-    current: Member = Depends(get_current_member),
-    db: Session = Depends(get_db),
-) -> TaskOut:
+def unclaim_task_owner(task_id: int, current: Member = Depends(get_current_member), db: Session = Depends(get_db)) -> TaskOut:
     task = _get_task(db, task_id)
     if task.owner_id != current.id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="只有当前负责人可以取消认领")
@@ -270,7 +269,6 @@ def unclaim_task_owner(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="已完成任务不能取消认领")
     if not task.owner_claimable:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="该任务不是公开认领任务")
-
     task.owner_id = None
     db.commit()
     db.expire(task)
@@ -278,11 +276,7 @@ def unclaim_task_owner(
 
 
 @router.post("/{task_id}/collaborators/join", response_model=TaskOut)
-def join_task_collaboration(
-    task_id: int,
-    current: Member = Depends(get_current_member),
-    db: Session = Depends(get_db),
-) -> TaskOut:
+def join_task_collaboration(task_id: int, current: Member = Depends(get_current_member), db: Session = Depends(get_db)) -> TaskOut:
     task = _get_task(db, task_id)
     if task.status == "done" or not task.collaboration_open:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="该任务当前不开放协作")
@@ -296,17 +290,12 @@ def join_task_collaboration(
 
 
 @router.post("/{task_id}/collaborators/leave", response_model=TaskOut)
-def leave_task_collaboration(
-    task_id: int,
-    current: Member = Depends(get_current_member),
-    db: Session = Depends(get_db),
-) -> TaskOut:
+def leave_task_collaboration(task_id: int, current: Member = Depends(get_current_member), db: Session = Depends(get_db)) -> TaskOut:
     task = _get_task(db, task_id)
     if task.status == "done":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="已完成任务不能退出协作")
     if not task.collaboration_open:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="该任务未开放自主协作")
-
     task.collaborators = [member for member in task.collaborators if member.id != current.id]
     db.commit()
     db.expire(task)

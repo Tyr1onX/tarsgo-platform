@@ -30,7 +30,6 @@ class LoginIn(BaseModel):
 
 class MemberOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
-
     id: int
     name: str
     email: str
@@ -76,7 +75,6 @@ class InvitationAccept(BaseModel):
 
 class MemberSummary(BaseModel):
     model_config = ConfigDict(from_attributes=True)
-
     id: int
     name: str
 
@@ -151,3 +149,101 @@ class TaskOut(BaseModel):
     status: TaskStatus
     created_by: int
     created_at: datetime
+
+
+class AIPlannerRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    description: str = Field(min_length=10, max_length=5000)
+
+    @field_validator("description")
+    @classmethod
+    def strip_description(cls, value: str) -> str:
+        value = value.strip()
+        if len(value) < 10:
+            raise ValueError("请再补充一些事项背景")
+        return value
+
+
+class AIPlannerItemDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    title: str = Field(min_length=1, max_length=200)
+    deliverable: str = Field(max_length=1000)
+    deadline: datetime | None
+
+    @field_validator("title", "deliverable")
+    @classmethod
+    def strip_item_text(cls, value: str) -> str:
+        return value.strip()
+
+
+class AIPlannerTaskDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    title: str = Field(min_length=1, max_length=200)
+    deliverable: str = Field(max_length=1000)
+    owner_claimable: bool
+    collaboration_open: bool
+
+    @field_validator("title", "deliverable")
+    @classmethod
+    def strip_task_text(cls, value: str) -> str:
+        return value.strip()
+
+
+class AIPlannerDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    item: AIPlannerItemDraft
+    tasks: list[AIPlannerTaskDraft] = Field(min_length=1, max_length=15)
+    questions: list[str] = Field(max_length=6)
+
+    @field_validator("questions")
+    @classmethod
+    def validate_questions(cls, values: list[str]) -> list[str]:
+        result: list[str] = []
+        for value in values:
+            text = value.strip()
+            if not text:
+                continue
+            if len(text) > 200:
+                raise ValueError("确认问题过长")
+            result.append(text)
+        return result
+
+
+class AIPlannerAccessOut(BaseModel):
+    available: bool
+
+
+class TaskBatchItemIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    title: str = Field(min_length=1, max_length=200)
+    deliverable: str = Field(default="", max_length=5000)
+    deadline: datetime
+
+    @field_validator("title", "deliverable")
+    @classmethod
+    def strip_batch_item_text(cls, value: str) -> str:
+        return value.strip()
+
+
+class TaskBatchChildIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    title: str = Field(min_length=1, max_length=200)
+    deliverable: str = Field(default="", max_length=5000)
+    owner_claimable: bool = True
+    collaboration_open: bool = False
+
+    @field_validator("title", "deliverable")
+    @classmethod
+    def strip_batch_child_text(cls, value: str) -> str:
+        return value.strip()
+
+
+class TaskBatchCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    item: TaskBatchItemIn
+    tasks: list[TaskBatchChildIn] = Field(default_factory=list, max_length=15)
+
+
+class TaskBatchOut(BaseModel):
+    item: TaskOut
+    tasks: list[TaskOut]

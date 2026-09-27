@@ -24,6 +24,10 @@ jobs:
           MYSQL_USER=tarsgo
           MYSQL_PASSWORD=$MYSQL_PASSWORD
           MYSQL_ROOT_PASSWORD=$MYSQL_ROOT_PASSWORD
+          AI_PLANNER_ENABLED=true
+          AI_PLANNER_ALLOWED_MEMBER_IDS=1
+          AI_API_KEY=ci-placeholder
+          AI_MODEL=ci-placeholder
           EOF
           echo "CI_ADMIN_PASSWORD=$ADMIN_PASSWORD" >> "$GITHUB_ENV"
           echo "CI_MYSQL_PASSWORD=$MYSQL_PASSWORD" >> "$GITHUB_ENV"
@@ -100,6 +104,9 @@ jobs:
 
       - name: Verify V0.2 workflow
         run: python scripts/smoke_test.py workflow http://127.0.0.1
+
+      - name: Verify AI planner
+        run: docker compose exec -T api python -m tests.test_ai_planner
 
       - name: Restart database
         run: |

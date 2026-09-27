@@ -1154,7 +1154,7 @@ onBeforeUnmount(() => window.removeEventListener("popstate", handlePopState))
           <div class="planner-section">
             <div class="form-title">
               <div>
-                <h2>执行分工</h2>
+                <h2>执行分工 <span class="planner-task-count">· {{ plannerDraft.tasks.length }} 项</span></h2>
                 <small class="muted">可以修改、删除或继续补充分工。</small>
               </div>
               <button type="button" @click="addPlannerTask">＋ 添加分工</button>
@@ -1163,23 +1163,25 @@ onBeforeUnmount(() => window.removeEventListener("popstate", handlePopState))
             <div v-if="plannerDraft.tasks.length" class="planner-task-list">
               <article v-for="(task, index) in plannerDraft.tasks" :key="index" class="planner-task">
                 <div class="planner-task-head">
-                  <span>分工 {{ index + 1 }}</span>
+                  <span>{{ String(index + 1).padStart(2, "0") }}</span>
                   <button type="button" @click="removePlannerTask(index)">删除</button>
                 </div>
-                <label>
-                  标题
-                  <input v-model="task.title" maxlength="200" />
+                <label class="planner-task-title-field">
+                  分工标题
+                  <input v-model="task.title" class="planner-task-title" maxlength="200" />
                 </label>
                 <label>
                   完成标准（可选）
-                  <textarea v-model="task.deliverable" maxlength="5000" rows="2" />
+                  <textarea v-model="task.deliverable" maxlength="5000" rows="3" />
                 </label>
                 <div class="planner-options">
-                  <label class="check-row">
-                    <input v-model="task.owner_claimable" type="checkbox" />
-                    开放负责人认领
-                  </label>
-                  <small v-if="!task.owner_claimable" class="muted">关闭后，确认发布时由你暂代负责人。</small>
+                  <div class="planner-option">
+                    <label class="check-row">
+                      <input v-model="task.owner_claimable" type="checkbox" />
+                      开放负责人认领
+                    </label>
+                    <small v-if="!task.owner_claimable" class="muted">关闭后，确认发布时由你暂代负责人。</small>
+                  </div>
                   <label class="check-row">
                     <input v-model="task.collaboration_open" type="checkbox" />
                     开放成员自行加入协作

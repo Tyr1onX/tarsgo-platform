@@ -64,7 +64,7 @@ Implement only:
 - open collaboration join / leave
 - current task status
 
-Do not add a second Activity model. Continue evolving Task.
+Continue evolving Task as the item / execution-task source of truth. The current dynamic-execution slice adds one lightweight ItemActivity table only for human-written item history; it is not a comment system, event-sourcing model or structural task state.
 
 The V0.2 second-stage first slice adds an allowlisted admin AI draft planner and transactional batch confirmation. Knowledge Source V0.1 adds read-only GitHub sync, admin document uploads, local text extraction and bounded keyword retrieval for the planner. Keep this knowledge slice simple: no embeddings, vector database, multi-agent flow, auto-summarization or writeback to GitHub.
 
@@ -84,6 +84,8 @@ Current task structure:
 - execution_points: up to six concise execution steps
 - cautions: up to five concise task-specific reminders
 - prerequisites: up to four readable preconditions, not blocking dependencies
+- context_facts: root-item current confirmed facts; child rows keep an empty list
+- result: optional execution outcome text
 - owner_id: nullable
 - owner_claimable
 - collaborators through task_collaborators
@@ -165,7 +167,8 @@ System roles are admin, manager and member. Real-world titles are not system rol
 - read mine and claimable views
 - claim / unclaim eligible owner slots
 - join / leave open collaboration
-- update execution status only when currently responsible
+- update execution status and result only when currently responsible
+- participate in current-fact / activity updates only for items they are actually involved in
 - no structural task editing
 
 Only admin may list full member account data, create invitations, regenerate invitations, disable/enable accounts or create system-role accounts.
@@ -196,6 +199,7 @@ Current migration chain:
 -> 0003_ai_planner_usage
 -> 0004_knowledge_documents
 -> 0005_task_execution_details
+-> 0006_dynamic_item_execution
 ~~~
 
 Migrations must preserve current production rows. Never clear or silently rewrite production data to simplify a schema change.
@@ -228,7 +232,7 @@ Do not add controller/service/repository/facade layers without a concrete bounda
 
 The frontend intentionally has no UI framework, router library or state-management library.
 
-Primary routes are /login, /invite/:token, /, /tasks, /team and /me. /ai-planner is an allowlisted admin-only workflow entry and /knowledge is an admin-only management page; neither becomes a global navigation destination.
+Primary routes are /login, /invite/:token, /, /tasks, /tasks/:id, /team and /me. /ai-planner is an allowlisted admin-only workflow entry and /knowledge is an admin-only management page; neither becomes a global navigation destination.
 
 Keep one task entry: /tasks.
 
@@ -244,7 +248,7 @@ admin / manager management controls live on the same task page. Do not recreate 
 
 /me is personal information, role and logout only.
 
-Home answers “what do I need to do now?” with the user's unfinished owned / collaboration work plus a lightweight pending-claim entry. Do not add team statistics.
+Home is AI-first: the Planner composer is the primary work entry when available, while manual creation remains a lightweight fallback. Below it, “what do I need to do now?” shows executable child-task summary cards first; a root item is only shown as a fallback when it has no child tasks. Do not add team statistics.
 
 Mobile is the primary layout. PC uses the same responsive UI.
 
@@ -293,11 +297,13 @@ Draft generation never writes Task rows. Only explicit confirmation calls the no
 
 Do not expand this slice into automatic scheduling, member recommendation, workload scoring, conflict detection, dependencies, AI changes to already-published tasks or AI-generated knowledge.
 
-## Change history direction
+## Dynamic item execution
 
-Published tasks remain editable. V0.2 does not implement a full audit log.
+Published tasks remain editable. A root Task stores current confirmed facts in context_facts. Task.result stores the actual execution outcome and is distinct from deliverable.
 
-A later stage should record important changes to fields such as owner, deadline, completion standard, claiming status and handoff-relevant structure. Do not fake this with free-form comments in the current stage.
+ItemActivity is intentionally narrow: a timestamped human-written record attached only to a root item. Item participants may record activity and optionally copy that text into current facts in one transaction. A task result may be promoted to current facts only by an explicit human action, which also records an ItemActivity.
+
+This is not a full audit log. Do not turn ItemActivity into comments, notifications, event sourcing or automatic AI re-planning.
 
 ## Public data boundary
 

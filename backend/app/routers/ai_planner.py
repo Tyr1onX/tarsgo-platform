@@ -222,6 +222,7 @@ def generate_plan(
     planner_input = planner_input_text(payload.description, payload.item_title, context)
     usage_date = _reserve_request(db, current.id, context.context_chars)
     generation = _generate_once(provider, planner_input)
+    generation.draft.item.deliverable = ""
     _record_generation_tokens(db, current.id, usage_date, generation)
     return _generation_out(generation, context)
 
@@ -265,6 +266,8 @@ def refine_plan(
             }
         )
         generation.draft = merged
+    else:
+        generation.draft.item.deliverable = ""
 
     _record_generation_tokens(db, current.id, usage_date, generation)
     return _generation_out(generation, context)

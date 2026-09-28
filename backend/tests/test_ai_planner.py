@@ -156,9 +156,21 @@ def main() -> None:
         after = db.scalar(select(func.count(Task.id))) or 0
         assert provider.calls == 1 and before == after
         draft = result.draft
+        assert draft.item.deliverable == ""
         assert not hasattr(draft.tasks[0], "owner_id")
         assert draft.tasks[0].execution_points and draft.tasks[0].cautions and draft.tasks[0].prerequisites
         assert [suggestion.title for suggestion in draft.suggestions] == ["战队周边展示"]
+        empty_root_batch = tasks_router.create_task_batch(
+            TaskBatchCreate(
+                item=TaskBatchItemIn(title="空 root 完成标准兼容测试", deliverable="", deadline=datetime(2026, 10, 12, 18, 0)),
+                tasks=[TaskBatchChildIn(title="兼容 child", deliverable="", owner_claimable=True, collaboration_open=False)],
+            ),
+            current=admin,
+            db=db,
+        )
+        for task_id in [task.id for task in empty_root_batch.tasks] + [empty_root_batch.item.id]:
+            db.delete(db.get(Task, task_id))
+        db.commit()
         denied_refine = AIPlannerRefineRequest(
             description=request.description,
             draft=draft,
@@ -250,6 +262,7 @@ def main() -> None:
         assert global_provider.calls == 1
         assert "全局调整" in global_provider.description
         assert global_result.draft.item.title == "精简后的科技展"
+        assert global_result.draft.item.deliverable == ""
         assert len(global_result.draft.tasks) == 1 and global_result.draft.questions == []
         assert [suggestion.title for suggestion in global_result.draft.suggestions] == ["新提醒"]
 

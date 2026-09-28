@@ -91,6 +91,8 @@ const taskDeliverable = ref("")
 const taskExecutionPointsText = ref("")
 const taskCautionsText = ref("")
 const taskPrerequisitesText = ref("")
+const taskCautionsOpen = ref(false)
+const taskPrerequisitesOpen = ref(false)
 const taskOwnerMode = ref<"assigned" | "claimable">("assigned")
 const taskOwnerId = ref<number | null>(null)
 const taskOwnerClaimable = ref(false)
@@ -244,10 +246,13 @@ function openTaskDetail(task: Task) {
 }
 
 function taskDetailSections(task: Task) {
+  const executionHints = [
+    ...(task.execution_points ?? []),
+    ...(task.cautions ?? []).map((item) => `注意：${item}`),
+  ]
   return [
-    { title: "执行要点", items: task.execution_points ?? [] },
-    { title: "注意事项", items: task.cautions ?? [] },
-    { title: "前置条件", items: task.prerequisites ?? [] },
+    { title: "执行提示", items: executionHints },
+    { title: "开始前需要", items: task.prerequisites ?? [] },
   ].filter((section) => section.items.length)
 }
 
@@ -256,10 +261,11 @@ function parseTaskLines(value: string) {
 }
 
 function taskLineLimitMessage() {
+  if (parentTaskId.value === null) return ""
   const limits = [
-    [taskExecutionPointsText.value, 6, "执行要点"],
-    [taskCautionsText.value, 5, "注意事项"],
-    [taskPrerequisitesText.value, 4, "前置条件"],
+    [taskExecutionPointsText.value, 6, "怎么做"],
+    [taskCautionsText.value, 5, "注意"],
+    [taskPrerequisitesText.value, 4, "开始前需要"],
   ] as const
   for (const [value, max, label] of limits) {
     const lines = parseTaskLines(value)
@@ -281,6 +287,8 @@ function resetTaskForm() {
   taskExecutionPointsText.value = ""
   taskCautionsText.value = ""
   taskPrerequisitesText.value = ""
+  taskCautionsOpen.value = false
+  taskPrerequisitesOpen.value = false
   taskOwnerMode.value = "assigned"
   taskOwnerId.value = activeMembers.value[0]?.id ?? null
   taskOwnerClaimable.value = false
@@ -318,6 +326,8 @@ function editTask(task: Task) {
   taskExecutionPointsText.value = (task.execution_points ?? []).join("\n")
   taskCautionsText.value = (task.cautions ?? []).join("\n")
   taskPrerequisitesText.value = (task.prerequisites ?? []).join("\n")
+  taskCautionsOpen.value = Boolean(taskCautionsText.value.trim())
+  taskPrerequisitesOpen.value = Boolean(taskPrerequisitesText.value.trim())
   taskOwnerMode.value = task.owner ? "assigned" : "claimable"
   taskOwnerId.value = task.owner?.id ?? activeMembers.value[0]?.id ?? null
   taskOwnerClaimable.value = task.owner_claimable
@@ -1022,9 +1032,9 @@ function syncPlannerTaskDetails() {
 function plannerTaskLineLimitMessage() {
   for (const [index, text] of plannerTaskDetailsText.value.entries()) {
     const limits = [
-      [text.execution_points, 6, "执行要点"],
-      [text.cautions, 5, "注意事项"],
-      [text.prerequisites, 4, "前置条件"],
+      [text.execution_points, 6, "怎么做"],
+      [text.cautions, 5, "注意"],
+      [text.prerequisites, 4, "开始前需要"],
     ] as const
     for (const [value, max, label] of limits) {
       const lines = parseTaskLines(value)
@@ -1504,7 +1514,7 @@ onBeforeUnmount(() => {
               <span v-if="task.parent_id" class="state">{{ homeRoot(task)?.title || "事项" }}</span>
               <span v-else class="state">事项</span>
               <strong>{{ task.title }}</strong>
-              <span v-if="task.deliverable" class="home-task-deliverable">{{ task.deliverable }}</span>
+              <span v-if="task.parent_id !== null && task.deliverable" class="home-task-deliverable">{{ task.deliverable }}</span>
               <span class="home-task-meta">{{ formatDate(task.deadline) }} · {{ statusLabels[task.status] }}</span>
               <span class="home-task-arrow" aria-hidden="true">›</span>
             </button>
@@ -1644,10 +1654,6 @@ onBeforeUnmount(() => {
                     <input v-model="plannerDraft.item.title" maxlength="200" />
                   </label>
                   <label>
-                    完成标准（可选）
-                    <textarea v-model="plannerDraft.item.deliverable" maxlength="5000" rows="3" />
-                  </label>
-                  <label>
                     截止时间
                     <input v-model="plannerDraft.item.deadline" type="datetime-local" required />
                   </label>
@@ -1731,57 +1737,57 @@ onBeforeUnmount(() => {
                   />
                 </label>
                 <label class="planner-detail-deliverable">
-                  完成标准
+                  做到什么算完成
                   <textarea v-model="plannerSelectedTask.deliverable" maxlength="5000" rows="3" placeholder="写清楚看到什么结果即可判定完成" />
                 </label>
 
                 <section
-                  v-if="plannerTaskDetailsText[plannerSelectedTaskIndex] && (parseTaskLines(plannerTaskDetailsText[plannerSelectedTaskIndex].execution_points).length || plannerEmptyDetailSection === 'execution_points')"
-                  class="planner-detail-section"
+                  v-if="plannerTaskDetailsText[plannerSelectedTaskIndex] && (parseTaskLines(plannerTaskDetailsText[plannerSelectedTaskIndex].execution_points).length || parseTaskLines(plannerTaskDetailsText[plannerSelectedTaskIndex].cautions).length || plannerEmptyDetailSection === 'execution_points' || plannerEmptyDetailSection === 'cautions')"
+                  class="planner-detail-section planner-execution-hints"
                 >
-                  <h3 v-if="parseTaskLines(plannerTaskDetailsText[plannerSelectedTaskIndex].execution_points).length">执行要点</h3>
-                  <textarea
-                    v-model="plannerTaskDetailsText[plannerSelectedTaskIndex].execution_points"
-                    data-planner-detail-field="execution_points"
-                    rows="3"
-                    maxlength="1600"
-                    aria-label="执行要点，每行一条，最多 6 条"
-                    placeholder="按顺序写关键步骤；每行一条，最多 6 条"
-                  />
+                  <h3>执行提示</h3>
+                  <label v-if="parseTaskLines(plannerTaskDetailsText[plannerSelectedTaskIndex].execution_points).length || plannerEmptyDetailSection === 'execution_points'" class="planner-detail-subfield">
+                    怎么做
+                    <textarea
+                      v-model="plannerTaskDetailsText[plannerSelectedTaskIndex].execution_points"
+                      data-planner-detail-field="execution_points"
+                      rows="2"
+                      maxlength="1600"
+                      aria-label="怎么做，每行一条，最多 6 条"
+                      placeholder="写完成责任所需的关键步骤；每行一条"
+                    />
+                  </label>
+                  <button v-else class="planner-add-detail" type="button" @click="openPlannerEmptyDetailSection('execution_points')">＋ 添加怎么做</button>
+                  <label v-if="parseTaskLines(plannerTaskDetailsText[plannerSelectedTaskIndex].cautions).length || plannerEmptyDetailSection === 'cautions'" class="planner-detail-subfield">
+                    注意
+                    <textarea
+                      v-model="plannerTaskDetailsText[plannerSelectedTaskIndex].cautions"
+                      data-planner-detail-field="cautions"
+                      rows="2"
+                      maxlength="1200"
+                      aria-label="注意，每行一条，最多 5 条"
+                      placeholder="只写与当前任务直接相关的提醒"
+                    />
+                  </label>
+                  <button v-else class="planner-add-detail" type="button" @click="openPlannerEmptyDetailSection('cautions')">＋ 添加注意</button>
                 </section>
-                <button v-else class="planner-add-detail" type="button" @click="openPlannerEmptyDetailSection('execution_points')">＋ 添加执行要点</button>
-
-                <section
-                  v-if="plannerTaskDetailsText[plannerSelectedTaskIndex] && (parseTaskLines(plannerTaskDetailsText[plannerSelectedTaskIndex].cautions).length || plannerEmptyDetailSection === 'cautions')"
-                  class="planner-detail-section"
-                >
-                  <h3 v-if="parseTaskLines(plannerTaskDetailsText[plannerSelectedTaskIndex].cautions).length">注意事项</h3>
-                  <textarea
-                    v-model="plannerTaskDetailsText[plannerSelectedTaskIndex].cautions"
-                    data-planner-detail-field="cautions"
-                    rows="2"
-                    maxlength="1200"
-                    aria-label="注意事项，每行一条，最多 5 条"
-                    placeholder="只写与当前任务直接相关的提醒"
-                  />
-                </section>
-                <button v-else class="planner-add-detail" type="button" @click="openPlannerEmptyDetailSection('cautions')">＋ 添加注意事项</button>
+                <button v-else class="planner-add-detail" type="button" @click="openPlannerEmptyDetailSection('execution_points')">＋ 添加执行提示</button>
 
                 <section
                   v-if="plannerTaskDetailsText[plannerSelectedTaskIndex] && (parseTaskLines(plannerTaskDetailsText[plannerSelectedTaskIndex].prerequisites).length || plannerEmptyDetailSection === 'prerequisites')"
                   class="planner-detail-section"
                 >
-                  <h3 v-if="parseTaskLines(plannerTaskDetailsText[plannerSelectedTaskIndex].prerequisites).length">前置条件</h3>
+                  <h3>开始前需要</h3>
                   <textarea
                     v-model="plannerTaskDetailsText[plannerSelectedTaskIndex].prerequisites"
                     data-planner-detail-field="prerequisites"
                     rows="2"
                     maxlength="960"
-                    aria-label="前置条件，每行一条，最多 4 条"
-                    placeholder="开始前必须满足的条件；不是任务依赖"
+                    aria-label="开始前需要，每行一条，最多 4 条"
+                    placeholder="只有缺少时任务就不能合理开始的条件"
                   />
                 </section>
-                <button v-else class="planner-add-detail" type="button" @click="openPlannerEmptyDetailSection('prerequisites')">＋ 添加前置条件</button>
+                <button v-else class="planner-add-detail" type="button" @click="openPlannerEmptyDetailSection('prerequisites')">＋ 添加开始条件</button>
 
                 <div class="planner-options planner-detail-options">
                   <div class="planner-option">
@@ -1807,7 +1813,7 @@ onBeforeUnmount(() => {
                       <textarea v-model="plannerRefineInstruction" rows="2" maxlength="1000" placeholder="例如：让新人拿到后更容易执行" />
                     </label>
                     <div class="planner-refine-actions">
-                      <button class="secondary" type="button" :disabled="plannerRefining" @click="refineAIPlan(plannerSelectedTaskIndex, '补充执行要点')">补充执行要点</button>
+                      <button class="secondary" type="button" :disabled="plannerRefining" @click="refineAIPlan(plannerSelectedTaskIndex, '补充执行提示')">补充执行提示</button>
                       <button class="secondary" type="button" :disabled="plannerRefining" @click="refineAIPlan(plannerSelectedTaskIndex, '检查容易遗漏的点')">检查遗漏</button>
                       <button class="secondary" type="button" :disabled="plannerRefining" @click="refineAIPlan(plannerSelectedTaskIndex, '简化这张任务卡，保留最必要的信息')">简化</button>
                       <button class="primary" type="button" :disabled="plannerRefining || !plannerRefineInstruction.trim()" @click="refineAIPlan(plannerSelectedTaskIndex)">
@@ -1841,7 +1847,6 @@ onBeforeUnmount(() => {
               <span>截止 {{ formatDate(detailTask.deadline) }}</span>
               <span>{{ detailTask.owner ? "总负责人 " + detailTask.owner.name : "总负责人待认领" }}</span>
             </div>
-            <p v-if="detailTask.deliverable" class="execution-description">{{ detailTask.deliverable }}</p>
           </section>
 
           <section class="execution-section">
@@ -1913,7 +1918,7 @@ onBeforeUnmount(() => {
           </section>
 
           <section v-if="detailTask.deliverable" class="execution-section">
-            <div class="section-heading"><h2>完成标准</h2></div>
+            <div class="section-heading"><h2>做到什么算完成</h2></div>
             <p class="execution-description">{{ detailTask.deliverable }}</p>
           </section>
 
@@ -1923,7 +1928,7 @@ onBeforeUnmount(() => {
           </section>
 
           <section class="execution-section">
-            <div class="section-heading"><h2>执行结果</h2></div>
+            <div class="section-heading"><h2>实际结果</h2></div>
             <template v-if="canEditDetailResult">
               <textarea v-model="taskResultDraft" maxlength="5000" rows="5" placeholder="记录实际完成后得到的结果" />
               <div class="result-actions">
@@ -2036,32 +2041,38 @@ onBeforeUnmount(() => {
           </label>
 
           <details class="advanced-fields">
-            <summary>完成标准与协作设置</summary>
+            <summary>{{ parentTaskId === null ? "协作设置" : "执行说明与协作设置" }}</summary>
             <div class="advanced-grid">
-              <label>
-                完成标准（可选）
+              <label v-if="parentTaskId !== null">
+                做到什么算完成
                 <textarea
                   v-model="taskDeliverable"
                   maxlength="5000"
                   rows="3"
-                  placeholder="例如：照片原图上传并完成分类"
+                  placeholder="写清楚看到什么结果即可判定完成"
                 />
               </label>
 
-              <label>
-                执行要点（每行一条，最多 6 条）
-                <textarea v-model="taskExecutionPointsText" rows="3" placeholder="按清单核对设备；检查供电与控制状态" />
-              </label>
+              <section v-if="parentTaskId !== null" class="task-edit-hints">
+                <h3>执行提示</h3>
+                <label>
+                  怎么做（每行一条，最多 6 条）
+                  <textarea v-model="taskExecutionPointsText" rows="2" placeholder="写完成责任所需的关键步骤" />
+                </label>
+                <label v-if="taskCautionsText.trim() || taskCautionsOpen">
+                  注意（每行一条，最多 5 条）
+                  <textarea v-model="taskCautionsText" rows="2" placeholder="只写与当前任务直接相关的提醒" />
+                </label>
+                <button v-else class="planner-add-detail" type="button" @click="taskCautionsOpen = true">＋ 添加注意</button>
+              </section>
 
-              <label>
-                注意事项（每行一条，最多 5 条）
-                <textarea v-model="taskCautionsText" rows="3" placeholder="填写与本项工作直接相关的提醒" />
-              </label>
-
-              <label>
-                前置条件（每行一条，最多 4 条）
-                <textarea v-model="taskPrerequisitesText" rows="2" placeholder="填写开始前必须具备的条件" />
-              </label>
+              <section v-if="parentTaskId !== null" class="task-edit-prerequisites">
+                <label v-if="taskPrerequisitesText.trim() || taskPrerequisitesOpen">
+                  开始前需要（每行一条，最多 4 条）
+                  <textarea v-model="taskPrerequisitesText" rows="2" placeholder="只有缺少时任务就不能合理开始的条件" />
+                </label>
+                <button v-else class="planner-add-detail" type="button" @click="taskPrerequisitesOpen = true">＋ 添加开始条件</button>
+              </section>
 
               <fieldset>
                 <legend>协作者</legend>
@@ -2108,7 +2119,6 @@ onBeforeUnmount(() => {
               <div class="operation-main">
                 <span class="state">事项 · {{ statusLabels[task.status] }}</span>
                 <button class="task-title-link" type="button" @click="openTaskDetail(task)"><h3>{{ task.title }}</h3></button>
-                <p v-if="task.deliverable">{{ task.deliverable }}</p>
                 <small>
                   {{ task.owner ? "总负责人 " + task.owner.name : "总负责人待认领" }}
                   · 截止 {{ formatDate(task.deadline) }}

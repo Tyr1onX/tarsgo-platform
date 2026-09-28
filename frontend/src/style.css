@@ -987,6 +987,26 @@ h3 {
   margin-top: 16px;
 }
 
+.task-edit-hints,
+.task-edit-prerequisites {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.task-edit-hints h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 620;
+}
+
+.task-edit-hints textarea,
+.task-edit-prerequisites textarea {
+  background: var(--surface);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
 .task-board {
   margin-top: 6px;
 }
@@ -1943,6 +1963,8 @@ h3 {
 .planner-detail-section textarea { background: #fff; font-size: 13px; line-height: 1.55; }
 .planner-detail-section { display: grid; gap: 6px; }
 .planner-detail-section h3 { margin: 0; font-size: 13px; font-weight: 620; }
+.planner-detail-subfield { display: grid; gap: 5px; color: var(--muted); font-size: 12px; }
+.planner-execution-hints { gap: 9px; }
 .planner-add-detail {
   width: fit-content;
   border: 0;

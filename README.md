@@ -78,10 +78,10 @@ A task may be:
 Current task fields include:
 
 - title
-- optional completion standard (deliverable)
+- optional child-task result check (“做到什么算完成”; root items do not repeat a total completion standard)
 - execution points (up to 6 short strings)
 - cautions (up to 5 short strings)
-- prerequisites (up to 4 short strings; readable guidance, not blocking dependencies)
+- prerequisites (up to 4 short strings; only conditions that would prevent the task from reasonably starting, with no system dependency behavior)
 - optional owner
 - owner_claimable
 - collaborators

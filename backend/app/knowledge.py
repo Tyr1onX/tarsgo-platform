@@ -804,7 +804,7 @@ _HISTORICAL_DATE_RE = re.compile(r"20\d{2}(?:\s*年\s*|\s*[-/.]\s*)\d{1,2}")
 
 
 def _suggestion_evidence(content: str, max_chars: int = MAX_SUGGESTION_CONTEXT_CHARS) -> str:
-    """Extract compact, explicit historical-event evidence for suggestions only."""
+    """Extract bounded historical facts and explicit reminder candidates for suggestions only."""
     if max_chars <= 0:
         return ""
     body = content.strip()
@@ -813,19 +813,39 @@ def _suggestion_evidence(content: str, max_chars: int = MAX_SUGGESTION_CONTEXT_C
         if end >= 0:
             body = body[end + 4 :].lstrip()
 
-    paragraphs = [part.strip() for part in re.split(r"\n\s*\n", body) if part.strip()]
+    reminder_lines: list[str] = []
+    history_lines: list[str] = []
+    in_reminder_section = False
+    for line in body.splitlines():
+        heading = re.match(r"^##\s+(.+?)\s*$", line.strip())
+        if heading:
+            in_reminder_section = heading.group(1).strip() == "可提醒事项"
+            continue
+        if in_reminder_section:
+            if line.strip():
+                reminder_lines.append(line.strip())
+        else:
+            history_lines.append(line)
+
     evidence: list[str] = []
+    reminder_text = " ".join(reminder_lines).strip()
+    if reminder_text:
+        evidence.append(f"【明确可提醒事项】{reminder_text}")
+
+    paragraphs = [part.strip() for part in re.split(r"\n\s*\n", "\n".join(history_lines)) if part.strip()]
     used = 0
+    if evidence:
+        used = len(evidence[0])
     for paragraph in paragraphs:
         normalized = " ".join(line.strip() for line in paragraph.splitlines() if line.strip())
         if not _HISTORICAL_DATE_RE.search(normalized):
             continue
         if not any(term in normalized for term in _HISTORICAL_ACTION_TERMS):
             continue
-        available = max_chars - used - (2 if evidence else 0)
+        available = max_chars - used - (2 if evidence else 0) - len("【历史事实】")
         if available <= 0:
             break
-        piece = normalized[:available]
+        piece = "【历史事实】" + normalized[:available]
         evidence.append(piece)
         used += len(piece) + (2 if len(evidence) > 1 else 0)
     return "\n\n".join(evidence)[:max_chars]
@@ -854,7 +874,7 @@ def _suggestion_grounding(
         document = by_id.get(reference.id)
         if document is None:
             continue
-        header = f"资料《{reference.title[:120]}》的历史事实摘录：\n"
+        header = f"资料《{reference.title[:120]}》的 suggestion 依据：\n"
         available = max_chars - used - len(header) - (2 if parts else 0)
         if available <= 0:
             break

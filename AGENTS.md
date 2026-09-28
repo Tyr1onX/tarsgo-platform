@@ -80,10 +80,10 @@ Current task structure:
 
 - parent_id: nullable self-reference
 - title
-- deliverable: optional completion standard stored as text
+- deliverable: optional child-task result check stored as text; the UI calls it “做到什么算完成”; root items do not repeat a total completion standard
 - execution_points: up to six concise execution steps
 - cautions: up to five concise task-specific reminders
-- prerequisites: up to four readable preconditions, not blocking dependencies
+- prerequisites: up to four conditions that would prevent the task from reasonably starting; they do not create system dependency behavior
 - context_facts: root-item current confirmed facts; child rows keep an empty list
 - result: optional execution outcome text
 - owner_id: nullable

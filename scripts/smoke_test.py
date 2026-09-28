@@ -247,6 +247,13 @@ def run_workflow():
         collaboration_open=True,
         deadline="2026-09-21T17:00:00",
     )
+    collaboration_child = call(
+        manager,
+        f"/api/tasks/{collaboration_child['id']}",
+        method="PATCH",
+        data={"result": "管理者可以记录任务执行结果。"},
+    )
+    assert collaboration_child["result"] == "管理者可以记录任务执行结果。"
 
     call(
         manager,
@@ -301,6 +308,18 @@ def run_workflow():
     left = call(owner, f"/api/tasks/{collaboration_child['id']}/collaborators/leave", method="POST")
     assert owner_id not in {item["id"] for item in left["collaborators"]}
 
+    collaborator_joined = call(second, f"/api/tasks/{collaboration_child['id']}/collaborators/join", method="POST")
+    assert second_id in {item["id"] for item in collaborator_joined["collaborators"]}
+    collaborator_activity = call(
+        second,
+        f"/api/tasks/{root['id']}/activities",
+        method="POST",
+        data={"content": "协作者可以记录所属事项动态。", "add_to_context": False},
+        expected=201,
+    )
+    assert collaborator_activity["author"]["id"] == second_id
+    call(second, f"/api/tasks/{collaboration_child['id']}/collaborators/leave", method="POST")
+
     reassigned = call(
         manager,
         f"/api/tasks/{claim_child['id']}",
@@ -352,6 +371,14 @@ def run_workflow():
     assert activity["author"]["id"] == owner_id
     root_with_activity_fact = call(owner, f"/api/tasks/{root['id']}")
     assert root_with_activity_fact["context_facts"] == ["主办方要求当天提前 20 分钟完成布展。"]
+    call(
+        owner,
+        f"/api/tasks/{root['id']}/context-facts",
+        method="POST",
+        data={"content": "字" * 501},
+        expected=422,
+    )
+    call(owner, f"/api/tasks/{root['id']}/result-to-context", method="POST", expected=409)
 
     manual_fact = call(
         owner,

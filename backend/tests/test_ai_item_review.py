@@ -384,6 +384,7 @@ def main() -> None:
             db.delete(row)
         for task in db.scalars(select(Task).where(Task.parent_id == root_id)).all():
             db.delete(task)
+        db.flush()
         db.delete(db.get(Task, root_id))
         db.delete(db.get(KnowledgeDocument, doc_id))
         for usage in db.scalars(select(AIPlannerDailyUsage).where(AIPlannerDailyUsage.member_id == admin.id)).all():

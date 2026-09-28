@@ -1540,6 +1540,266 @@ h3 {
 .knowledge-row .state { display: inline-block; }
 .knowledge-row > button { flex: 0 0 auto; }
 .visually-hidden { display: none; }
+
+.base-entry {
+  margin-bottom: 34px;
+  padding: 4px 0 30px;
+  border-bottom: 1px solid var(--line);
+}
+
+.base-kicker {
+  margin: 0 0 8px;
+  color: var(--faint);
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+}
+
+.base-entry > h1 {
+  margin-bottom: 20px;
+}
+
+.base-composer {
+  max-width: 760px;
+}
+
+.base-composer > textarea {
+  min-height: 132px;
+}
+
+.base-manual-create {
+  margin-top: 12px;
+  border: 0;
+  background: transparent;
+  padding: 3px 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.base-manual-create:hover {
+  color: var(--text);
+}
+
+.home-task-cards,
+.detail-task-list,
+.fact-list,
+.activity-list {
+  display: grid;
+  gap: 10px;
+}
+
+.home-task-card,
+.detail-task-card {
+  position: relative;
+  display: grid;
+  width: 100%;
+  gap: 5px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  padding: 15px 42px 15px 16px;
+  color: inherit;
+  text-align: left;
+}
+
+.home-task-card:hover,
+.detail-task-card:hover {
+  border-color: var(--line-strong);
+}
+
+.home-task-card strong,
+.detail-task-card strong {
+  font-size: 15.5px;
+  font-weight: 570;
+}
+
+.home-task-deliverable,
+.detail-task-card > span:not(.state):not(.home-task-arrow) {
+  color: var(--secondary);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.home-task-meta,
+.detail-task-card small {
+  color: var(--faint);
+  font-size: 12px;
+}
+
+.home-task-arrow {
+  position: absolute;
+  top: 50%;
+  right: 16px;
+  color: var(--faint);
+  font-size: 24px;
+  transform: translateY(-50%);
+}
+
+.execution-detail-heading {
+  align-items: flex-end;
+}
+
+.execution-detail-heading > div {
+  display: grid;
+  gap: 5px;
+}
+
+.execution-detail-heading h1 {
+  margin: 0;
+}
+
+.detail-back,
+.task-title-link,
+.execution-section .section-heading button,
+.fact-row button,
+.inline-entry button,
+.knowledge-maintenance button {
+  border: 0;
+  background: transparent;
+  padding: 3px 0;
+  color: var(--muted);
+}
+
+.detail-back:hover,
+.task-title-link:hover,
+.execution-section .section-heading button:hover,
+.fact-row button:hover,
+.inline-entry button:hover,
+.knowledge-maintenance button:hover {
+  color: var(--text);
+}
+
+.task-title-link {
+  width: fit-content;
+  color: inherit;
+  text-align: left;
+}
+
+.task-title-link h3,
+.task-title-link h4 {
+  margin-inline: 0;
+}
+
+.execution-section {
+  margin-bottom: 30px;
+}
+
+.execution-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.execution-description {
+  margin: 10px 0 0;
+  color: var(--secondary);
+  white-space: pre-wrap;
+}
+
+.execution-list {
+  margin: 0;
+  padding-left: 20px;
+  color: var(--secondary);
+}
+
+.execution-list li + li {
+  margin-top: 5px;
+}
+
+.fact-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 11px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.fact-row > span {
+  min-width: 0;
+  white-space: pre-wrap;
+}
+
+.inline-entry {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.inline-entry button {
+  padding-inline: 4px;
+}
+
+.activity-row {
+  padding: 13px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.activity-row time,
+.activity-row small {
+  color: var(--faint);
+  font-size: 11.5px;
+}
+
+.activity-row p {
+  margin: 3px 0;
+  white-space: pre-wrap;
+}
+
+.activity-entry {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.activity-entry-actions,
+.result-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.result-actions {
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+
+.task-detail-actions {
+  display: grid;
+  gap: 12px;
+  padding-top: 4px;
+  border-top: 1px solid var(--line);
+}
+
+.compact-empty {
+  padding: 16px 0;
+}
+
+.compact-empty p {
+  margin: 0;
+  color: var(--faint);
+}
+
+.knowledge-maintenance {
+  margin: -12px 0 26px;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.knowledge-maintenance summary {
+  cursor: pointer;
+}
+
+.knowledge-maintenance button {
+  display: block;
+  margin-top: 10px;
+}
+
 .text-action {
   border: 0;
   background: transparent;

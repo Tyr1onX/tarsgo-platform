@@ -7,6 +7,8 @@ Role = Literal["admin", "manager", "member"]
 MemberStatus = Literal["invited", "active", "disabled"]
 TaskStatus = Literal["todo", "doing", "done"]
 TaskDetailText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=240)]
+ContextFactText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)]
+ItemActivityText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2000)]
 
 
 def _clean_task_details(values: list[str] | None, *, max_items: int, field_name: str) -> list[str] | None:
@@ -151,6 +153,7 @@ class TaskUpdate(BaseModel):
     execution_points: list[TaskDetailText] | None = Field(default=None, max_length=6)
     cautions: list[TaskDetailText] | None = Field(default=None, max_length=5)
     prerequisites: list[TaskDetailText] | None = Field(default=None, max_length=4)
+    result: str | None = Field(default=None, max_length=5000)
     owner_id: int | None = None
     owner_claimable: bool | None = None
     collaborator_ids: list[int] | None = None
@@ -188,6 +191,11 @@ class TaskUpdate(BaseModel):
     def clean_optional_prerequisites(cls, value: list[str] | None) -> list[str] | None:
         return _clean_task_details(value, max_items=4, field_name="前置条件")
 
+    @field_validator("result")
+    @classmethod
+    def strip_optional_result(cls, value: str | None) -> str | None:
+        return None if value is None else value.strip()
+
 
 class TaskOut(BaseModel):
     id: int
@@ -197,6 +205,8 @@ class TaskOut(BaseModel):
     execution_points: list[str] = Field(default_factory=list)
     cautions: list[str] = Field(default_factory=list)
     prerequisites: list[str] = Field(default_factory=list)
+    context_facts: list[str] = Field(default_factory=list)
+    result: str = ""
     owner: MemberSummary | None
     owner_claimable: bool
     collaborators: list[MemberSummary]
@@ -204,6 +214,23 @@ class TaskOut(BaseModel):
     deadline: datetime
     status: TaskStatus
     created_by: int
+    created_at: datetime
+
+
+class ItemFactCreate(BaseModel):
+    content: ContextFactText
+
+
+class ItemActivityCreate(BaseModel):
+    content: ItemActivityText
+    add_to_context: bool = False
+
+
+class ItemActivityOut(BaseModel):
+    id: int
+    root_task_id: int
+    author: MemberSummary
+    content: str
     created_at: datetime
 
 

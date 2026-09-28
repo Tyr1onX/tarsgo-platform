@@ -103,7 +103,7 @@ class Task(Base):
     context_facts: Mapped[list[str]] = mapped_column(
         JSON(), default=list, server_default=text("(JSON_ARRAY())"), nullable=False
     )
-    result: Mapped[str] = mapped_column(Text(), default="", server_default="", nullable=False)
+    result: Mapped[str] = mapped_column(Text(), default="", nullable=False)
     owner_id: Mapped[int | None] = mapped_column(ForeignKey("members.id"), nullable=True)
     owner_claimable: Mapped[bool] = mapped_column(Boolean(), default=False, server_default="0")
     collaboration_open: Mapped[bool] = mapped_column(Boolean(), default=False, server_default="0")

@@ -165,6 +165,7 @@ def main() -> None:
         root_id, todo_id, done_id, doc_id = root.id, todo.id, done.id, reminder_doc.id
 
         before_tasks = db.scalar(select(func.count(Task.id))) or 0
+        before_activities = db.scalar(select(func.count(ItemActivity.id))) or 0
         original = db.get(Task, todo_id)
         original_state = {
             "title": original.title,
@@ -236,7 +237,7 @@ def main() -> None:
         assert "本团队历史手册提到可考虑直播" not in provider.context
         assert admin.name not in provider.context and admin.email not in provider.context
         assert "[成员]" in provider.context and "[邮箱]" in provider.context
-        assert (db.scalar(select(func.count(ItemActivity.id))) or 0) == 1
+        assert (db.scalar(select(func.count(ItemActivity.id))) or 0) == before_activities
 
         usage_date = ai_planner._usage_date()
         usage_before_apply = db.scalar(

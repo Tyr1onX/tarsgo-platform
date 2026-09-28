@@ -10,7 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from starlette.datastructures import UploadFile
 
-from app.ai_planner import PlannerGeneration, PlannerInvalidResponse
+from app.ai_planner import PlannerGeneration, PlannerInvalidResponse, SYSTEM_PROMPT
 from app.db import SessionLocal
 from app.main import app
 from app.knowledge import MAX_UPLOAD_BYTES
@@ -76,6 +76,12 @@ def main() -> None:
             "AI_API_KEY": "ci-placeholder",
             "AI_MODEL": "ci-placeholder",
         })
+
+        assert "questions 的优先级最低" in SYSTEM_PROMPT
+        assert "title、deliverable、execution_points 或 prerequisites" in SYSTEM_PROMPT
+        assert "该 question 必须删除" in SYSTEM_PROMPT
+        assert "没有任何已有或可合理生成的团队 task 能够解决该未知" in SYSTEM_PROMPT
+        assert "即使负责人现在直接回答会更方便" in SYSTEM_PROMPT
 
         anonymous_upload = TestClient(app).post(
             "/api/ai/planner/extract",

@@ -2,9 +2,11 @@
 import { computed, onBeforeUnmount, onMounted, ref } from "vue"
 
 import { ApiError, api } from "./api"
+import { filterIgnoredPlannerSuggestions, ignorePlannerSuggestion, plannerSuggestionJoinInstruction } from "./plannerSuggestions.js"
 import type {
   AIPlannerDraft,
   AIPlannerExtractedFile,
+  AIPlannerSuggestionDraft,
   AIPlannerTaskDraft,
   InvitationInfo,
   InviteResult,
@@ -53,6 +55,7 @@ const plannerRefineOpenIndex = ref<number | null>(null)
 const plannerRefineInstruction = ref("")
 const plannerGlobalInstruction = ref("")
 const plannerRefining = ref(false)
+const plannerIgnoredSuggestionKeys = new Set<string>()
 const knowledgeDocuments = ref<KnowledgeDocument[]>([])
 const knowledgeUploading = ref(false)
 const knowledgeSyncing = ref(false)
@@ -603,6 +606,7 @@ async function leaveTask(task: Task) {
 
 
 function startAIPlanner() {
+  if (!plannerDraft.value) plannerIgnoredSuggestionKeys.clear()
   error.value = ""
   navigate("/ai-planner")
 }
@@ -766,9 +770,19 @@ function plannerTaskLineLimitMessage() {
 
 function setPlannerDraft(draft: AIPlannerDraft) {
   if (draft.item.deadline) draft.item.deadline = toLocalInput(draft.item.deadline)
+  filterIgnoredPlannerSuggestions(draft, plannerIgnoredSuggestionKeys)
   plannerDraft.value = draft
   resetPlannerTaskDetails(draft)
   plannerRefineOpenIndex.value = null
+}
+
+function dismissPlannerSuggestion(index: number) {
+  if (!plannerDraft.value) return
+  ignorePlannerSuggestion(plannerDraft.value, index, plannerIgnoredSuggestionKeys)
+}
+
+async function addPlannerSuggestion(suggestion: AIPlannerSuggestionDraft) {
+  await refineAIPlan(undefined, plannerSuggestionJoinInstruction(suggestion))
 }
 
 async function generateAIPlan() {
@@ -840,6 +854,7 @@ async function publishAIPlan() {
       })),
     })
     plannerDraft.value = null
+    plannerIgnoredSuggestionKeys.clear()
     plannerDescription.value = ""
     plannerAttachments.value = []
     plannerAttachmentMessage.value = ""
@@ -957,6 +972,7 @@ async function logout() {
   taskMembers.value = []
   aiPlannerAvailable.value = false
   plannerDraft.value = null
+  plannerIgnoredSuggestionKeys.clear()
   navigate("/login")
 }
 
@@ -1403,6 +1419,22 @@ onBeforeUnmount(() => window.removeEventListener("popstate", handlePopState))
             <ul>
               <li v-for="question in plannerDraft.questions" :key="question">{{ question }}</li>
             </ul>
+          </div>
+
+          <div v-if="plannerDraft.suggestions.length" class="planner-section planner-suggestions">
+            <h2>可能遗漏 <span class="planner-task-count">· {{ plannerDraft.suggestions.length }}</span></h2>
+            <div class="planner-suggestion-list">
+              <article v-for="(suggestion, index) in plannerDraft.suggestions" :key="suggestion.title + '-' + suggestion.reason" class="planner-suggestion">
+                <div>
+                  <h3>{{ suggestion.title }}</h3>
+                  <p>{{ suggestion.reason }}</p>
+                </div>
+                <div class="planner-suggestion-actions">
+                  <button class="text-action" type="button" :disabled="plannerRefining || plannerPublishing" @click="dismissPlannerSuggestion(index)">忽略</button>
+                  <button class="secondary" type="button" :disabled="plannerRefining || plannerPublishing" @click="addPlannerSuggestion(suggestion)">加入方案</button>
+                </div>
+              </article>
+            </div>
           </div>
 
           <div class="planner-publish">

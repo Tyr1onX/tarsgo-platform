@@ -22,6 +22,7 @@ from app.schemas import (
     AIPlannerItemDraft,
     AIPlannerRequest,
     AIPlannerRefineRequest,
+    AIPlannerSuggestionDraft,
     AIPlannerTaskDraft,
     TaskBatchChildIn,
     TaskBatchCreate,
@@ -46,6 +47,12 @@ class FakeProvider:
                     AIPlannerTaskDraft(title="活动资料归档", deliverable="素材按活动归档。", execution_points=[], cautions=[], prerequisites=[], owner_claimable=True, collaboration_open=False),
                 ],
                 questions=["活动当天的最终结束时间是什么？"],
+                suggestions=[
+                    AIPlannerSuggestionDraft(
+                        title="战队周边展示",
+                        reason="类似科技展示曾使用少量战队周边作为展台展示，本次描述尚未提及。",
+                    )
+                ],
             ),
             input_tokens=120, output_tokens=180, total_tokens=300,
         )
@@ -151,6 +158,7 @@ def main() -> None:
         draft = result.draft
         assert not hasattr(draft.tasks[0], "owner_id")
         assert draft.tasks[0].execution_points and draft.tasks[0].cautions and draft.tasks[0].prerequisites
+        assert [suggestion.title for suggestion in draft.suggestions] == ["战队周边展示"]
         denied_refine = AIPlannerRefineRequest(
             description=request.description,
             draft=draft,
@@ -188,6 +196,9 @@ def main() -> None:
                 collaboration_open=False,
             )],
             questions=["不应覆盖原问题"],
+            suggestions=[
+                AIPlannerSuggestionDraft(title="不应覆盖原建议", reason="单卡调整输出中的建议应被后端忽略。")
+            ],
         )
         scoped_provider = FakeProvider(draft=scoped_output)
         scoped = planner_router.refine_plan(
@@ -205,6 +216,7 @@ def main() -> None:
         assert "只调整第 2 张任务卡" in scoped_provider.description
         assert scoped.draft.item.title == original_dump["item"]["title"]
         assert scoped.draft.questions == result.draft.questions
+        assert scoped.draft.suggestions == result.draft.suggestions
         assert scoped.draft.tasks[0].model_dump() == result.draft.tasks[0].model_dump()
         assert scoped.draft.tasks[2].model_dump() == result.draft.tasks[2].model_dump()
         assert scoped.draft.tasks[1].title == "更适合新人执行的摄影任务"
@@ -220,6 +232,9 @@ def main() -> None:
                 cautions=[], prerequisites=[], owner_claimable=True, collaboration_open=False,
             )],
             questions=[],
+            suggestions=[
+                AIPlannerSuggestionDraft(title="新提醒", reason="全局调整允许根据当前知识重新生成可能遗漏。")
+            ],
         )
         global_provider = FakeProvider(draft=global_output)
         global_result = planner_router.refine_plan(
@@ -236,6 +251,49 @@ def main() -> None:
         assert "全局调整" in global_provider.description
         assert global_result.draft.item.title == "精简后的科技展"
         assert len(global_result.draft.tasks) == 1 and global_result.draft.questions == []
+        assert [suggestion.title for suggestion in global_result.draft.suggestions] == ["新提醒"]
+
+        join_output = AIPlannerDraft(
+            item=result.draft.item.model_copy(deep=True),
+            tasks=[
+                AIPlannerTaskDraft(
+                    title="机器人与展示设备准备",
+                    deliverable="设备和用于展台展示的战队周边准备完成，可按清单出发。",
+                    execution_points=["核对展示设备", "准备少量战队周边用于展台展示"],
+                    cautions=["周边仅用于展示，不扩展到其他用途"],
+                    prerequisites=[],
+                    owner_claimable=True,
+                    collaboration_open=False,
+                ),
+                result.draft.tasks[1].model_copy(deep=True),
+                result.draft.tasks[2].model_copy(deep=True),
+            ],
+            questions=[],
+            suggestions=[],
+        )
+        join_provider = FakeProvider(draft=join_output)
+        join_instruction = (
+            "负责人已确认将“战队周边展示”纳入本次事项。请将其合理融合进当前方案，"
+            "按照真实责任边界决定是新增 task 还是加入现有 task 的 execution_points / cautions / prerequisites。"
+            "不要再把它保留为 suggestion。只纳入这一已确认子意图，不要扩展到未确认的相邻用途。"
+        )
+        joined = planner_router.refine_plan(
+            AIPlannerRefineRequest(
+                description=request.description,
+                draft=result.draft,
+                instruction=join_instruction,
+            ),
+            current=admin,
+            db=db,
+            provider=join_provider,
+        )
+        assert join_provider.calls == 1
+        assert join_instruction in join_provider.description
+        assert joined.draft.suggestions == []
+        joined_text = joined.draft.model_dump_json()
+        assert "战队周边" in joined_text
+        for forbidden in ("周边发放", "周边礼赠", "周边采购", "周边宣传"):
+            assert forbidden not in joined_text
 
         expect_http(502, lambda: planner_router.generate_plan(request, current=admin, db=db, provider=InvalidProvider()))
 
@@ -245,6 +303,22 @@ def main() -> None:
         draft.tasks.pop(1)
         draft.tasks[0].title = "展示设备准备（人工修改）"
         draft.tasks.append(AIPlannerTaskDraft(title="现场直播", deliverable="直播稳定完成并保存回放。", execution_points=["确认直播链路"], cautions=[], prerequisites=[], owner_claimable=False, collaboration_open=True))
+
+        assert [suggestion.title for suggestion in draft.suggestions] == ["战队周边展示"]
+        try:
+            TaskBatchCreate.model_validate({
+                "item": {
+                    "title": draft.item.title,
+                    "deliverable": draft.item.deliverable,
+                    "deadline": draft.item.deadline,
+                },
+                "tasks": [TaskBatchChildIn.model_validate(task.model_dump()).model_dump() for task in draft.tasks],
+                "suggestions": [suggestion.model_dump() for suggestion in draft.suggestions],
+            })
+        except ValidationError:
+            pass
+        else:
+            raise AssertionError("batch create must reject planner-only suggestions")
 
         result = tasks_router.create_task_batch(
             TaskBatchCreate(
@@ -259,6 +333,7 @@ def main() -> None:
         )
         assert result.item.owner is not None and result.item.owner.id == admin.id
         assert len(result.tasks) == 3 and all(t.parent_id == result.item.id for t in result.tasks)
+        assert all(task.title != "战队周边展示" for task in result.tasks)
         claimable = next(t for t in result.tasks if t.title == "展示设备准备（人工修改）")
         assert claimable.owner is None and claimable.owner_claimable
         owned = next(t for t in result.tasks if t.title == "现场直播")

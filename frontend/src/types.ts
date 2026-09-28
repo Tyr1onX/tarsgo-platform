@@ -69,10 +69,15 @@ export interface AIPlannerTaskDraft {
   owner_claimable: boolean
   collaboration_open: boolean
 }
+export interface AIPlannerSuggestionDraft {
+  title: string
+  reason: string
+}
 export interface AIPlannerDraft {
   item: AIPlannerItemDraft
   tasks: AIPlannerTaskDraft[]
   questions: string[]
+  suggestions: AIPlannerSuggestionDraft[]
 }
 export interface AIPlannerRefineInput extends AIPlannerInput {
   draft: AIPlannerDraft

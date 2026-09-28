@@ -3,6 +3,8 @@ import os
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from pydantic import ValidationError
+
 from app.ai_planner import (
     DEEPSEEK_DEFAULT_BASE_URL,
     DeepSeekPlannerProvider,
@@ -11,7 +13,7 @@ from app.ai_planner import (
     SYSTEM_PROMPT,
     get_planner_provider,
 )
-from app.schemas import AIPlannerDraft, AIPlannerItemDraft, AIPlannerTaskDraft
+from app.schemas import AIPlannerDraft, AIPlannerItemDraft, AIPlannerSuggestionDraft, AIPlannerTaskDraft
 
 
 def draft() -> AIPlannerDraft:
@@ -33,6 +35,7 @@ def draft() -> AIPlannerDraft:
             )
         ],
         questions=["确认活动结束时间。"],
+        suggestions=[],
     )
 
 
@@ -103,7 +106,18 @@ def assert_generation_prompt_contract() -> None:
         "title、deliverable、execution_points 或 prerequisites",
         "该 question 必须删除",
         "即使负责人现在直接回答会更方便",
-        "先检查并定稿 tasks，再最后检查 questions",
+        "先检查并定稿 tasks，再检查 questions，最后检查 suggestions",
+        "suggestions 是独立于当前需求边界的“可能遗漏”提醒层",
+        "它不属于本次已确认事实",
+        "不得改变 tasks / questions 的需求边界",
+        "本次实际检索到的【团队历史经验】中存在真实、直接相关的依据",
+        "生成 suggestion 后不得回头把它自动塞入 task 或 question",
+        "同一事项不能同时存在于 task + suggestion 或 question + suggestion",
+        "0 条完全合法，通常 0～2 条最佳，最多 3 条",
+        "不要为了达到上限凑数",
+        "当前明确不需要的事项不得进入 suggestions",
+        "当前已经明确需要的事项应该进入正式 task",
+        "suggestions 同样遵守子意图不外溢",
         "questions 可以为空，0 个问题完全合法",
         "通常保持 0～3 个，不要为了接近最多 6 个而凑问题",
         "不要因为历史资料中曾经做过某项，就默认本次一定需要",
@@ -152,6 +166,41 @@ def main() -> None:
     zero_question_draft["questions"] = []
     assert AIPlannerDraft.model_validate(zero_question_draft).questions == []
 
+    legacy_without_suggestions = draft().model_dump(mode="json")
+    legacy_without_suggestions.pop("suggestions")
+    assert AIPlannerDraft.model_validate(legacy_without_suggestions).suggestions == []
+
+    suggestion = AIPlannerSuggestionDraft(
+        title="  战队周边展示  ",
+        reason="  类似科技展示曾使用少量战队周边作为展台展示，本次描述尚未提及。  ",
+    )
+    assert suggestion.title == "战队周边展示"
+    assert suggestion.reason.startswith("类似科技展示")
+
+    too_many = draft().model_dump(mode="json")
+    too_many["suggestions"] = [
+        {"title": f"建议{i}", "reason": "有直接相关的团队历史依据。"}
+        for i in range(4)
+    ]
+    try:
+        AIPlannerDraft.model_validate(too_many)
+    except ValidationError:
+        pass
+    else:
+        raise AssertionError("planner suggestions should allow at most 3 items")
+
+    for bad_suggestion in (
+        {"title": "x" * 81, "reason": "有依据"},
+        {"title": "有效标题", "reason": "x" * 201},
+        {"title": "   ", "reason": "有依据"},
+    ):
+        try:
+            AIPlannerSuggestionDraft.model_validate(bad_suggestion)
+        except ValidationError:
+            pass
+        else:
+            raise AssertionError("planner suggestion length/content validation should fail")
+
     openai_provider, openai_generation, openai_calls = run_with_fake("openai")
     assert isinstance(openai_provider, OpenAIPlannerProvider)
     assert openai_calls.get("parse_count") == 1
@@ -186,7 +235,14 @@ def main() -> None:
     assert text_format["type"] == "json_schema"
     assert text_format["strict"] is True
     assert text_format["schema"] == AIPlannerDraft.model_json_schema()
-    task_schema = text_format["schema"]["$defs"]["AIPlannerTaskDraft"]
+    draft_schema = text_format["schema"]
+    assert "suggestions" in draft_schema["required"]
+    assert draft_schema["properties"]["suggestions"]["maxItems"] == 3
+    suggestion_schema = draft_schema["$defs"]["AIPlannerSuggestionDraft"]
+    assert suggestion_schema["properties"]["title"]["maxLength"] == 80
+    assert suggestion_schema["properties"]["reason"]["maxLength"] == 200
+
+    task_schema = draft_schema["$defs"]["AIPlannerTaskDraft"]
     assert {"execution_points", "cautions", "prerequisites"} <= set(task_schema["required"])
     assert task_schema["properties"]["execution_points"]["maxItems"] == 6
     assert task_schema["properties"]["execution_points"]["items"]["maxLength"] == 240

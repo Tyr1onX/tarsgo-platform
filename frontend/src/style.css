@@ -1581,6 +1581,49 @@ h3 {
   color: var(--secondary);
 }
 .planner-questions li + li { margin-top: 6px; }
+.planner-suggestions {
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+}
+.planner-suggestion-list {
+  display: grid;
+  gap: 10px;
+}
+.planner-suggestion {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 13px 14px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--bg);
+}
+.planner-suggestion > div:first-child { min-width: 0; }
+.planner-suggestion h3 {
+  margin: 0 0 5px;
+  font-size: 14px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.planner-suggestion p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.planner-suggestion-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 9px;
+}
+.planner-suggestion-actions button {
+  padding: 7px 10px;
+  font-size: 12px;
+}
 button:disabled { cursor: not-allowed; opacity: 0.55; }
 
 @media (min-width: 720px) {
@@ -1601,6 +1644,8 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
   .planner-generate { width: 100%; min-height: 46px; }
   .planner-publish { display: grid; grid-template-columns: minmax(0, 1fr); }
   .planner-options { grid-template-columns: minmax(0, 1fr); }
+  .planner-suggestion { align-items: stretch; flex-direction: column; gap: 10px; }
+  .planner-suggestion-actions { justify-content: flex-end; }
   .knowledge-actions { align-items: flex-start; flex-direction: column; }
   .knowledge-row { gap: 10px; }
 }

@@ -313,11 +313,34 @@ class AIPlannerTaskDraft(BaseModel):
         return _clean_task_details(value, max_items=4, field_name="前置条件") or []
 
 
+class AIPlannerSuggestionDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    title: str = Field(min_length=1, max_length=80)
+    reason: str = Field(min_length=1, max_length=200)
+
+    @field_validator("title", "reason")
+    @classmethod
+    def strip_suggestion_text(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("可能遗漏内容不能为空")
+        return value
+
+
 class AIPlannerDraft(BaseModel):
     model_config = ConfigDict(extra="forbid")
     item: AIPlannerItemDraft
     tasks: list[AIPlannerTaskDraft] = Field(min_length=1, max_length=15)
     questions: list[str] = Field(max_length=6)
+    suggestions: list[AIPlannerSuggestionDraft] = Field(max_length=3)
+
+    @model_validator(mode="before")
+    @classmethod
+    def default_suggestions(cls, value):
+        if isinstance(value, dict) and "suggestions" not in value:
+            value = dict(value)
+            value["suggestions"] = []
+        return value
 
     @field_validator("questions")
     @classmethod

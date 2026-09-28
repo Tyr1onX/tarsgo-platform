@@ -120,7 +120,6 @@ export const api = {
 
   taskAssignees: () => request<MemberSummary[]>("/api/tasks/assignees"),
   tasks: (scope: TaskView = "mine") => request<Task[]>(`/api/tasks?scope=${scope}`),
-  task: (taskId: number) => request<Task>(`/api/tasks/${taskId}`),
   itemActivities: (rootTaskId: number) => request<ItemActivity[]>(`/api/tasks/${rootTaskId}/activities`),
   addItemActivity: (rootTaskId: number, content: string, addToContext: boolean) =>
     request<ItemActivity>(`/api/tasks/${rootTaskId}/activities`, {

@@ -24,8 +24,10 @@ def upgrade() -> None:
     )
     op.add_column(
         "tasks",
-        sa.Column("result", sa.Text(), server_default="", nullable=False),
+        sa.Column("result", sa.Text(), nullable=True),
     )
+    op.execute("UPDATE tasks SET result = '' WHERE result IS NULL")
+    op.alter_column("tasks", "result", existing_type=sa.Text(), nullable=False)
     op.create_table(
         "item_activities",
         sa.Column("id", sa.Integer(), nullable=False),

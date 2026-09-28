@@ -63,17 +63,20 @@ class InvalidProvider:
         raise PlannerInvalidResponse
 
 
-def expect_http(expected: int, callback) -> None:
+def expect_http(expected: int, callback, *, detail: str | None = None) -> None:
     try:
         callback()
     except HTTPException as exc:
         assert exc.status_code == expected, (exc.status_code, exc.detail)
+        if detail is not None:
+            assert exc.detail == detail, exc.detail
         return
     raise AssertionError(f"expected HTTP {expected}")
 
 
 def main() -> None:
     with SessionLocal() as db:
+        assert planner_router.DAILY_REQUEST_LIMIT == 100
         admin = db.scalar(select(Member).where(Member.email == "admin@example.com"))
         manager = db.scalar(select(Member).where(Member.email == "manager@example.com"))
         assert admin is not None and manager is not None
@@ -445,7 +448,31 @@ def main() -> None:
         assert usage is not None and usage.input_tokens >= 120 and usage.output_tokens >= 180 and usage.total_tokens >= 300
         usage.request_count = planner_router.DAILY_REQUEST_LIMIT
         db.commit()
-        expect_http(429, lambda: planner_router.generate_plan(request, current=admin, db=db, provider=FakeProvider()))
+        expected_limit_message = "今日 AI 使用次数已达上限，请稍后再试。"
+        denied_generate_provider = FakeProvider()
+        expect_http(
+            429,
+            lambda: planner_router.generate_plan(
+                request,
+                current=admin,
+                db=db,
+                provider=denied_generate_provider,
+            ),
+            detail=expected_limit_message,
+        )
+        assert denied_generate_provider.calls == 0
+        denied_refine_provider = FakeProvider()
+        expect_http(
+            429,
+            lambda: planner_router.refine_plan(
+                denied_refine,
+                current=admin,
+                db=db,
+                provider=denied_refine_provider,
+            ),
+            detail=expected_limit_message,
+        )
+        assert denied_refine_provider.calls == 0
 
     print("AI planner tests passed")
 

@@ -40,7 +40,8 @@ from ..schemas import (
 
 router = APIRouter(prefix="/api/ai/planner", tags=["ai-planner"])
 logger = logging.getLogger(__name__)
-DAILY_REQUEST_LIMIT = 20
+DAILY_REQUEST_LIMIT = int(os.getenv("AI_PLANNER_DAILY_REQUEST_LIMIT", "100"))
+DAILY_REQUEST_LIMIT_MESSAGE = "今日 AI 使用次数已达上限，请稍后再试。"
 _LIVESTREAM_NEGATION = re.compile(
     r"(?:不需要|不必|不要|无需|不用|不做|不安排|不考虑|不打算|不进行|取消)"
     r"[^。；;，,\n]{0,8}(?:现场直播|线上直播|直播|线上转播)"
@@ -166,7 +167,10 @@ def _reserve_request(db: Session, member_id: int, knowledge_context_chars: int =
             else:
                 if usage.request_count >= DAILY_REQUEST_LIMIT:
                     db.rollback()
-                    raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="今天的 AI 规划次数已用完，请明天再试")
+                    raise HTTPException(
+                        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                        detail=DAILY_REQUEST_LIMIT_MESSAGE,
+                    )
                 usage.request_count += 1
                 usage.knowledge_context_chars += max(knowledge_context_chars, 0)
             db.commit()

@@ -53,11 +53,13 @@ def _suggestion(kind, target_id, *, title, deliverable, execution_points):
     )
 
 
-def expect_http(expected: int, callback) -> None:
+def expect_http(expected: int, callback, *, detail: str | None = None) -> None:
     try:
         callback()
     except HTTPException as exc:
         assert exc.status_code == expected, (exc.status_code, exc.detail)
+        if detail is not None:
+            assert exc.detail == detail, exc.detail
         return
     raise AssertionError(f"expected HTTP {expected}")
 
@@ -357,6 +359,30 @@ def main() -> None:
         empty_provider = FakeReviewProvider(AIItemReviewOut(summary="当前方案暂未发现需要调整的地方。", suggestions=[]))
         empty_result = ai_items.review_item_plan(root_id, current=admin, db=db, provider=empty_provider)
         assert empty_provider.calls == 1 and empty_result.suggestions == []
+
+        usage = db.scalar(
+            select(AIPlannerDailyUsage).where(
+                AIPlannerDailyUsage.member_id == admin.id,
+                AIPlannerDailyUsage.usage_date == usage_date,
+            )
+        )
+        assert usage is not None
+        usage.request_count = ai_planner.DAILY_REQUEST_LIMIT
+        db.commit()
+        denied_review_provider = FakeReviewProvider(
+            AIItemReviewOut(summary="不应调用 provider。", suggestions=[])
+        )
+        expect_http(
+            429,
+            lambda: ai_items.review_item_plan(
+                root_id,
+                current=admin,
+                db=db,
+                provider=denied_review_provider,
+            ),
+            detail=ai_planner.DAILY_REQUEST_LIMIT_MESSAGE,
+        )
+        assert denied_review_provider.calls == 0
 
         # Test malformed forbidden proposal fields are rejected by the strict schema.
         try:

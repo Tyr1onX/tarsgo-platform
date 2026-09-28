@@ -137,7 +137,7 @@ DeepSeek 使用 `AI_BASE_URL=https://api.deepseek.com`，模型仍由 `AI_MODEL`
 - 输入最多 5000 字符
 - 输出最多 15 个分工、6 个问题
 - max_output_tokens=2200 for OpenAI and 4096 for DeepSeek; DeepSeek reasoning effort remains `none`
-- 每个白名单用户按 UTC 日最多 20 次规划尝试
+- 每个白名单用户按 UTC 日共享最多 100 次 Generate、Refine、Review 请求；通过 `AI_PLANNER_DAILY_REQUEST_LIMIT` 配置，默认值为 100
 - ai_planner_daily_usage 只保存请求次数、input/output/total token 汇总和知识上下文字符数
 - 不保存用户完整输入和 AI 完整输出到 usage 表或普通日志
 
@@ -202,7 +202,7 @@ AI 不负责成员权限、active 状态、真实负责人选择、认领冲突�
 
 事项详情中的“让 AI 检查方案”是负责人手动触发的一次增量检查，不会自动运行或直接写入 Task。服务端从数据库读取事项当前事实、所有一级分工的状态和结果、最近最多 20 条动态，并复用有上限的本地 Knowledge 检索。Knowledge 只作执行经验参考；其中 `可提醒事项` 不进入 Review 上下文，也不能单独触发新任务。
 
-Review 建议只存在当前页面。AI 可提出对 todo / doing 分工的内容字段调整，或提出确有新责任时新增一个可认领分工；done 分工不会被修改，Review 不提出删除建议。admin / manager 逐条应用时，服务端再次校验目标和字段范围，并与一条简短 ItemActivity 在同一事务提交。忽略只影响当前页面，不写数据库。一次 Review 最多调用当前 provider 一次，并计入现有每日 AI 用量。
+Review 建议只存在当前页面。AI 可提出对 todo / doing 分工的内容字段调整，或提出确有新责任时新增一个可认领分工；done 分工不会被修改，Review 不提出删除建议。admin / manager 逐条应用时，服务端再次校验目标和字段范围，并与一条简短 ItemActivity 在同一事务提交。忽略只影响当前页面，不写数据库。一次 Review 最多调用当前 provider 一次，并与 Generate、Refine 共用同一每日 AI 用量计数器。
 
 ## 暂缓能力
 

@@ -120,6 +120,9 @@ def create_task(manager, **overrides):
     payload = {
         "title": "默认运营任务",
         "deliverable": "",
+        "execution_points": [],
+        "cautions": [],
+        "prerequisites": [],
         "owner_id": None,
         "owner_claimable": True,
         "collaborator_ids": [],

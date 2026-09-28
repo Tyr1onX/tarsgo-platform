@@ -83,11 +83,13 @@ jobs:
               deliverable, '|',
               JSON_LENGTH(execution_points), '|',
               JSON_LENGTH(cautions), '|',
-              JSON_LENGTH(prerequisites)
+              JSON_LENGTH(prerequisites), '|',
+              JSON_LENGTH(context_facts), '|',
+              CHAR_LENGTH(result)
             )
             FROM tasks WHERE id = 100;
           ")"
-          test "$RESULT" = "101|NULL|0|0|旧版交付|0|0|0"
+          test "$RESULT" = "101|NULL|0|0|旧版交付|0|0|0|0|0"
           docker compose exec -T db mysql -uroot -p"$CI_MYSQL_ROOT_PASSWORD" -e "DROP DATABASE tarsgo_migration;"
 
       - name: Create initial administrator

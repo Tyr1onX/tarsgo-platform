@@ -6,6 +6,7 @@ import type {
   AIPlannerRefineInput,
   InvitationInfo,
   InviteResult,
+  ItemActivity,
   Member,
   MemberSummary,
   KnowledgeDocument,
@@ -119,11 +120,26 @@ export const api = {
 
   taskAssignees: () => request<MemberSummary[]>("/api/tasks/assignees"),
   tasks: (scope: TaskView = "mine") => request<Task[]>(`/api/tasks?scope=${scope}`),
+  itemActivities: (rootTaskId: number) => request<ItemActivity[]>(`/api/tasks/${rootTaskId}/activities`),
+  addItemActivity: (rootTaskId: number, content: string, addToContext: boolean) =>
+    request<ItemActivity>(`/api/tasks/${rootTaskId}/activities`, {
+      method: "POST",
+      body: JSON.stringify({ content, add_to_context: addToContext }),
+    }),
+  addContextFact: (rootTaskId: number, content: string) =>
+    request<Task>(`/api/tasks/${rootTaskId}/context-facts`, {
+      method: "POST",
+      body: JSON.stringify({ content }),
+    }),
+  deleteContextFact: (rootTaskId: number, factIndex: number) =>
+    request<Task>(`/api/tasks/${rootTaskId}/context-facts/${factIndex}`, { method: "DELETE" }),
+  taskResultToContext: (taskId: number) =>
+    request<Task>(`/api/tasks/${taskId}/result-to-context`, { method: "POST" }),
   createTask: (payload: TaskPayload) =>
     request<Task>("/api/tasks", { method: "POST", body: JSON.stringify(payload) }),
   createTaskBatch: (payload: TaskBatchPayload) =>
     request<TaskBatchResult>("/api/tasks/batch", { method: "POST", body: JSON.stringify(payload) }),
-  updateTask: (taskId: number, payload: Partial<Omit<TaskPayload, "parent_id">>) =>
+  updateTask: (taskId: number, payload: Partial<Omit<TaskPayload, "parent_id">> & { result?: string }) =>
     request<Task>(`/api/tasks/${taskId}`, { method: "PATCH", body: JSON.stringify(payload) }),
   claimTask: (taskId: number) => request<Task>(`/api/tasks/${taskId}/claim`, { method: "POST" }),
   unclaimTask: (taskId: number) => request<Task>(`/api/tasks/${taskId}/unclaim`, { method: "POST" }),

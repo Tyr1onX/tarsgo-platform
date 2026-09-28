@@ -10,6 +10,7 @@ import type {
   AIPlannerTaskDraft,
   InvitationInfo,
   InviteResult,
+  ItemActivity,
   KnowledgeDocument,
   KnowledgeSyncSummary,
   Member,
@@ -35,6 +36,9 @@ const invitePassword = ref("")
 const invitePasswordConfirm = ref("")
 
 const tasks = ref<Task[]>([])
+const homeMineTasks = ref<Task[]>([])
+const homeAllTasks = ref<Task[]>([])
+const itemActivities = ref<ItemActivity[]>([])
 const members = ref<Member[]>([])
 const taskMembers = ref<MemberSummary[]>([])
 const latestInvite = ref<InviteResult | null>(null)
@@ -69,6 +73,11 @@ const knowledgeUploading = ref(false)
 const knowledgeSyncing = ref(false)
 const knowledgeSyncSummary = ref<KnowledgeSyncSummary | null>(null)
 const knowledgeUploadRef = ref<HTMLInputElement | null>(null)
+
+const itemActivityDraft = ref("")
+const itemActivityAddToFacts = ref(false)
+const itemFactDraft = ref("")
+const taskResultDraft = ref("")
 
 const memberName = ref("")
 const memberEmail = ref("")
@@ -115,8 +124,49 @@ const ownerOptions = computed(() => {
   if (owner && !activeMemberIds.value.has(owner.id)) options.unshift(owner)
   return options
 })
-const openTasks = computed(() => tasks.value.filter((task) => task.status !== "done"))
-const doneTasks = computed(() => tasks.value.filter((task) => task.status === "done"))
+const taskDetailId = computed(() => {
+  const match = path.value.match(/^\/tasks\/(\d+)$/)
+  return match ? Number(match[1]) : null
+})
+const detailTask = computed(() =>
+  taskDetailId.value === null ? null : tasks.value.find((task) => task.id === taskDetailId.value) ?? null,
+)
+const detailRoot = computed(() => {
+  const task = detailTask.value
+  if (!task) return null
+  return task.parent_id === null
+    ? task
+    : tasks.value.find((candidate) => candidate.id === task.parent_id) ?? null
+})
+const detailChildren = computed(() =>
+  detailRoot.value ? tasks.value.filter((task) => task.parent_id === detailRoot.value?.id) : [],
+)
+const canWriteDetailItem = computed(() => {
+  const root = detailRoot.value
+  const currentId = user.value?.id
+  if (!root || !currentId) return false
+  if (isManager.value || root.owner?.id === currentId) return true
+  return detailChildren.value.some(
+    (task) => task.owner?.id === currentId || task.collaborators.some((member) => member.id === currentId),
+  )
+})
+const canEditDetailResult = computed(
+  () => Boolean(detailTask.value && (isManager.value || detailTask.value.owner?.id === user.value?.id)),
+)
+
+const homeOpenTasks = computed(() => homeMineTasks.value.filter((task) => task.status !== "done"))
+const homeTaskCards = computed(() => {
+  const allChildren = new Set(
+    homeAllTasks.value.filter((task) => task.parent_id !== null).map((task) => task.parent_id as number),
+  )
+  const children = homeOpenTasks.value.filter((task) => task.parent_id !== null)
+  const standaloneRoots = homeOpenTasks.value.filter(
+    (task) => task.parent_id === null && !allChildren.has(task.id),
+  )
+  return [...children, ...standaloneRoots].sort(
+    (left, right) => new Date(left.deadline).getTime() - new Date(right.deadline).getTime(),
+  )
+})
 const rootTasks = computed(() => tasks.value.filter((task) => task.parent_id === null))
 const loadedTaskIds = computed(() => new Set(tasks.value.map((task) => task.id)))
 const orphanTasks = computed(() =>
@@ -124,14 +174,6 @@ const orphanTasks = computed(() =>
     (task) => task.parent_id !== null && !loadedTaskIds.value.has(task.parent_id),
   ),
 )
-const upcomingTasks = computed(() => {
-  const now = Date.now()
-  const limit = now + 7 * 24 * 60 * 60 * 1000
-  return openTasks.value.filter((task) => {
-    const deadline = new Date(task.deadline).getTime()
-    return deadline >= now && deadline <= limit
-  })
-})
 
 const statusLabels: Record<TaskStatus, string> = {
   todo: "待开始",
@@ -190,6 +232,15 @@ function toLocalInput(value: string) {
 
 function childTasks(parentId: number) {
   return tasks.value.filter((task) => task.parent_id === parentId)
+}
+
+function homeRoot(task: Task) {
+  if (task.parent_id === null) return task
+  return homeAllTasks.value.find((candidate) => candidate.id === task.parent_id) ?? null
+}
+
+function openTaskDetail(task: Task) {
+  navigate(`/tasks/${task.id}`)
 }
 
 function taskDetailSections(task: Task) {
@@ -345,12 +396,34 @@ async function loadRoute() {
       navigate("/team")
       return
     } else if (path.value === "/") {
-      const [mine, claimable] = await Promise.all([
+      const [mine, claimable, all] = await Promise.all([
         api.tasks("mine"),
         api.tasks("claimable"),
+        api.tasks("all"),
       ])
-      tasks.value = mine
+      homeMineTasks.value = mine
+      homeAllTasks.value = all
       claimableCount.value = claimable.length
+    } else if (taskDetailId.value !== null) {
+      if (isManager.value) {
+        ;[taskMembers.value, tasks.value] = await Promise.all([
+          api.taskAssignees(),
+          api.tasks("all"),
+        ])
+      } else {
+        tasks.value = await api.tasks("all")
+      }
+      const selected = tasks.value.find((task) => task.id === taskDetailId.value)
+      if (!selected) {
+        routeNotFound.value = true
+        return
+      }
+      taskResultDraft.value = selected.result ?? ""
+      itemFactDraft.value = ""
+      itemActivityDraft.value = ""
+      itemActivityAddToFacts.value = false
+      const rootId = selected.parent_id ?? selected.id
+      itemActivities.value = await api.itemActivities(rootId)
     } else if (path.value === "/tasks") {
       taskView.value = readTaskView()
       if (isManager.value) {
@@ -616,6 +689,97 @@ async function leaveTask(task: Task) {
   }
 }
 
+
+async function planFromBase() {
+  if (plannerDescription.value.trim().length < 10) {
+    error.value = "请先补充一些事项背景，再生成方案。"
+    return
+  }
+  if (window.location.pathname !== "/ai-planner") {
+    window.history.pushState({}, "", "/ai-planner")
+  }
+  path.value = "/ai-planner"
+  await generateAIPlan()
+}
+
+async function saveTaskResult() {
+  const task = detailTask.value
+  if (!task || !canEditDetailResult.value) return
+  error.value = ""
+  try {
+    await api.updateTask(task.id, { result: taskResultDraft.value })
+    notice.value = "执行结果已保存"
+    await loadRoute()
+  } catch (reason) {
+    error.value = messageOf(reason)
+  }
+}
+
+async function addCurrentFact() {
+  const root = detailRoot.value
+  const content = itemFactDraft.value.trim()
+  if (!root || !content || !canWriteDetailItem.value) return
+  error.value = ""
+  try {
+    await api.addContextFact(root.id, content)
+    itemFactDraft.value = ""
+    await loadRoute()
+  } catch (reason) {
+    error.value = messageOf(reason)
+  }
+}
+
+async function removeCurrentFact(index: number) {
+  const root = detailRoot.value
+  if (!root || !canWriteDetailItem.value) return
+  error.value = ""
+  try {
+    await api.deleteContextFact(root.id, index)
+    await loadRoute()
+  } catch (reason) {
+    error.value = messageOf(reason)
+  }
+}
+
+async function recordItemActivity() {
+  const root = detailRoot.value
+  const content = itemActivityDraft.value.trim()
+  if (!root || !content || !canWriteDetailItem.value) return
+  if (itemActivityAddToFacts.value && content.length > 500) {
+    error.value = "加入当前信息时，单条最多 500 字。"
+    return
+  }
+  error.value = ""
+  try {
+    await api.addItemActivity(root.id, content, itemActivityAddToFacts.value)
+    itemActivityDraft.value = ""
+    itemActivityAddToFacts.value = false
+    await loadRoute()
+  } catch (reason) {
+    error.value = messageOf(reason)
+  }
+}
+
+async function addResultToContext() {
+  const task = detailTask.value
+  if (!task || !task.result || !canWriteDetailItem.value) return
+  error.value = ""
+  try {
+    await api.taskResultToContext(task.id)
+    notice.value = "执行结果已加入事项信息"
+    await loadRoute()
+  } catch (reason) {
+    error.value = messageOf(reason)
+  }
+}
+
+function editTaskFromDetail(task: Task) {
+  if (!isManager.value) return
+  taskView.value = "all"
+  window.history.pushState({}, "", "/tasks?view=all")
+  path.value = "/tasks"
+  editTask(task)
+}
 
 function startAIPlanner() {
   if (!plannerDraft.value) plannerIgnoredSuggestionKeys.clear()
@@ -1198,7 +1362,7 @@ onBeforeUnmount(() => {
 
       <nav class="sidebar-nav">
         <button :class="{ active: path === '/' }" type="button" @click="navigate('/')">Base</button>
-        <button :class="{ active: path === '/tasks' }" type="button" @click="navigateTasks('mine')">
+        <button :class="{ active: path.startsWith('/tasks') }" type="button" @click="navigateTasks('mine')">
           任务
         </button>
         <button
@@ -1208,14 +1372,6 @@ onBeforeUnmount(() => {
           @click="navigate('/team')"
         >
           团队
-        </button>
-        <button
-          v-if="isAdmin"
-          :class="{ active: path === '/knowledge' }"
-          type="button"
-          @click="navigate('/knowledge')"
-        >
-          知识
         </button>
         <button :class="{ active: path === '/me' }" type="button" @click="navigate('/me')">
           我的
@@ -1268,17 +1424,59 @@ onBeforeUnmount(() => {
       </template>
 
       <template v-else-if="path === '/'">
-        <section class="hero">
-          <p>BASE / OVERVIEW · 你好，{{ user?.name }}</p>
-          <h1>我现在需要做什么</h1>
-          <div class="hero-actions">
-            <button v-if="aiPlannerAvailable" class="primary" type="button" @click="startAIPlanner">
-              AI 规划任务
-            </button>
-            <button v-if="isManager" class="hero-action" type="button" @click="startNewTask()">
-              手动创建
-            </button>
+        <section class="base-entry">
+          <p class="base-kicker">TARS BASE</p>
+          <h1>现在要处理什么？</h1>
+
+          <div
+            v-if="aiPlannerAvailable"
+            class="planner-composer base-composer"
+            :class="{ 'is-drag-active': plannerDragActive, 'is-uploading': plannerUploading }"
+            @dragenter.prevent="onPlannerDragOver"
+            @dragover.prevent="onPlannerDragOver"
+            @dragleave="onPlannerDragLeave"
+            @drop="onPlannerDrop"
+          >
+            <textarea
+              v-model="plannerDescription"
+              maxlength="5000"
+              rows="5"
+              aria-label="描述一个事项、活动或需要协调的事情"
+              placeholder="描述一个事项、活动或需要协调的事情…"
+            />
+            <div v-if="plannerAttachments.length" class="planner-attachments" aria-label="本次规划附件">
+              <span v-for="attachment in plannerAttachments" :key="attachment.id" class="planner-attachment">
+                <span class="planner-attachment-icon" aria-hidden="true">↳</span>
+                <span class="planner-attachment-name">{{ attachment.filename }}</span>
+                <button type="button" :aria-label="`移除 ${attachment.filename}`" @click="removePlannerAttachment(attachment.id)">×</button>
+              </span>
+            </div>
+            <div class="planner-composer-footer">
+              <div class="planner-composer-tools">
+                <input
+                  ref="plannerFileInput"
+                  class="visually-hidden"
+                  type="file"
+                  accept=".md,.txt,.docx,.pdf"
+                  multiple
+                  @change="onPlannerFilesSelected"
+                />
+                <button class="planner-add-file" type="button" :disabled="plannerUploading" @click="choosePlannerFiles">
+                  {{ plannerUploading ? "正在读取…" : "＋ 添加资料" }}
+                </button>
+              </div>
+              <button
+                class="primary planner-generate"
+                type="button"
+                :disabled="plannerDescription.trim().length < 10 || plannerGenerating || plannerUploading"
+                @click="planFromBase"
+              >
+                {{ plannerGenerating ? "正在规划…" : "规划" }}
+              </button>
+            </div>
           </div>
+          <p v-if="plannerAttachmentMessage" class="planner-composer-message" role="status">{{ plannerAttachmentMessage }}</p>
+          <button v-if="isManager" class="base-manual-create" type="button" @click="startNewTask()">或手动创建任务</button>
         </section>
 
         <button
@@ -1292,63 +1490,31 @@ onBeforeUnmount(() => {
 
         <section>
           <div class="section-heading">
-            <h2>我的事项</h2>
-            <span>{{ openTasks.length }} 项待处理</span>
+            <h2>我现在要处理</h2>
+            <span>{{ homeTaskCards.length }} 项</span>
           </div>
-          <div v-if="openTasks.length" class="list">
-            <article v-for="task in openTasks" :key="task.id" class="task-row">
-              <div>
-                <span class="state">{{ task.parent_id ? "分工" : "事项" }} · {{ statusLabels[task.status] }}</span>
-                <h3>{{ task.title }}</h3>
-                <p v-if="task.deliverable">{{ task.deliverable }}</p>
-                <div v-if="taskDetailSections(task).length" class="task-detail-list">
-                  <section v-for="section in taskDetailSections(task)" :key="section.title">
-                    <strong>{{ section.title }}</strong>
-                    <ul><li v-for="item in section.items" :key="item">{{ item }}</li></ul>
-                  </section>
-                </div>
-                <small>
-                  {{ task.owner ? task.owner.name + " 负责" : "待认领" }}
-                  · 截止 {{ formatDate(task.deadline) }}
-                  <template v-if="task.collaborators.length">
-                    · 协作 {{ task.collaborators.map((member) => member.name).join("、") }}
-                  </template>
-                </small>
-              </div>
-            </article>
+          <div v-if="homeTaskCards.length" class="home-task-cards">
+            <button
+              v-for="task in homeTaskCards"
+              :key="task.id"
+              class="home-task-card"
+              type="button"
+              @click="openTaskDetail(task)"
+            >
+              <span v-if="task.parent_id" class="state">{{ homeRoot(task)?.title || "事项" }}</span>
+              <span v-else class="state">事项</span>
+              <strong>{{ task.title }}</strong>
+              <span v-if="task.deliverable" class="home-task-deliverable">{{ task.deliverable }}</span>
+              <span class="home-task-meta">{{ formatDate(task.deadline) }} · {{ statusLabels[task.status] }}</span>
+              <span class="home-task-arrow" aria-hidden="true">›</span>
+            </button>
           </div>
           <div v-else class="empty empty-action empty-state">
             <span class="empty-code">BASE / CLEAR</span>
-            <h3>当前队列已清空</h3>
-            <p>目前没有你负责或协作的未完成事项。</p>
+            <h3>当前没有待处理任务</h3>
           </div>
         </section>
-
-        <section v-if="upcomingTasks.length">
-          <div class="section-heading"><h2>近期截止</h2></div>
-          <div class="compact-list">
-            <button
-              v-for="task in upcomingTasks"
-              :key="task.id"
-              type="button"
-              @click="navigateTasks('mine')"
-            >
-              <span>{{ task.title }}</span>
-              <small>{{ formatDate(task.deadline) }}</small>
-            </button>
-          </div>
-        </section>
-
-        <details v-if="doneTasks.length" class="done-section">
-          <summary>已完成 {{ doneTasks.length }} 项</summary>
-          <div class="compact-list">
-            <div v-for="task in doneTasks" :key="task.id">
-              <span>{{ task.title }}</span>
-            </div>
-          </div>
-        </details>
       </template>
-
 
       <template v-else-if="path === '/ai-planner'">
         <div class="page-title planner-heading">
@@ -1658,6 +1824,158 @@ onBeforeUnmount(() => {
         </section>
       </template>
 
+      <template v-else-if="taskDetailId !== null && detailTask && detailRoot">
+        <div class="page-title execution-detail-heading">
+          <div>
+            <button class="detail-back" type="button" @click="detailTask.parent_id ? openTaskDetail(detailRoot) : navigateTasks('all')">← 返回</button>
+            <span class="state">{{ detailTask.parent_id ? detailRoot.title : "事项执行" }}</span>
+            <h1>{{ detailTask.title }}</h1>
+          </div>
+          <button v-if="isManager" type="button" @click="editTaskFromDetail(detailTask)">编辑</button>
+        </div>
+
+        <template v-if="detailTask.parent_id === null">
+          <section class="execution-section">
+            <div class="execution-meta">
+              <span>{{ statusLabels[detailTask.status] }}</span>
+              <span>截止 {{ formatDate(detailTask.deadline) }}</span>
+              <span>{{ detailTask.owner ? "总负责人 " + detailTask.owner.name : "总负责人待认领" }}</span>
+            </div>
+            <p v-if="detailTask.deliverable" class="execution-description">{{ detailTask.deliverable }}</p>
+          </section>
+
+          <section class="execution-section">
+            <div class="section-heading"><h2>当前已知</h2><span>{{ detailRoot.context_facts.length }} 条</span></div>
+            <div v-if="detailRoot.context_facts.length" class="fact-list">
+              <div v-for="(fact, index) in detailRoot.context_facts" :key="`${index}-${fact}`" class="fact-row">
+                <span>{{ fact }}</span>
+                <button v-if="canWriteDetailItem" type="button" @click="removeCurrentFact(index)">删除</button>
+              </div>
+            </div>
+            <form v-if="canWriteDetailItem" class="inline-entry" @submit.prevent="addCurrentFact">
+              <input v-model="itemFactDraft" maxlength="500" placeholder="新增一条已确认信息" />
+              <button type="submit" :disabled="!itemFactDraft.trim()">＋ 添加</button>
+            </form>
+          </section>
+
+          <section class="execution-section">
+            <div class="section-heading">
+              <h2>执行任务</h2>
+              <button v-if="isManager" type="button" @click="startNewTask(detailRoot)">＋ 添加分工</button>
+            </div>
+            <div v-if="detailChildren.length" class="detail-task-list">
+              <button v-for="task in detailChildren" :key="task.id" class="detail-task-card" type="button" @click="openTaskDetail(task)">
+                <span class="state">{{ statusLabels[task.status] }}</span>
+                <strong>{{ task.title }}</strong>
+                <span v-if="task.deliverable">{{ task.deliverable }}</span>
+                <small>{{ task.owner ? task.owner.name + " 负责" : "待认领" }} · {{ formatDate(task.deadline) }}</small>
+                <span class="home-task-arrow" aria-hidden="true">›</span>
+              </button>
+            </div>
+            <div v-else class="empty compact-empty"><p>还没有执行分工。</p></div>
+          </section>
+
+          <section class="execution-section">
+            <div class="section-heading"><h2>最近动态</h2></div>
+            <div v-if="itemActivities.length" class="activity-list">
+              <article v-for="activity in itemActivities" :key="activity.id" class="activity-row">
+                <time>{{ formatDate(activity.created_at) }}</time>
+                <p>{{ activity.content }}</p>
+                <small>— {{ activity.author.name }}</small>
+              </article>
+            </div>
+            <form v-if="canWriteDetailItem" class="activity-entry" @submit.prevent="recordItemActivity">
+              <textarea
+                v-model="itemActivityDraft"
+                :maxlength="itemActivityAddToFacts ? 500 : 2000"
+                rows="3"
+                placeholder="记录新动态"
+              />
+              <div class="activity-entry-actions">
+                <label class="check-row">
+                  <input v-model="itemActivityAddToFacts" type="checkbox" />
+                  同时加入当前已知信息
+                </label>
+                <button class="primary" type="submit" :disabled="!itemActivityDraft.trim()">记录</button>
+              </div>
+            </form>
+          </section>
+        </template>
+
+        <template v-else>
+          <section class="execution-section">
+            <div class="execution-meta">
+              <span>{{ statusLabels[detailTask.status] }}</span>
+              <span>{{ detailTask.owner ? detailTask.owner.name + " 负责" : "待认领" }}</span>
+              <span v-if="detailTask.collaborators.length">协作 {{ detailTask.collaborators.map((member) => member.name).join("、") }}</span>
+              <span>截止 {{ formatDate(detailTask.deadline) }}</span>
+            </div>
+          </section>
+
+          <section v-if="detailTask.deliverable" class="execution-section">
+            <div class="section-heading"><h2>完成标准</h2></div>
+            <p class="execution-description">{{ detailTask.deliverable }}</p>
+          </section>
+
+          <section v-for="section in taskDetailSections(detailTask)" :key="section.title" class="execution-section">
+            <div class="section-heading"><h2>{{ section.title }}</h2></div>
+            <ul class="execution-list"><li v-for="item in section.items" :key="item">{{ item }}</li></ul>
+          </section>
+
+          <section class="execution-section">
+            <div class="section-heading"><h2>执行结果</h2></div>
+            <template v-if="canEditDetailResult">
+              <textarea v-model="taskResultDraft" maxlength="5000" rows="5" placeholder="记录实际完成后得到的结果" />
+              <div class="result-actions">
+                <button class="primary" type="button" @click="saveTaskResult">保存结果</button>
+                <button
+                  v-if="detailTask.result && canWriteDetailItem"
+                  type="button"
+                  @click="addResultToContext"
+                >加入事项信息</button>
+              </div>
+            </template>
+            <p v-else-if="detailTask.result" class="execution-description">{{ detailTask.result }}</p>
+            <p v-else class="muted">暂未记录执行结果。</p>
+          </section>
+
+          <section class="execution-section task-detail-actions">
+            <div class="task-actions">
+              <button
+                v-if="!detailTask.owner && detailTask.owner_claimable && detailTask.status !== 'done'"
+                class="primary small-action"
+                type="button"
+                @click="claimTask(detailTask)"
+              >认领负责人</button>
+              <button
+                v-if="detailTask.owner?.id === user?.id && detailTask.owner_claimable && detailTask.status !== 'done'"
+                type="button"
+                @click="unclaimTask(detailTask)"
+              >取消认领</button>
+              <button
+                v-if="detailTask.collaboration_open && detailTask.owner?.id !== user?.id && !isCollaborator(detailTask) && detailTask.status !== 'done'"
+                type="button"
+                @click="joinTask(detailTask)"
+              >加入协作</button>
+              <button
+                v-if="detailTask.collaboration_open && isCollaborator(detailTask) && detailTask.status !== 'done'"
+                type="button"
+                @click="leaveTask(detailTask)"
+              >退出协作</button>
+            </div>
+            <div v-if="detailTask.owner?.id === user?.id" class="status-actions">
+              <button
+                v-for="value in (['todo', 'doing', 'done'] as TaskStatus[])"
+                :key="value"
+                type="button"
+                :class="{ active: detailTask.status === value }"
+                @click="updateOwnTaskStatus(detailTask, value)"
+              >{{ statusLabels[value] }}</button>
+            </div>
+          </section>
+        </template>
+      </template>
+
       <template v-else-if="path === '/tasks'">
         <div class="page-title">
           <h1>任务</h1>
@@ -1789,14 +2107,8 @@ onBeforeUnmount(() => {
             <article v-for="task in rootTasks" :key="task.id" class="operation-card">
               <div class="operation-main">
                 <span class="state">事项 · {{ statusLabels[task.status] }}</span>
-                <h3>{{ task.title }}</h3>
+                <button class="task-title-link" type="button" @click="openTaskDetail(task)"><h3>{{ task.title }}</h3></button>
                 <p v-if="task.deliverable">{{ task.deliverable }}</p>
-                <div v-if="taskDetailSections(task).length" class="task-detail-list">
-                  <section v-for="section in taskDetailSections(task)" :key="section.title">
-                    <strong>{{ section.title }}</strong>
-                    <ul><li v-for="item in section.items" :key="item">{{ item }}</li></ul>
-                  </section>
-                </div>
                 <small>
                   {{ task.owner ? "总负责人 " + task.owner.name : "总负责人待认领" }}
                   · 截止 {{ formatDate(task.deadline) }}
@@ -1860,14 +2172,8 @@ onBeforeUnmount(() => {
                 <article v-for="child in childTasks(task.id)" :key="child.id" class="child-task">
                   <div>
                     <span class="state">{{ statusLabels[child.status] }}</span>
-                    <h4>{{ child.title }}</h4>
+                    <button class="task-title-link" type="button" @click="openTaskDetail(child)"><h4>{{ child.title }}</h4></button>
                     <p v-if="child.deliverable">{{ child.deliverable }}</p>
-                    <div v-if="taskDetailSections(child).length" class="task-detail-list">
-                      <section v-for="section in taskDetailSections(child)" :key="section.title">
-                        <strong>{{ section.title }}</strong>
-                        <ul><li v-for="item in section.items" :key="item">{{ item }}</li></ul>
-                      </section>
-                    </div>
                     <small>
                       {{ child.owner ? child.owner.name + " 负责" : "待认领" }}
                       · 截止 {{ formatDate(child.deadline) }}
@@ -1928,14 +2234,8 @@ onBeforeUnmount(() => {
             <article v-for="task in orphanTasks" :key="task.id" class="operation-card orphan-task">
               <div class="operation-main">
                 <span class="state">分工 · {{ statusLabels[task.status] }}</span>
-                <h3>{{ task.title }}</h3>
+                <button class="task-title-link" type="button" @click="openTaskDetail(task)"><h3>{{ task.title }}</h3></button>
                 <p v-if="task.deliverable">{{ task.deliverable }}</p>
-                <div v-if="taskDetailSections(task).length" class="task-detail-list">
-                  <section v-for="section in taskDetailSections(task)" :key="section.title">
-                    <strong>{{ section.title }}</strong>
-                    <ul><li v-for="item in section.items" :key="item">{{ item }}</li></ul>
-                  </section>
-                </div>
                 <small>
                   {{ task.owner ? task.owner.name + " 负责" : "待认领" }}
                   · 截止 {{ formatDate(task.deadline) }}
@@ -2016,7 +2316,7 @@ onBeforeUnmount(() => {
       <template v-else-if="path === '/team'">
         <div class="page-title">
           <h1>团队</h1>
-          <button type="button" @click="navigate('/knowledge')">团队知识</button>
+          <button type="button" @click="navigate('/knowledge')">团队资料</button>
         </div>
         <form class="management-form" @submit.prevent="submitMemberInvite">
           <h2>邀请成员</h2>
@@ -2088,21 +2388,24 @@ onBeforeUnmount(() => {
       <template v-else-if="path === '/knowledge'">
         <div class="page-title">
           <div>
-            <h1>团队知识</h1>
-            <p>只同步和提取资料，不会改写 GitHub 原文件。支持 Markdown、TXT、DOCX 和可提取文字的 PDF。</p>
+            <h1>团队资料</h1>
+            <p>维护 AI 规划会使用的长期资料。</p>
           </div>
           <button type="button" @click="navigate('/team')">返回团队</button>
         </div>
         <section class="knowledge-actions">
-          <button class="primary" type="button" :disabled="knowledgeSyncing" @click="syncGitHubKnowledge">
-            {{ knowledgeSyncing ? "正在同步…" : "同步 GitHub" }}
-          </button>
-          <button type="button" :disabled="knowledgeUploading" @click="chooseKnowledgeFile">
-            {{ knowledgeUploading ? "正在上传…" : "上传文档" }}
+          <button class="primary" type="button" :disabled="knowledgeUploading" @click="chooseKnowledgeFile">
+            {{ knowledgeUploading ? "正在上传…" : "上传资料" }}
           </button>
           <input ref="knowledgeUploadRef" class="visually-hidden" type="file" accept=".md,.txt,.docx,.pdf" @change="uploadKnowledgeFile" />
-          <small>单个文件最大 10 MB；扫描版 PDF 不做 OCR。</small>
+          <small>支持 Markdown、TXT、DOCX 和可提取文字的 PDF，单个文件最大 10 MB。</small>
         </section>
+        <details class="knowledge-maintenance">
+          <summary>高级维护</summary>
+          <button type="button" :disabled="knowledgeSyncing" @click="syncGitHubKnowledge">
+            {{ knowledgeSyncing ? "正在同步…" : "同步 GitHub 资料" }}
+          </button>
+        </details>
         <p v-if="knowledgeSyncSummary" class="message success" role="status">
           同步完成：新增 {{ knowledgeSyncSummary.added }}，更新 {{ knowledgeSyncSummary.updated }}，未变化 {{ knowledgeSyncSummary.unchanged }}，失败 {{ knowledgeSyncSummary.failed }}，已移除 {{ knowledgeSyncSummary.removed }}。
         </p>
@@ -2134,7 +2437,7 @@ onBeforeUnmount(() => {
       :style="{ gridTemplateColumns: `repeat(${isAdmin ? 4 : 3}, 1fr)` }"
     >
       <button :class="{ active: path === '/' }" type="button" @click="navigate('/')">Base</button>
-      <button :class="{ active: path === '/tasks' }" type="button" @click="navigateTasks('mine')">
+      <button :class="{ active: path.startsWith('/tasks') }" type="button" @click="navigateTasks('mine')">
         任务
       </button>
       <button

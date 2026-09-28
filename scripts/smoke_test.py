@@ -209,6 +209,8 @@ def run_workflow():
     )
     assert root["parent_id"] is None
     assert root["owner"]["id"] == manager_id
+    assert root["context_facts"] == []
+    assert root["result"] == ""
 
     claim_child = create_task(
         manager,
@@ -245,6 +247,13 @@ def run_workflow():
         collaboration_open=True,
         deadline="2026-09-21T17:00:00",
     )
+    collaboration_child = call(
+        manager,
+        f"/api/tasks/{collaboration_child['id']}",
+        method="PATCH",
+        data={"result": "管理者可以记录任务执行结果。"},
+    )
+    assert collaboration_child["result"] == "管理者可以记录任务执行结果。"
 
     call(
         manager,
@@ -299,6 +308,18 @@ def run_workflow():
     left = call(owner, f"/api/tasks/{collaboration_child['id']}/collaborators/leave", method="POST")
     assert owner_id not in {item["id"] for item in left["collaborators"]}
 
+    collaborator_joined = call(second, f"/api/tasks/{collaboration_child['id']}/collaborators/join", method="POST")
+    assert second_id in {item["id"] for item in collaborator_joined["collaborators"]}
+    collaborator_activity = call(
+        second,
+        f"/api/tasks/{root['id']}/activities",
+        method="POST",
+        data={"content": "协作者可以记录所属事项动态。", "add_to_context": False},
+        expected=201,
+    )
+    assert collaborator_activity["author"]["id"] == second_id
+    call(second, f"/api/tasks/{collaboration_child['id']}/collaborators/leave", method="POST")
+
     reassigned = call(
         manager,
         f"/api/tasks/{claim_child['id']}",
@@ -307,20 +328,98 @@ def run_workflow():
     )
     assert reassigned["owner"]["id"] == owner_id
 
+    execution_result = "主办方确认 8:30 东门集合，9:00 开始，现场提供桌椅和 220V 电源。"
     updated_by_owner = call(
         owner,
         f"/api/tasks/{claim_child['id']}",
         method="PATCH",
-        data={"status": "doing"},
+        data={"status": "doing", "result": execution_result},
     )
     assert updated_by_owner["status"] == "doing"
+    assert updated_by_owner["result"] == execution_result
     call(
         second,
         f"/api/tasks/{claim_child['id']}",
         method="PATCH",
-        data={"status": "done"},
+        data={"result": "非负责人不应能填写结果"},
         expected=403,
     )
+    call(
+        owner,
+        f"/api/tasks/{claim_child['id']}",
+        method="PATCH",
+        data={"title": "负责人不应能修改结构", "result": execution_result},
+        expected=403,
+    )
+
+    # Item activity and current facts are writable only by item participants.
+    call(
+        second,
+        f"/api/tasks/{root['id']}/activities",
+        method="POST",
+        data={"content": "旁观成员不应能写事项动态", "add_to_context": False},
+        expected=403,
+    )
+    activity = call(
+        owner,
+        f"/api/tasks/{root['id']}/activities",
+        method="POST",
+        data={"content": "主办方要求当天提前 20 分钟完成布展。", "add_to_context": True},
+        expected=201,
+    )
+    assert activity["root_task_id"] == root["id"]
+    assert activity["author"]["id"] == owner_id
+    root_with_activity_fact = call(owner, f"/api/tasks/{root['id']}")
+    assert root_with_activity_fact["context_facts"] == ["主办方要求当天提前 20 分钟完成布展。"]
+    call(
+        owner,
+        f"/api/tasks/{root['id']}/context-facts",
+        method="POST",
+        data={"content": "字" * 501},
+        expected=422,
+    )
+    call(owner, f"/api/tasks/{root['id']}/result-to-context", method="POST", expected=409)
+
+    manual_fact = call(
+        owner,
+        f"/api/tasks/{root['id']}/context-facts",
+        method="POST",
+        data={"content": "活动地点已确认。"},
+    )
+    assert manual_fact["context_facts"][-1] == "活动地点已确认。"
+    after_delete = call(
+        owner,
+        f"/api/tasks/{root['id']}/context-facts/1",
+        method="DELETE",
+    )
+    assert after_delete["context_facts"] == ["主办方要求当天提前 20 分钟完成布展。"]
+
+    promoted = call(
+        owner,
+        f"/api/tasks/{claim_child['id']}/result-to-context",
+        method="POST",
+    )
+    assert execution_result in promoted["context_facts"]
+    activities = call(owner, f"/api/tasks/{root['id']}/activities")
+    assert any("执行结果已确认加入事项信息" in item["content"] for item in activities)
+    call(
+        owner,
+        f"/api/tasks/{claim_child['id']}/activities",
+        method="POST",
+        data={"content": "动态不能挂到分工", "add_to_context": False},
+        expected=400,
+    )
+
+    before_failed_activity = len(activities)
+    call(
+        owner,
+        f"/api/tasks/{root['id']}/activities",
+        method="POST",
+        data={"content": "字" * 501, "add_to_context": True},
+        expected=422,
+    )
+    assert len(call(owner, f"/api/tasks/{root['id']}/activities")) == before_failed_activity
+    assert call(owner, f"/api/tasks/{root['id']}")["context_facts"] == promoted["context_facts"]
 
     releasable = create_task(
         manager,
@@ -398,6 +497,10 @@ def verify_persistence():
     assert claim_child["parent_id"] == root["id"]
     assert claim_child["owner"]["id"] == by_email[OWNER_EMAIL]["id"]
     assert claim_child["status"] == "doing"
+    assert "主办方确认 8:30 东门集合" in claim_child["result"]
+    assert root["context_facts"]
+    assert any("主办方确认 8:30 东门集合" in fact for fact in root["context_facts"])
+    assert call(admin, f"/api/tasks/{root['id']}/activities")
     assert claim_child["execution_points"] == ["按清单逐项检查", "确认控制功能正常"]
     assert claim_child["cautions"] == ["出发前再次清点备用配件"]
     assert claim_child["prerequisites"] == ["展示项目清单已确认"]

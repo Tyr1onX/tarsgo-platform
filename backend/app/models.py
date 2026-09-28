@@ -100,6 +100,10 @@ class Task(Base):
     prerequisites: Mapped[list[str]] = mapped_column(
         JSON(), default=list, server_default=text("(JSON_ARRAY())"), nullable=False
     )
+    context_facts: Mapped[list[str]] = mapped_column(
+        JSON(), default=list, server_default=text("(JSON_ARRAY())"), nullable=False
+    )
+    result: Mapped[str] = mapped_column(Text(), default="", nullable=False)
     owner_id: Mapped[int | None] = mapped_column(ForeignKey("members.id"), nullable=True)
     owner_claimable: Mapped[bool] = mapped_column(Boolean(), default=False, server_default="0")
     collaboration_open: Mapped[bool] = mapped_column(Boolean(), default=False, server_default="0")
@@ -111,6 +115,22 @@ class Task(Base):
     owner: Mapped[Member | None] = relationship(foreign_keys=[owner_id])
     creator: Mapped[Member] = relationship(foreign_keys=[created_by])
     collaborators: Mapped[list[Member]] = relationship(secondary=task_collaborators)
+
+
+class ItemActivity(Base):
+    __tablename__ = "item_activities"
+    __table_args__ = (
+        Index("ix_item_activities_root_created", "root_task_id", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    root_task_id: Mapped[int] = mapped_column(ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False)
+    author_id: Mapped[int] = mapped_column(ForeignKey("members.id"), nullable=False)
+    content: Mapped[str] = mapped_column(Text(), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(), server_default=func.now(), nullable=False)
+
+    root_task: Mapped[Task] = relationship(foreign_keys=[root_task_id])
+    author: Mapped[Member] = relationship(foreign_keys=[author_id])
 
 
 class AIPlannerDailyUsage(Base):

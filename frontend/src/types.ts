@@ -25,6 +25,8 @@ export interface Task {
   execution_points: string[]
   cautions: string[]
   prerequisites: string[]
+  context_facts: string[]
+  result: string
   owner: MemberSummary | null
   owner_claimable: boolean
   collaborators: MemberSummary[]
@@ -32,6 +34,14 @@ export interface Task {
   deadline: string
   status: TaskStatus
   created_by: number
+  created_at: string
+}
+
+export interface ItemActivity {
+  id: number
+  root_task_id: number
+  author: MemberSummary
+  content: string
   created_at: string
 }
 

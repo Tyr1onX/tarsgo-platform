@@ -84,7 +84,7 @@ def _remove_blocked_fragments(value: str, blocked_terms: re.Pattern[str]) -> str
         if blocked_terms.search(fragment):
             continue
         kept.extend((fragment, separator))
-    return re.sub(r"^[，,；;。！？\s]+|[，,；;。！？\s]+$", "", "".join(kept)).strip()
+    return re.sub(r"^[，,；;\s]+|[，,；;\s]+$", "", "".join(kept)).strip()
 
 
 def _apply_explicit_topic_veto(draft: AIPlannerDraft, current_facts: str) -> None:

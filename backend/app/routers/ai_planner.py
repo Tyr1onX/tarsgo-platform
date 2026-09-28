@@ -41,13 +41,13 @@ from ..schemas import (
 router = APIRouter(prefix="/api/ai/planner", tags=["ai-planner"])
 logger = logging.getLogger(__name__)
 DAILY_REQUEST_LIMIT = 20
-_LIVESTREAM_TERMS = re.compile(r"直播|线上转播")
 _LIVESTREAM_NEGATION = re.compile(
     r"(?:不需要|不必|不要|无需|不用|不做|不安排|不考虑|不打算|不进行|取消)"
     r"[^。；;，,\n]{0,8}(?:现场直播|线上直播|直播|线上转播)"
     r"|(?:现场直播|线上直播|直播|线上转播)[^。；;，,\n]{0,8}"
     r"(?:不需要|不必|不要|无需|不用|不做|不安排|不考虑|不打算|取消)"
 )
+_EXPLICIT_NETWORK_NEED = re.compile(r"联网展示|在线演示|网络演示|网络展示|网络条件[^。；;，,\n]{0,4}(?:未知|不确定|待确认|需确认)")
 
 
 def _enabled() -> bool:
@@ -75,14 +75,60 @@ def _has_access(member: Member) -> bool:
     return member.role == "admin" and member.id in _allowed_member_ids() and _enabled() and _server_configured()
 
 
-def _suppress_explicitly_rejected_suggestions(draft: AIPlannerDraft, current_facts: str) -> None:
-    """A clear user rejection is a deterministic veto for the matching optional live reminder."""
+def _remove_blocked_fragments(value: str, blocked_terms: re.Pattern[str]) -> str:
+    fragments = re.split(r"([，,；;。！？\n])", value)
+    kept: list[str] = []
+    for index in range(0, len(fragments), 2):
+        fragment = fragments[index]
+        separator = fragments[index + 1] if index + 1 < len(fragments) else ""
+        if blocked_terms.search(fragment):
+            continue
+        kept.extend((fragment, separator))
+    return re.sub(r"^[，,；;。！？\s]+|[，,；;。！？\s]+$", "", "".join(kept)).strip()
+
+
+def _apply_explicit_topic_veto(draft: AIPlannerDraft, current_facts: str) -> None:
+    """Apply explicit user exclusions to all planner output layers after generation."""
     if not _LIVESTREAM_NEGATION.search(current_facts):
         return
+    blocked_terms = [r"直播", r"线上转播"]
+    if not _EXPLICIT_NETWORK_NEED.search(current_facts):
+        blocked_terms.extend((r"网络", r"联网", r"在线演示"))
+    blocked = re.compile("|".join(blocked_terms))
+    draft.item.deliverable = _remove_blocked_fragments(draft.item.deliverable, blocked)
+
+    filtered_tasks = []
+    for task in draft.tasks:
+        if blocked.search(task.title):
+            continue
+        original_deliverable = task.deliverable
+        task.deliverable = _remove_blocked_fragments(task.deliverable, blocked)
+        if original_deliverable and not task.deliverable:
+            continue
+        for field in ("execution_points", "cautions", "prerequisites"):
+            setattr(
+                task,
+                field,
+                [
+                    cleaned
+                    for entry in getattr(task, field)
+                    if (cleaned := _remove_blocked_fragments(entry, blocked))
+                ],
+            )
+        filtered_tasks.append(task)
+    if not filtered_tasks:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="规划结果与已明确排除的事项冲突，请重新生成")
+    draft.tasks = filtered_tasks
+    draft.questions = [
+        cleaned
+        for question in draft.questions
+        if (cleaned := _remove_blocked_fragments(question, blocked))
+    ]
     draft.suggestions = [
         suggestion
         for suggestion in draft.suggestions
-        if not _LIVESTREAM_TERMS.search(suggestion.title)
+        if not blocked.search(suggestion.title)
+        and not blocked.search(suggestion.reason)
     ]
 
 
@@ -242,7 +288,7 @@ def generate_plan(
     usage_date = _reserve_request(db, current.id, context.context_chars)
     generation = _generate_once(provider, planner_input)
     generation.draft.item.deliverable = ""
-    _suppress_explicitly_rejected_suggestions(
+    _apply_explicit_topic_veto(
         generation.draft,
         "\n".join((payload.description, payload.current_event_context or "")),
     )
@@ -292,7 +338,7 @@ def refine_plan(
     else:
         generation.draft.item.deliverable = ""
 
-    _suppress_explicitly_rejected_suggestions(
+    _apply_explicit_topic_veto(
         generation.draft,
         "\n".join((payload.description, payload.current_event_context or "", payload.instruction)),
     )

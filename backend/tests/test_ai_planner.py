@@ -164,8 +164,27 @@ def main() -> None:
         assert [suggestion.title for suggestion in draft.suggestions] == ["战队周边展示"]
         rejected_live_draft = AIPlannerDraft(
             item=AIPlannerItemDraft(title="机器人科技展", deliverable="模型生成的 root 总标准。", deadline=None),
-            tasks=[AIPlannerTaskDraft(title="现场展示", deliverable="展示完成。", execution_points=[], cautions=[], prerequisites=[], owner_claimable=True, collaboration_open=False)],
-            questions=[],
+            tasks=[
+                AIPlannerTaskDraft(
+                    title="现场展示",
+                    deliverable="展示设备可运行，直播画面稳定。",
+                    execution_points=["核对展示清单", "确认网络条件并测试在线演示"],
+                    cautions=["网络不可用时准备直播方案"],
+                    prerequisites=["直播网络已确认"],
+                    owner_claimable=True,
+                    collaboration_open=False,
+                ),
+                AIPlannerTaskDraft(
+                    title="确认直播与网络条件",
+                    deliverable="直播网络可用。",
+                    execution_points=[],
+                    cautions=[],
+                    prerequisites=[],
+                    owner_claimable=True,
+                    collaboration_open=False,
+                ),
+            ],
+            questions=["是否需要直播？", "活动时间是否已确认？"],
             suggestions=[
                 AIPlannerSuggestionDraft(title="现场直播", reason="团队指南将直播作为可选方式。"),
                 AIPlannerSuggestionDraft(title="活动宣传安排", reason="团队指南将宣传作为可选模块。"),
@@ -179,7 +198,25 @@ def main() -> None:
             provider=rejected_live_provider,
         )
         assert rejected_live_provider.calls == 1
+        assert [task.title for task in rejected_live_result.draft.tasks] == ["现场展示"]
+        assert rejected_live_result.draft.tasks[0].deliverable == "展示设备可运行"
+        assert rejected_live_result.draft.tasks[0].execution_points == ["核对展示清单"]
+        assert rejected_live_result.draft.tasks[0].cautions == []
+        assert rejected_live_result.draft.tasks[0].prerequisites == []
+        assert rejected_live_result.draft.questions == ["活动时间是否已确认？"]
         assert [item.title for item in rejected_live_result.draft.suggestions] == ["活动宣传安排"]
+        remaining_planner_text = " ".join(
+            [
+                *rejected_live_result.draft.questions,
+                *[suggestion.title + suggestion.reason for suggestion in rejected_live_result.draft.suggestions],
+                *[
+                    text
+                    for task in rejected_live_result.draft.tasks
+                    for text in [task.title, task.deliverable, *task.execution_points, *task.cautions, *task.prerequisites]
+                ],
+            ]
+        )
+        assert not any(term in remaining_planner_text for term in ("直播", "网络", "联网", "在线演示"))
         assert rejected_live_result.draft.item.deliverable == ""
         empty_root_batch = tasks_router.create_task_batch(
             TaskBatchCreate(

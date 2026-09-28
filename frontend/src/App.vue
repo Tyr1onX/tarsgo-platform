@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from "vue"
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue"
 
 import { ApiError, api } from "./api"
 import { filterIgnoredPlannerSuggestions, ignorePlannerSuggestion, plannerSuggestionJoinInstruction } from "./plannerSuggestions.js"
@@ -51,6 +51,14 @@ const plannerDraft = ref<AIPlannerDraft | null>(null)
 const plannerGenerating = ref(false)
 const plannerPublishing = ref(false)
 const plannerTaskDetailsText = ref<{ execution_points: string; cautions: string; prerequisites: string }[]>([])
+const plannerSelectedTaskIndex = ref<number | null>(null)
+const plannerNewTaskIndex = ref<number | null>(null)
+const plannerEmptyDetailSection = ref<"execution_points" | "cautions" | "prerequisites" | null>(null)
+const plannerDetailScrollTop = ref(0)
+const plannerDetailCloseButton = ref<HTMLButtonElement | null>(null)
+const plannerDetailBackButton = ref<HTMLButtonElement | null>(null)
+const plannerDetailTitleInput = ref<HTMLInputElement | null>(null)
+const plannerAddTaskButton = ref<HTMLButtonElement | null>(null)
 const plannerRefineOpenIndex = ref<number | null>(null)
 const plannerRefineInstruction = ref("")
 const plannerGlobalInstruction = ref("")
@@ -94,6 +102,10 @@ const activeMemberIds = computed(() => new Set(activeMembers.value.map((member) 
 const editingTask = computed(
   () => tasks.value.find((task) => task.id === editingTaskId.value) ?? null,
 )
+const plannerSelectedTask = computed(() => {
+  const index = plannerSelectedTaskIndex.value
+  return index === null ? null : plannerDraft.value?.tasks[index] ?? null
+})
 const parentTask = computed(
   () => tasks.value.find((task) => task.id === parentTaskId.value) ?? null,
 )
@@ -705,6 +717,8 @@ function onPlannerDrop(event: DragEvent) {
 
 function editPlannerRequest() {
   plannerDraft.value = null
+  plannerSelectedTaskIndex.value = null
+  plannerNewTaskIndex.value = null
   plannerRefineOpenIndex.value = null
   error.value = ""
 }
@@ -722,15 +736,104 @@ function newPlannerTask(): AIPlannerTaskDraft {
 }
 
 function addPlannerTask() {
-  plannerDraft.value?.tasks.push(newPlannerTask())
+  if (!plannerDraft.value) return
+  const index = plannerDraft.value.tasks.length
+  plannerDraft.value.tasks.push(newPlannerTask())
   plannerTaskDetailsText.value.push({ execution_points: "", cautions: "", prerequisites: "" })
+  plannerNewTaskIndex.value = index
+  openPlannerTaskDetail(index, true)
 }
 
 function removePlannerTask(index: number) {
   plannerDraft.value?.tasks.splice(index, 1)
   plannerTaskDetailsText.value.splice(index, 1)
+  if (plannerNewTaskIndex.value === index) plannerNewTaskIndex.value = null
+  else if (plannerNewTaskIndex.value !== null && plannerNewTaskIndex.value > index) plannerNewTaskIndex.value -= 1
+  if (plannerSelectedTaskIndex.value === index) plannerSelectedTaskIndex.value = null
+  else if (plannerSelectedTaskIndex.value !== null && plannerSelectedTaskIndex.value > index) plannerSelectedTaskIndex.value -= 1
   if (plannerRefineOpenIndex.value === index) plannerRefineOpenIndex.value = null
   else if (plannerRefineOpenIndex.value !== null && plannerRefineOpenIndex.value > index) plannerRefineOpenIndex.value -= 1
+}
+
+function plannerTaskStatus(task: AIPlannerTaskDraft) {
+  return [task.owner_claimable ? "待认领" : "", task.collaboration_open ? "开放协作" : ""]
+    .filter(Boolean)
+    .join(" · ")
+}
+
+function openPlannerTaskDetail(index: number, focusTitle = false) {
+  if (!plannerDraft.value?.tasks[index]) return
+  plannerDetailScrollTop.value = window.scrollY
+  plannerSelectedTaskIndex.value = index
+  plannerEmptyDetailSection.value = null
+  void nextTick(() => {
+    if (focusTitle) plannerDetailTitleInput.value?.focus()
+    else if (window.matchMedia("(max-width: 1100px)").matches) plannerDetailBackButton.value?.focus()
+    else plannerDetailCloseButton.value?.focus()
+  })
+}
+
+function isEmptyNewPlannerTask(index: number) {
+  const task = plannerDraft.value?.tasks[index]
+  const detail = plannerTaskDetailsText.value[index]
+  return Boolean(
+    task && detail &&
+    !task.title.trim() &&
+    !task.deliverable.trim() &&
+    !parseTaskLines(detail.execution_points).length &&
+    !parseTaskLines(detail.cautions).length &&
+    !parseTaskLines(detail.prerequisites).length &&
+    task.owner_claimable &&
+    !task.collaboration_open,
+  )
+}
+
+function closePlannerTaskDetail() {
+  const index = plannerSelectedTaskIndex.value
+  if (index === null) return
+  const shouldRemoveEmptyNewTask = plannerNewTaskIndex.value === index && isEmptyNewPlannerTask(index)
+  plannerSelectedTaskIndex.value = null
+  plannerEmptyDetailSection.value = null
+  if (shouldRemoveEmptyNewTask) removePlannerTask(index)
+  void nextTick(() => {
+    window.scrollTo(0, plannerDetailScrollTop.value)
+    const focusIndex = shouldRemoveEmptyNewTask
+      ? Math.min(index, Math.max((plannerDraft.value?.tasks.length ?? 1) - 1, 0))
+      : index
+    const card = document.querySelector<HTMLButtonElement>(`[data-planner-task-index="${focusIndex}"]`)
+    if (card) card.focus()
+    else plannerAddTaskButton.value?.focus()
+  })
+}
+
+function deleteSelectedPlannerTask() {
+  const index = plannerSelectedTaskIndex.value
+  if (index === null) return
+  plannerSelectedTaskIndex.value = null
+  plannerEmptyDetailSection.value = null
+  removePlannerTask(index)
+  void nextTick(() => {
+    window.scrollTo(0, plannerDetailScrollTop.value)
+    const nextIndex = Math.min(index, Math.max((plannerDraft.value?.tasks.length ?? 1) - 1, 0))
+    const card = document.querySelector<HTMLButtonElement>(`[data-planner-task-index="${nextIndex}"]`)
+    if (card) card.focus()
+    else plannerAddTaskButton.value?.focus()
+  })
+}
+
+function openPlannerEmptyDetailSection(section: "execution_points" | "cautions" | "prerequisites") {
+  plannerEmptyDetailSection.value = section
+  void nextTick(() => {
+    const field = document.querySelector<HTMLTextAreaElement>(`[data-planner-detail-field="${section}"]`)
+    field?.focus()
+  })
+}
+
+function handlePlannerDetailKeydown(event: KeyboardEvent) {
+  if (event.key === "Escape" && plannerSelectedTaskIndex.value !== null) {
+    event.preventDefault()
+    closePlannerTaskDetail()
+  }
 }
 
 function resetPlannerTaskDetails(draft: AIPlannerDraft) {
@@ -768,11 +871,16 @@ function plannerTaskLineLimitMessage() {
   return ""
 }
 
-function setPlannerDraft(draft: AIPlannerDraft) {
+function setPlannerDraft(draft: AIPlannerDraft, preserveSelectedTask = false) {
+  const selectedIndex = plannerSelectedTaskIndex.value
   if (draft.item.deadline) draft.item.deadline = toLocalInput(draft.item.deadline)
   filterIgnoredPlannerSuggestions(draft, plannerIgnoredSuggestionKeys)
   plannerDraft.value = draft
   resetPlannerTaskDetails(draft)
+  plannerSelectedTaskIndex.value = preserveSelectedTask && selectedIndex !== null && selectedIndex < draft.tasks.length
+    ? selectedIndex
+    : null
+  plannerNewTaskIndex.value = null
   plannerRefineOpenIndex.value = null
 }
 
@@ -894,7 +1002,7 @@ async function refineAIPlan(index?: number, instructionOverride?: string) {
       instruction,
       ...(index === undefined ? {} : { scope_task_index: index }),
     })
-    setPlannerDraft(result.draft)
+    setPlannerDraft(result.draft, true)
     plannerGlobalInstruction.value = ""
     plannerRefineInstruction.value = ""
   } catch (reason) {
@@ -983,6 +1091,7 @@ function handlePopState() {
 
 onMounted(async () => {
   window.addEventListener("popstate", handlePopState)
+  window.addEventListener("keydown", handlePlannerDetailKeydown)
   try {
     await loadCurrentUser()
   } catch (reason) {
@@ -991,7 +1100,10 @@ onMounted(async () => {
   await loadRoute()
 })
 
-onBeforeUnmount(() => window.removeEventListener("popstate", handlePopState))
+onBeforeUnmount(() => {
+  window.removeEventListener("popstate", handlePopState)
+  window.removeEventListener("keydown", handlePlannerDetailKeydown)
+})
 </script>
 
 <template>
@@ -1315,135 +1427,233 @@ onBeforeUnmount(() => window.removeEventListener("popstate", handlePopState))
             <button class="planner-back-link" type="button" @click="editPlannerRequest">← 修改原始需求</button>
             <span>AI 草案</span>
           </div>
-          <details class="planner-global-refine">
-            <summary>用 AI 调整整体方案</summary>
-            <label>
-              想怎样调整？
-              <textarea v-model="plannerGlobalInstruction" rows="2" maxlength="1000" placeholder="例如：把现场展示和技术保障合并，保留必要的交接任务。" />
-            </label>
-            <button class="secondary" type="button" :disabled="plannerRefining || plannerPublishing" @click="refineAIPlan()">
-              {{ plannerRefining && plannerRefineOpenIndex === null ? "正在调整…" : "调整整体方案" }}
-            </button>
-          </details>
-          <div class="planner-section">
-            <div class="section-heading"><h2>事项</h2></div>
-            <div class="planner-fields">
-              <label>
-                事项标题
-                <input v-model="plannerDraft.item.title" maxlength="200" />
-              </label>
-              <label>
-                完成标准（可选）
-                <textarea v-model="plannerDraft.item.deliverable" maxlength="5000" rows="3" />
-              </label>
-              <label>
-                截止时间
-                <input v-model="plannerDraft.item.deadline" type="datetime-local" required />
-              </label>
-            </div>
-          </div>
-
-          <div class="planner-section">
-            <div class="form-title">
-              <div>
-                <h2>执行分工 <span class="planner-task-count">· {{ plannerDraft.tasks.length }} 项</span></h2>
-              </div>
-              <button type="button" @click="addPlannerTask">＋ 添加分工</button>
-            </div>
-
-            <div v-if="plannerDraft.tasks.length" class="planner-task-list">
-              <article v-for="(task, index) in plannerDraft.tasks" :key="index" class="planner-task">
-                <div class="planner-task-head">
-                  <span>{{ String(index + 1).padStart(2, "0") }}</span>
-                  <button type="button" @click="removePlannerTask(index)">删除</button>
+          <div class="planner-result-layout" :class="{ 'is-detail-open': plannerSelectedTaskIndex !== null }">
+            <div class="planner-overview-column">
+              <section class="planner-overview-heading" aria-labelledby="planner-item-title">
+                <div>
+                  <p>事项总览</p>
+                  <h1 id="planner-item-title">{{ plannerDraft.item.title || "未命名事项" }}</h1>
+                  <span>{{ plannerDraft.tasks.length }} 个执行任务</span>
                 </div>
-                <label class="planner-task-title-field">
+                <button
+                  ref="plannerAddTaskButton"
+                  class="secondary planner-add-task"
+                  type="button"
+                  @click="addPlannerTask"
+                >＋ 添加任务</button>
+              </section>
+
+              <section class="planner-section planner-overview-tasks">
+                <div class="form-title">
+                  <h2>执行分工 <span class="planner-task-count">· {{ plannerDraft.tasks.length }} 项</span></h2>
+                </div>
+                <div v-if="plannerDraft.tasks.length" class="planner-task-list">
+                  <button
+                    v-for="(task, index) in plannerDraft.tasks"
+                    :key="index"
+                    :data-planner-task-index="index"
+                    class="planner-task-summary"
+                    type="button"
+                    :aria-label="`打开第 ${index + 1} 项详情：${task.title || '未命名任务'}`"
+                    :aria-expanded="plannerSelectedTaskIndex === index"
+                    @click="openPlannerTaskDetail(index)"
+                  >
+                    <span class="planner-summary-index">{{ String(index + 1).padStart(2, "0") }}</span>
+                    <span class="planner-summary-content">
+                      <strong>{{ task.title || "未命名分工" }}</strong>
+                      <span v-if="task.deliverable" class="planner-summary-deliverable">{{ task.deliverable }}</span>
+                      <span v-if="plannerTaskStatus(task)" class="planner-summary-status">{{ plannerTaskStatus(task) }}</span>
+                    </span>
+                    <span class="planner-summary-chevron" aria-hidden="true">›</span>
+                  </button>
+                </div>
+                <p v-else class="muted">当前没有分工，可以直接发布事项或添加一项。</p>
+              </section>
+
+              <details class="planner-item-edit">
+                <summary>事项信息</summary>
+                <div class="planner-fields">
+                  <label>
+                    事项标题
+                    <input v-model="plannerDraft.item.title" maxlength="200" />
+                  </label>
+                  <label>
+                    完成标准（可选）
+                    <textarea v-model="plannerDraft.item.deliverable" maxlength="5000" rows="3" />
+                  </label>
+                  <label>
+                    截止时间
+                    <input v-model="plannerDraft.item.deadline" type="datetime-local" required />
+                  </label>
+                </div>
+              </details>
+
+              <details class="planner-global-refine">
+                <summary>用 AI 调整整体方案</summary>
+                <label>
+                  想怎样调整？
+                  <textarea v-model="plannerGlobalInstruction" rows="2" maxlength="1000" placeholder="例如：把现场展示和技术保障合并，保留必要的交接任务。" />
+                </label>
+                <button class="secondary" type="button" :disabled="plannerRefining || plannerPublishing" @click="refineAIPlan()">
+                  {{ plannerRefining && plannerRefineOpenIndex === null ? "正在调整…" : "调整整体方案" }}
+                </button>
+              </details>
+
+              <div v-if="plannerDraft.questions.length" class="planner-section planner-questions">
+                <h2>需要确认 · {{ plannerDraft.questions.length }}</h2>
+                <ul>
+                  <li v-for="question in plannerDraft.questions" :key="question">{{ question }}</li>
+                </ul>
+              </div>
+
+              <div v-if="plannerDraft.suggestions.length" class="planner-section planner-suggestions">
+                <h2>可能遗漏 <span class="planner-task-count">· {{ plannerDraft.suggestions.length }}</span></h2>
+                <div class="planner-suggestion-list">
+                  <article v-for="(suggestion, index) in plannerDraft.suggestions" :key="suggestion.title + '-' + suggestion.reason" class="planner-suggestion">
+                    <div>
+                      <h3>{{ suggestion.title }}</h3>
+                      <p>{{ suggestion.reason }}</p>
+                    </div>
+                    <div class="planner-suggestion-actions">
+                      <button class="text-action" type="button" :disabled="plannerRefining || plannerPublishing" @click="dismissPlannerSuggestion(index)">忽略</button>
+                      <button class="secondary" type="button" :disabled="plannerRefining || plannerPublishing" @click="addPlannerSuggestion(suggestion)">加入方案</button>
+                    </div>
+                  </article>
+                </div>
+              </div>
+
+              <div class="planner-publish">
+                <button class="secondary" type="button" :disabled="plannerGenerating || plannerPublishing" @click="regenerateAIPlan">
+                  重新生成
+                </button>
+                <button class="primary" type="button" :disabled="plannerPublishing" @click="publishAIPlan">
+                  {{ plannerPublishing ? "正在创建…" : "确认并创建" }}
+                </button>
+              </div>
+            </div>
+
+            <aside
+              v-if="plannerSelectedTask && plannerSelectedTaskIndex !== null"
+              class="planner-task-detail"
+              :aria-label="`第 ${plannerSelectedTaskIndex + 1} 项任务详情`"
+              role="region"
+            >
+              <header class="planner-task-detail-header">
+                <button ref="plannerDetailBackButton" class="planner-detail-back" type="button" @click="closePlannerTaskDetail">← 返回方案</button>
+                <div class="planner-detail-heading">
+                  <span>{{ String(plannerSelectedTaskIndex + 1).padStart(2, "0") }}</span>
+                  <small>任务详情</small>
+                </div>
+                <button
+                  ref="plannerDetailCloseButton"
+                  class="planner-detail-close"
+                  type="button"
+                  aria-label="关闭任务详情"
+                  @click="closePlannerTaskDetail"
+                >×</button>
+              </header>
+
+              <div class="planner-task-detail-body">
+                <label class="planner-detail-title-field">
                   任务标题
-                  <input v-model="task.title" class="planner-task-title" maxlength="200" />
+                  <input
+                    ref="plannerDetailTitleInput"
+                    v-model="plannerSelectedTask.title"
+                    class="planner-task-title"
+                    maxlength="200"
+                    aria-label="任务标题"
+                  />
                 </label>
-                <label>
-                  完成标准（可选）
-                  <textarea v-model="task.deliverable" maxlength="5000" rows="3" />
+                <label class="planner-detail-deliverable">
+                  完成标准
+                  <textarea v-model="plannerSelectedTask.deliverable" maxlength="5000" rows="3" placeholder="写清楚看到什么结果即可判定完成" />
                 </label>
-                <label>
-                  执行要点（每行一条，最多 6 条）
-                  <textarea v-model="plannerTaskDetailsText[index].execution_points" rows="3" placeholder="按顺序写关键步骤；没有就留空" />
-                </label>
-                <label>
-                  注意事项（每行一条，最多 5 条）
-                  <textarea v-model="plannerTaskDetailsText[index].cautions" rows="2" placeholder="只写与当前任务直接相关的提醒" />
-                </label>
-                <label>
-                  前置条件（每行一条，最多 4 条）
-                  <textarea v-model="plannerTaskDetailsText[index].prerequisites" rows="2" placeholder="开始前必须满足的条件；不是任务依赖" />
-                </label>
-                <div class="planner-options">
+
+                <section
+                  v-if="plannerTaskDetailsText[plannerSelectedTaskIndex] && (parseTaskLines(plannerTaskDetailsText[plannerSelectedTaskIndex].execution_points).length || plannerEmptyDetailSection === 'execution_points')"
+                  class="planner-detail-section"
+                >
+                  <h3 v-if="parseTaskLines(plannerTaskDetailsText[plannerSelectedTaskIndex].execution_points).length">执行要点</h3>
+                  <textarea
+                    v-model="plannerTaskDetailsText[plannerSelectedTaskIndex].execution_points"
+                    data-planner-detail-field="execution_points"
+                    rows="3"
+                    maxlength="1600"
+                    aria-label="执行要点，每行一条，最多 6 条"
+                    placeholder="按顺序写关键步骤；每行一条，最多 6 条"
+                  />
+                </section>
+                <button v-else class="planner-add-detail" type="button" @click="openPlannerEmptyDetailSection('execution_points')">＋ 添加执行要点</button>
+
+                <section
+                  v-if="plannerTaskDetailsText[plannerSelectedTaskIndex] && (parseTaskLines(plannerTaskDetailsText[plannerSelectedTaskIndex].cautions).length || plannerEmptyDetailSection === 'cautions')"
+                  class="planner-detail-section"
+                >
+                  <h3 v-if="parseTaskLines(plannerTaskDetailsText[plannerSelectedTaskIndex].cautions).length">注意事项</h3>
+                  <textarea
+                    v-model="plannerTaskDetailsText[plannerSelectedTaskIndex].cautions"
+                    data-planner-detail-field="cautions"
+                    rows="2"
+                    maxlength="1200"
+                    aria-label="注意事项，每行一条，最多 5 条"
+                    placeholder="只写与当前任务直接相关的提醒"
+                  />
+                </section>
+                <button v-else class="planner-add-detail" type="button" @click="openPlannerEmptyDetailSection('cautions')">＋ 添加注意事项</button>
+
+                <section
+                  v-if="plannerTaskDetailsText[plannerSelectedTaskIndex] && (parseTaskLines(plannerTaskDetailsText[plannerSelectedTaskIndex].prerequisites).length || plannerEmptyDetailSection === 'prerequisites')"
+                  class="planner-detail-section"
+                >
+                  <h3 v-if="parseTaskLines(plannerTaskDetailsText[plannerSelectedTaskIndex].prerequisites).length">前置条件</h3>
+                  <textarea
+                    v-model="plannerTaskDetailsText[plannerSelectedTaskIndex].prerequisites"
+                    data-planner-detail-field="prerequisites"
+                    rows="2"
+                    maxlength="960"
+                    aria-label="前置条件，每行一条，最多 4 条"
+                    placeholder="开始前必须满足的条件；不是任务依赖"
+                  />
+                </section>
+                <button v-else class="planner-add-detail" type="button" @click="openPlannerEmptyDetailSection('prerequisites')">＋ 添加前置条件</button>
+
+                <div class="planner-options planner-detail-options">
                   <div class="planner-option">
                     <label class="check-row">
-                      <input v-model="task.owner_claimable" type="checkbox" />
+                      <input v-model="plannerSelectedTask.owner_claimable" type="checkbox" />
                       开放负责人认领
                     </label>
-                    <small v-if="!task.owner_claimable" class="muted">关闭后，确认发布时由你暂代负责人。</small>
+                    <small v-if="!plannerSelectedTask.owner_claimable" class="muted">关闭后，确认发布时由你暂代负责人。</small>
                   </div>
                   <label class="check-row">
-                    <input v-model="task.collaboration_open" type="checkbox" />
+                    <input v-model="plannerSelectedTask.collaboration_open" type="checkbox" />
                     开放成员自行加入协作
                   </label>
                 </div>
+
                 <div class="planner-card-ai">
-                  <button class="text-action" type="button" :disabled="plannerRefining" @click="plannerRefineOpenIndex = plannerRefineOpenIndex === index ? null : index; plannerRefineInstruction = ''">
-                    {{ plannerRefineOpenIndex === index ? "收起 AI 调整" : "AI 调整" }}
+                  <button class="text-action" type="button" :disabled="plannerRefining" @click="plannerRefineOpenIndex = plannerRefineOpenIndex === plannerSelectedTaskIndex ? null : plannerSelectedTaskIndex; plannerRefineInstruction = ''">
+                    {{ plannerRefineOpenIndex === plannerSelectedTaskIndex ? "收起 AI 调整" : "AI 调整" }}
                   </button>
-                  <div v-if="plannerRefineOpenIndex === index" class="planner-card-ai-panel">
+                  <div v-if="plannerRefineOpenIndex === plannerSelectedTaskIndex" class="planner-card-ai-panel">
                     <label>
                       希望这张卡如何调整？
                       <textarea v-model="plannerRefineInstruction" rows="2" maxlength="1000" placeholder="例如：让新人拿到后更容易执行" />
                     </label>
                     <div class="planner-refine-actions">
-                      <button class="secondary" type="button" :disabled="plannerRefining" @click="refineAIPlan(index, '补充执行要点')">补充执行要点</button>
-                      <button class="secondary" type="button" :disabled="plannerRefining" @click="refineAIPlan(index, '检查容易遗漏的点')">检查遗漏</button>
-                      <button class="secondary" type="button" :disabled="plannerRefining" @click="refineAIPlan(index, '简化这张任务卡，保留最必要的信息')">简化</button>
-                      <button class="primary" type="button" :disabled="plannerRefining || !plannerRefineInstruction.trim()" @click="refineAIPlan(index)">
+                      <button class="secondary" type="button" :disabled="plannerRefining" @click="refineAIPlan(plannerSelectedTaskIndex, '补充执行要点')">补充执行要点</button>
+                      <button class="secondary" type="button" :disabled="plannerRefining" @click="refineAIPlan(plannerSelectedTaskIndex, '检查容易遗漏的点')">检查遗漏</button>
+                      <button class="secondary" type="button" :disabled="plannerRefining" @click="refineAIPlan(plannerSelectedTaskIndex, '简化这张任务卡，保留最必要的信息')">简化</button>
+                      <button class="primary" type="button" :disabled="plannerRefining || !plannerRefineInstruction.trim()" @click="refineAIPlan(plannerSelectedTaskIndex)">
                         {{ plannerRefining ? "正在调整…" : "提交调整" }}
                       </button>
                     </div>
                   </div>
                 </div>
-              </article>
-            </div>
-            <p v-else class="muted">当前没有分工，可以直接发布事项或手动添加。</p>
-          </div>
 
-          <div v-if="plannerDraft.questions.length" class="planner-section planner-questions">
-            <h2>需要确认 · {{ plannerDraft.questions.length }}</h2>
-            <ul>
-              <li v-for="question in plannerDraft.questions" :key="question">{{ question }}</li>
-            </ul>
-          </div>
-
-          <div v-if="plannerDraft.suggestions.length" class="planner-section planner-suggestions">
-            <h2>可能遗漏 <span class="planner-task-count">· {{ plannerDraft.suggestions.length }}</span></h2>
-            <div class="planner-suggestion-list">
-              <article v-for="(suggestion, index) in plannerDraft.suggestions" :key="suggestion.title + '-' + suggestion.reason" class="planner-suggestion">
-                <div>
-                  <h3>{{ suggestion.title }}</h3>
-                  <p>{{ suggestion.reason }}</p>
-                </div>
-                <div class="planner-suggestion-actions">
-                  <button class="text-action" type="button" :disabled="plannerRefining || plannerPublishing" @click="dismissPlannerSuggestion(index)">忽略</button>
-                  <button class="secondary" type="button" :disabled="plannerRefining || plannerPublishing" @click="addPlannerSuggestion(suggestion)">加入方案</button>
-                </div>
-              </article>
-            </div>
-          </div>
-
-          <div class="planner-publish">
-            <button class="secondary" type="button" :disabled="plannerGenerating || plannerPublishing" @click="regenerateAIPlan">
-              重新生成
-            </button>
-            <button class="primary" type="button" :disabled="plannerPublishing" @click="publishAIPlan">
-              {{ plannerPublishing ? "正在创建…" : "确认并创建" }}
-            </button>
+                <button class="planner-delete-task" type="button" @click="deleteSelectedPlannerTask">删除这项分工</button>
+              </div>
+            </aside>
           </div>
         </section>
       </template>

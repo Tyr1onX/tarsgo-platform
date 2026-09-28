@@ -101,9 +101,9 @@ class MemberSummary(BaseModel):
 class TaskCreate(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     deliverable: str = Field(default="", max_length=5000)
-    execution_points: list[TaskDetailText] = Field(max_length=6)
-    cautions: list[TaskDetailText] = Field(max_length=5)
-    prerequisites: list[TaskDetailText] = Field(max_length=4)
+    execution_points: list[TaskDetailText] = Field(default_factory=list, max_length=6)
+    cautions: list[TaskDetailText] = Field(default_factory=list, max_length=5)
+    prerequisites: list[TaskDetailText] = Field(default_factory=list, max_length=4)
     owner_id: int | None = None
     owner_claimable: bool = False
     collaborator_ids: list[int] = Field(default_factory=list)

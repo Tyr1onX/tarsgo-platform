@@ -120,9 +120,6 @@ def create_task(manager, **overrides):
     payload = {
         "title": "默认运营任务",
         "deliverable": "",
-        "execution_points": [],
-        "cautions": [],
-        "prerequisites": [],
         "owner_id": None,
         "owner_claimable": True,
         "collaborator_ids": [],
@@ -189,9 +186,6 @@ def run_workflow():
         data={
             "title": "无负责人且不可认领",
             "deliverable": "",
-            "execution_points": [],
-            "cautions": [],
-            "prerequisites": [],
             "owner_id": None,
             "owner_claimable": False,
             "collaborator_ids": [],
@@ -268,9 +262,6 @@ def run_workflow():
         data={
             "title": "不允许的二级分工",
             "deliverable": "",
-            "execution_points": [],
-            "cautions": [],
-            "prerequisites": [],
             "owner_id": manager_id,
             "owner_claimable": False,
             "collaborator_ids": [],

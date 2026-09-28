@@ -89,6 +89,8 @@ def main() -> None:
         assert "该 question 必须删除" in SYSTEM_PROMPT
         assert "没有任何已有或可合理生成的团队 task 能够解决该未知" in SYSTEM_PROMPT
         assert "即使负责人现在直接回答会更方便" in SYSTEM_PROMPT
+        assert "不得因为直播通常需要网络而生成或询问网络条件" in SYSTEM_PROMPT
+        assert "这条排除规则也覆盖 deliverable、execution_points、cautions、prerequisites、questions 和 suggestions" in SYSTEM_PROMPT
 
         anonymous_upload = TestClient(app).post(
             "/api/ai/planner/extract",

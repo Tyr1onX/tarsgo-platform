@@ -66,7 +66,12 @@ def main() -> None:
     with SessionLocal() as db:
         admin = db.scalar(select(Member).where(Member.email == "admin@example.com"))
         manager = db.scalar(select(Member).where(Member.email == "manager@example.com"))
-        member = db.scalar(select(Member).where(Member.email == "member@example.com"))
+        member = db.scalar(
+            select(Member)
+            .where(Member.role == "member", Member.status == "active")
+            .order_by(Member.id)
+            .limit(1)
+        )
         assert admin and manager and member
         os.environ.update({
             "AI_PLANNER_ENABLED": "true",

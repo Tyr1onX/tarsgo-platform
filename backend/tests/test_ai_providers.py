@@ -11,9 +11,18 @@ from app.ai_planner import (
     OpenAIPlannerProvider,
     PlannerInvalidResponse,
     SYSTEM_PROMPT,
+    ITEM_REVIEW_SYSTEM_PROMPT,
     get_planner_provider,
 )
-from app.schemas import AIPlannerDraft, AIPlannerItemDraft, AIPlannerSuggestionDraft, AIPlannerTaskDraft
+from app.schemas import (
+    AIItemReviewOut,
+    AIItemReviewSuggestion,
+    AIItemReviewTaskProposal,
+    AIPlannerDraft,
+    AIPlannerItemDraft,
+    AIPlannerSuggestionDraft,
+    AIPlannerTaskDraft,
+)
 
 
 def draft() -> AIPlannerDraft:
@@ -39,6 +48,38 @@ def draft() -> AIPlannerDraft:
     )
 
 
+def review() -> AIItemReviewOut:
+    return AIItemReviewOut(
+        summary="当前方案仍可执行。",
+        suggestions=[
+            AIItemReviewSuggestion(
+                kind="update_task",
+                target_task_id=41,
+                reason="当前已确认信息改变了执行安排。",
+                proposed_task=AIItemReviewTaskProposal(
+                    title="现场布展",
+                    deliverable="展示设备完成布置并可运行。",
+                    execution_points=["按新确认时间提前完成布展"],
+                    cautions=[],
+                    prerequisites=[],
+                ),
+            ),
+            AIItemReviewSuggestion(
+                kind="add_task",
+                target_task_id=None,
+                reason="主办方新增了方案尚未覆盖的独立交付。",
+                proposed_task=AIItemReviewTaskProposal(
+                    title="整理并提交活动总结材料",
+                    deliverable="活动总结已按要求整理并提交。",
+                    execution_points=["汇总活动结果", "按要求提交总结"],
+                    cautions=[],
+                    prerequisites=[],
+                ),
+            ),
+        ],
+    )
+
+
 def usage():
     return SimpleNamespace(input_tokens=101, output_tokens=79, total_tokens=180)
 
@@ -51,7 +92,8 @@ class FakeResponses:
     def parse(self, **kwargs):
         self.calls["parse_count"] = self.calls.get("parse_count", 0) + 1
         self.calls["parse"] = kwargs
-        return SimpleNamespace(output_parsed=draft(), usage=usage())
+        parsed = review() if kwargs.get("text_format") is AIItemReviewOut else draft()
+        return SimpleNamespace(output_parsed=parsed, usage=usage())
 
     def create(self, **kwargs):
         self.calls["create_count"] = self.calls.get("create_count", 0) + 1
@@ -66,6 +108,10 @@ class FakeClient:
 
 def valid_json() -> str:
     return json.dumps(draft().model_dump(mode="json"), ensure_ascii=False)
+
+
+def valid_review_json() -> str:
+    return json.dumps(review().model_dump(mode="json"), ensure_ascii=False)
 
 
 def configure(provider_name: str, base_url: str = "") -> None:
@@ -160,6 +206,23 @@ def assert_generation_prompt_contract() -> None:
         assert guidance in SYSTEM_PROMPT, guidance
 
 
+def assert_review_prompt_contract() -> None:
+    required_guidance = (
+        "你不是从零规划",
+        "0 条建议完全合法",
+        "done 代表已发生的执行历史",
+        "doing 任务只有当前新事实确实影响继续执行时才做最小调整",
+        "todo 任务如能覆盖变化，优先 update_task",
+        "绝不建议删除任务",
+        "Knowledge 只用于改善当前明确需求",
+        "团队历史经验只帮助完善执行提示",
+        "不要把历史活动的日期、地点、人数、负责人或安排当成当前事实",
+        "不能直接修改数据库",
+    )
+    for guidance in required_guidance:
+        assert guidance in ITEM_REVIEW_SYSTEM_PROMPT, guidance
+
+
 def run_with_fake(provider_name: str, *, output_text: str | None = None, base_url: str = ""):
     calls = {}
     configure(provider_name, base_url)
@@ -176,9 +239,29 @@ def run_with_fake(provider_name: str, *, output_text: str | None = None, base_ur
 
 def main() -> None:
     assert_generation_prompt_contract()
+    assert_review_prompt_contract()
     zero_question_draft = draft().model_dump(mode="json")
     zero_question_draft["questions"] = []
     assert AIPlannerDraft.model_validate(zero_question_draft).questions == []
+    assert AIItemReviewOut(summary="当前方案无需调整。", suggestions=[]).suggestions == []
+    review_schema = AIItemReviewOut.model_json_schema()
+    assert review_schema["properties"]["suggestions"]["maxItems"] == 6
+    assert review_schema["required"] == ["summary", "suggestions"]
+    proposal_schema = review_schema["$defs"]["AIItemReviewTaskProposal"]
+    assert set(proposal_schema["required"]) == {
+        "title", "deliverable", "execution_points", "cautions", "prerequisites"
+    }
+    assert "owner_id" not in proposal_schema["properties"]
+    assert "result" not in proposal_schema["properties"]
+    assert "deadline" not in proposal_schema["properties"]
+    too_many_review_suggestions = review().model_dump(mode="json")
+    too_many_review_suggestions["suggestions"] *= 4
+    try:
+        AIItemReviewOut.model_validate(too_many_review_suggestions)
+    except ValidationError:
+        pass
+    else:
+        raise AssertionError("AI item review should allow at most six suggestions")
 
     legacy_without_suggestions = draft().model_dump(mode="json")
     legacy_without_suggestions.pop("suggestions")
@@ -267,6 +350,60 @@ def main() -> None:
     assert deepseek_generation.output_tokens == 79
     assert deepseek_generation.total_tokens == 180
     assert deepseek_calls["create_count"] == 1
+
+    review_context = "【当前事项执行状态 JSON】\n{}"
+    openai_review_calls = {}
+
+    def fake_openai_review(**kwargs):
+        openai_review_calls["client"] = kwargs
+        return FakeClient(openai_review_calls)
+
+    with patch("app.ai_planner.OpenAI", side_effect=fake_openai_review):
+        openai_review_provider = OpenAIPlannerProvider()
+        openai_review_generation = openai_review_provider.review(review_context)
+    assert openai_review_calls.get("parse_count") == 1
+    assert openai_review_calls.get("create_count", 0) == 0
+    assert openai_review_calls["parse"]["text_format"] is AIItemReviewOut
+    assert openai_review_calls["parse"]["instructions"] == ITEM_REVIEW_SYSTEM_PROMPT
+    assert openai_review_calls["parse"]["input"] == review_context
+    assert openai_review_calls["parse"]["max_output_tokens"] == 2200
+    assert openai_review_calls["client"]["max_retries"] == 0
+    assert openai_review_generation.review == review()
+    assert openai_review_generation.total_tokens == 180
+
+    configure("deepseek", DEEPSEEK_DEFAULT_BASE_URL)
+    deepseek_review_calls = {}
+
+    def fake_deepseek_review(**kwargs):
+        deepseek_review_calls["client"] = kwargs
+        return FakeClient(deepseek_review_calls, output_text=valid_review_json())
+
+    with patch("app.ai_planner.OpenAI", side_effect=fake_deepseek_review):
+        deepseek_review_generation = DeepSeekPlannerProvider().review(review_context)
+    assert deepseek_review_calls.get("create_count") == 1
+    assert deepseek_review_calls.get("parse_count", 0) == 0
+    assert deepseek_review_calls["create"]["instructions"] == ITEM_REVIEW_SYSTEM_PROMPT
+    assert deepseek_review_calls["create"]["input"] == review_context
+    assert deepseek_review_calls["create"]["max_output_tokens"] == 4096
+    assert deepseek_review_calls["create"]["reasoning"]["effort"] == "none"
+    assert deepseek_review_calls["create"]["store"] is False
+    assert deepseek_review_calls["client"]["max_retries"] == 0
+    review_format = deepseek_review_calls["create"]["text"]["format"]
+    assert review_format["type"] == "json_schema" and review_format["strict"] is True
+    assert review_format["schema"] == AIItemReviewOut.model_json_schema()
+    assert deepseek_review_generation.review == review()
+    assert deepseek_review_generation.total_tokens == 180
+
+    bad_review_calls = {}
+
+    def fake_bad_review(**kwargs):
+        bad_review_calls["client"] = kwargs
+        return FakeClient(bad_review_calls, output_text="{not valid json")
+
+    with patch("app.ai_planner.OpenAI", side_effect=fake_bad_review):
+        expect_invalid(lambda: DeepSeekPlannerProvider().review(review_context))
+    assert bad_review_calls.get("create_count") == 1
+    assert bad_review_calls.get("parse_count", 0) == 0
 
     configure("deepseek")
     default_calls = {}

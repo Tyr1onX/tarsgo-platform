@@ -3,11 +3,13 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue"
 
 import { ApiError, api } from "./api"
 import { filterIgnoredPlannerSuggestions, ignorePlannerSuggestion, plannerSuggestionJoinInstruction } from "./plannerSuggestions.js"
+import { itemReviewChanges, removeItemReviewSuggestion } from "./itemReview.js"
 import type {
   AIPlannerDraft,
   AIPlannerExtractedFile,
   AIPlannerSuggestionDraft,
   AIPlannerTaskDraft,
+  AIItemReviewSuggestion,
   InvitationInfo,
   InviteResult,
   ItemActivity,
@@ -78,6 +80,11 @@ const itemActivityDraft = ref("")
 const itemActivityAddToFacts = ref(false)
 const itemFactDraft = ref("")
 const taskResultDraft = ref("")
+const itemReviewSummary = ref("")
+const itemReviewSuggestions = ref<{ key: string; suggestion: AIItemReviewSuggestion }[]>([])
+const itemReviewLoading = ref(false)
+const itemReviewApplyingKey = ref("")
+let itemReviewEpoch = 0
 
 const memberName = ref("")
 const memberEmail = ref("")
@@ -182,6 +189,11 @@ const statusLabels: Record<TaskStatus, string> = {
   doing: "进行中",
   done: "已完成",
 }
+const reviewProposalSections = [
+  { label: "执行提示", field: "execution_points" },
+  { label: "注意事项", field: "cautions" },
+  { label: "开始前需要", field: "prerequisites" },
+] as const
 
 const roleLabels: Record<Role, string> = {
   admin: "管理员",
@@ -200,12 +212,72 @@ function messageOf(reason: unknown): string {
 }
 
 function navigate(nextPath: string) {
+  const nextRoute = nextPath.split("?")[0]
+  if (taskDetailId.value !== null && nextRoute !== path.value) clearItemReview()
   if (window.location.pathname + window.location.search !== nextPath) {
     window.history.pushState({}, "", nextPath)
   }
   path.value = window.location.pathname
   error.value = ""
   void loadRoute()
+}
+
+function clearItemReview() {
+  itemReviewEpoch += 1
+  itemReviewSummary.value = ""
+  itemReviewSuggestions.value = []
+  itemReviewApplyingKey.value = ""
+}
+
+async function reviewCurrentItemPlan() {
+  const root = detailTask.value
+  if (!root || root.parent_id !== null || !aiPlannerAvailable.value || itemReviewLoading.value) return
+  error.value = ""
+  itemReviewLoading.value = true
+  clearItemReview()
+  const epoch = itemReviewEpoch
+  try {
+    const result = await api.reviewItemPlan(root.id)
+    if (epoch !== itemReviewEpoch) return
+    itemReviewSummary.value = result.summary
+    itemReviewSuggestions.value = result.suggestions.map((suggestion, index) => ({
+      key: `${Date.now()}-${index}-${Math.random().toString(36).slice(2)}`,
+      suggestion,
+    }))
+  } catch (reason) {
+    error.value = messageOf(reason)
+  } finally {
+    itemReviewLoading.value = false
+  }
+}
+
+function dismissItemReviewSuggestion(key: string) {
+  itemReviewSuggestions.value = removeItemReviewSuggestion(itemReviewSuggestions.value, key)
+}
+
+function changesForReviewSuggestion(suggestion: AIItemReviewSuggestion) {
+  const current = detailChildren.value.find((task) => task.id === suggestion.target_task_id)
+  return itemReviewChanges(current, suggestion.proposed_task)
+}
+
+async function applyItemReviewSuggestion(entry: { key: string; suggestion: AIItemReviewSuggestion }) {
+  const root = detailTask.value
+  if (!root || root.parent_id !== null || !isManager.value || itemReviewApplyingKey.value) return
+  error.value = ""
+  itemReviewApplyingKey.value = entry.key
+  try {
+    const applied = await api.applyItemReview(root.id, entry.suggestion)
+    const existingIndex = tasks.value.findIndex((task) => task.id === applied.task.id)
+    if (existingIndex >= 0) tasks.value.splice(existingIndex, 1, applied.task)
+    else tasks.value.push(applied.task)
+    itemActivities.value = [applied.activity, ...itemActivities.value]
+    itemReviewSuggestions.value = removeItemReviewSuggestion(itemReviewSuggestions.value, entry.key)
+    notice.value = "已应用这条方案调整"
+  } catch (reason) {
+    error.value = messageOf(reason)
+  } finally {
+    itemReviewApplyingKey.value = ""
+  }
 }
 
 function readTaskView(): TaskView {
@@ -637,6 +709,7 @@ async function submitTask() {
       })
     }
 
+    clearItemReview()
     closeTaskForm()
     taskView.value = "all"
     if (window.location.search !== "?view=all") {
@@ -652,6 +725,7 @@ async function updateOwnTaskStatus(task: Task, status: TaskStatus) {
   error.value = ""
   try {
     await api.updateTask(task.id, { status })
+    clearItemReview()
     await loadRoute()
   } catch (reason) {
     error.value = messageOf(reason)
@@ -662,6 +736,7 @@ async function claimTask(task: Task) {
   error.value = ""
   try {
     await api.claimTask(task.id)
+    clearItemReview()
     await loadRoute()
   } catch (reason) {
     error.value = messageOf(reason)
@@ -673,6 +748,7 @@ async function unclaimTask(task: Task) {
   error.value = ""
   try {
     await api.unclaimTask(task.id)
+    clearItemReview()
     await loadRoute()
   } catch (reason) {
     error.value = messageOf(reason)
@@ -683,6 +759,7 @@ async function joinTask(task: Task) {
   error.value = ""
   try {
     await api.joinTask(task.id)
+    clearItemReview()
     await loadRoute()
   } catch (reason) {
     error.value = messageOf(reason)
@@ -693,6 +770,7 @@ async function leaveTask(task: Task) {
   error.value = ""
   try {
     await api.leaveTask(task.id)
+    clearItemReview()
     await loadRoute()
   } catch (reason) {
     error.value = messageOf(reason)
@@ -718,6 +796,7 @@ async function saveTaskResult() {
   error.value = ""
   try {
     await api.updateTask(task.id, { result: taskResultDraft.value })
+    clearItemReview()
     notice.value = "执行结果已保存"
     await loadRoute()
   } catch (reason) {
@@ -732,6 +811,7 @@ async function addCurrentFact() {
   error.value = ""
   try {
     await api.addContextFact(root.id, content)
+    clearItemReview()
     itemFactDraft.value = ""
     await loadRoute()
   } catch (reason) {
@@ -745,6 +825,7 @@ async function removeCurrentFact(index: number) {
   error.value = ""
   try {
     await api.deleteContextFact(root.id, index)
+    clearItemReview()
     await loadRoute()
   } catch (reason) {
     error.value = messageOf(reason)
@@ -762,6 +843,7 @@ async function recordItemActivity() {
   error.value = ""
   try {
     await api.addItemActivity(root.id, content, itemActivityAddToFacts.value)
+    clearItemReview()
     itemActivityDraft.value = ""
     itemActivityAddToFacts.value = false
     await loadRoute()
@@ -776,6 +858,7 @@ async function addResultToContext() {
   error.value = ""
   try {
     await api.taskResultToContext(task.id)
+    clearItemReview()
     notice.value = "执行结果已加入事项信息"
     await loadRoute()
   } catch (reason) {
@@ -785,6 +868,7 @@ async function addResultToContext() {
 
 function editTaskFromDetail(task: Task) {
   if (!isManager.value) return
+  clearItemReview()
   taskView.value = "all"
   window.history.pushState({}, "", "/tasks?view=all")
   path.value = "/tasks"
@@ -1259,6 +1343,7 @@ async function logout() {
 }
 
 function handlePopState() {
+  if (window.location.pathname !== path.value) clearItemReview()
   path.value = window.location.pathname
   void loadRoute()
 }
@@ -1850,7 +1935,16 @@ onBeforeUnmount(() => {
           </section>
 
           <section class="execution-section">
-            <div class="section-heading"><h2>当前已知</h2><span>{{ detailRoot.context_facts.length }} 条</span></div>
+            <div class="section-heading review-section-heading">
+              <div class="review-section-title"><h2>当前已知</h2><span>{{ detailRoot.context_facts.length }} 条</span></div>
+              <button
+                v-if="aiPlannerAvailable && detailTask.parent_id === null"
+                class="review-trigger"
+                type="button"
+                :disabled="itemReviewLoading"
+                @click="reviewCurrentItemPlan"
+              >{{ itemReviewLoading ? "正在检查…" : "让 AI 检查方案" }}</button>
+            </div>
             <div v-if="detailRoot.context_facts.length" class="fact-list">
               <div v-for="(fact, index) in detailRoot.context_facts" :key="`${index}-${fact}`" class="fact-row">
                 <span>{{ fact }}</span>
@@ -1861,6 +1955,60 @@ onBeforeUnmount(() => {
               <input v-model="itemFactDraft" maxlength="500" placeholder="新增一条已确认信息" />
               <button type="submit" :disabled="!itemFactDraft.trim()">＋ 添加</button>
             </form>
+
+            <section v-if="itemReviewSummary" class="ai-review-panel" aria-live="polite">
+              <div class="ai-review-heading">
+                <div>
+                  <span class="eyebrow">AI 检查结果</span>
+                  <p>{{ itemReviewSummary }}</p>
+                </div>
+                <span class="ai-review-count">{{ itemReviewSuggestions.length }} 条建议</span>
+              </div>
+              <p v-if="!itemReviewSuggestions.length" class="ai-review-empty">当前方案暂未发现需要调整的地方</p>
+              <article v-for="entry in itemReviewSuggestions" :key="entry.key" class="ai-review-card">
+                <div class="ai-review-card-heading">
+                  <span class="eyebrow">{{ entry.suggestion.kind === "add_task" ? "新增任务" : "调整现有任务" }}</span>
+                  <h3>
+                    {{ entry.suggestion.kind === "add_task"
+                      ? entry.suggestion.proposed_task.title
+                      : detailChildren.find((task) => task.id === entry.suggestion.target_task_id)?.title ?? entry.suggestion.proposed_task.title }}
+                  </h3>
+                </div>
+                <p class="ai-review-reason"><strong>原因</strong>{{ entry.suggestion.reason }}</p>
+                <div v-if="entry.suggestion.kind === 'update_task'" class="ai-review-diffs">
+                  <div v-for="change in changesForReviewSuggestion(entry.suggestion)" :key="change.field" class="ai-review-diff">
+                    <strong>{{ change.label }}</strong>
+                    <div class="ai-review-values">
+                      <p class="ai-review-before">{{ change.before }}</p>
+                      <span aria-hidden="true">→</span>
+                      <p>{{ change.after }}</p>
+                    </div>
+                  </div>
+                </div>
+                <div v-else class="ai-review-proposal">
+                  <div v-if="entry.suggestion.proposed_task.deliverable">
+                    <strong>做到什么算完成</strong>
+                    <p>{{ entry.suggestion.proposed_task.deliverable }}</p>
+                  </div>
+                  <div v-for="section in reviewProposalSections" :key="section.field">
+                    <template v-if="entry.suggestion.proposed_task[section.field].length">
+                      <strong>{{ section.label }}</strong>
+                      <ul><li v-for="value in entry.suggestion.proposed_task[section.field]" :key="value">{{ value }}</li></ul>
+                    </template>
+                  </div>
+                </div>
+                <div class="ai-review-actions">
+                  <button type="button" @click="dismissItemReviewSuggestion(entry.key)">忽略</button>
+                  <button
+                    v-if="isManager"
+                    class="primary small-action"
+                    type="button"
+                    :disabled="Boolean(itemReviewApplyingKey)"
+                    @click="applyItemReviewSuggestion(entry)"
+                  >{{ itemReviewApplyingKey === entry.key ? "正在应用…" : "应用" }}</button>
+                </div>
+              </article>
+            </section>
           </section>
 
           <section class="execution-section">

@@ -128,6 +128,23 @@ export interface AIPlannerResult {
   current_event_documents: KnowledgeReference[]
   historical_documents: KnowledgeReference[]
 }
+export interface AIItemReviewTaskProposal {
+  title: string
+  deliverable: string
+  execution_points: string[]
+  cautions: string[]
+  prerequisites: string[]
+}
+export interface AIItemReviewSuggestion {
+  kind: "update_task" | "add_task"
+  target_task_id: number | null
+  reason: string
+  proposed_task: AIItemReviewTaskProposal
+}
+export interface AIItemReviewResult {
+  summary: string
+  suggestions: AIItemReviewSuggestion[]
+}
 export interface AIPlannerExtractedFile {
   filename: string
   extracted_text: string

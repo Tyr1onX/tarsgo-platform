@@ -4,6 +4,8 @@ import type {
   AIPlannerResult,
   AIPlannerInput,
   AIPlannerRefineInput,
+  AIItemReviewResult,
+  AIItemReviewSuggestion,
   InvitationInfo,
   InviteResult,
   ItemActivity,
@@ -97,6 +99,13 @@ export const api = {
     request<AIPlannerResult>("/api/ai/planner/refine", {
       method: "POST",
       body: JSON.stringify(payload),
+    }),
+  reviewItemPlan: (rootTaskId: number) =>
+    request<AIItemReviewResult>(`/api/ai/items/${rootTaskId}/review`, { method: "POST" }),
+  applyItemReview: (rootTaskId: number, suggestion: AIItemReviewSuggestion) =>
+    request<{ task: Task; activity: ItemActivity }>(`/api/ai/items/${rootTaskId}/review/apply`, {
+      method: "POST",
+      body: JSON.stringify(suggestion),
     }),
   extractPlannerFile: (file: File) => {
     const form = new FormData()

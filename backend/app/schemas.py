@@ -101,9 +101,9 @@ class MemberSummary(BaseModel):
 class TaskCreate(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     deliverable: str = Field(default="", max_length=5000)
-    execution_points: list[TaskDetailText] = Field(default_factory=list, max_length=6)
-    cautions: list[TaskDetailText] = Field(default_factory=list, max_length=5)
-    prerequisites: list[TaskDetailText] = Field(default_factory=list, max_length=4)
+    execution_points: list[TaskDetailText] = Field(max_length=6)
+    cautions: list[TaskDetailText] = Field(max_length=5)
+    prerequisites: list[TaskDetailText] = Field(max_length=4)
     owner_id: int | None = None
     owner_claimable: bool = False
     collaborator_ids: list[int] = Field(default_factory=list)
@@ -435,6 +435,86 @@ class AIPlannerGenerateOut(BaseModel):
     draft: AIPlannerDraft
     current_event_documents: list[KnowledgeReferenceOut] = Field(default_factory=list)
     historical_documents: list[KnowledgeReferenceOut] = Field(default_factory=list)
+
+
+class AIItemReviewTaskProposal(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    title: str = Field(min_length=1, max_length=200)
+    deliverable: str = Field(max_length=5000)
+    execution_points: list[TaskDetailText] = Field(max_length=6)
+    cautions: list[TaskDetailText] = Field(max_length=5)
+    prerequisites: list[TaskDetailText] = Field(max_length=4)
+
+    @field_validator("title")
+    @classmethod
+    def strip_review_title(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("分工标题不能为空")
+        return value
+
+    @field_validator("deliverable")
+    @classmethod
+    def strip_review_deliverable(cls, value: str) -> str:
+        return value.strip()
+
+    @field_validator("execution_points")
+    @classmethod
+    def clean_review_execution_points(cls, value: list[str]) -> list[str]:
+        return _clean_task_details(value, max_items=6, field_name="执行要点") or []
+
+    @field_validator("cautions")
+    @classmethod
+    def clean_review_cautions(cls, value: list[str]) -> list[str]:
+        return _clean_task_details(value, max_items=5, field_name="注意事项") or []
+
+    @field_validator("prerequisites")
+    @classmethod
+    def clean_review_prerequisites(cls, value: list[str]) -> list[str]:
+        return _clean_task_details(value, max_items=4, field_name="前置条件") or []
+
+
+class AIItemReviewSuggestion(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["update_task", "add_task"]
+    target_task_id: int | None
+    reason: str = Field(min_length=1, max_length=500)
+    proposed_task: AIItemReviewTaskProposal
+
+    @field_validator("reason")
+    @classmethod
+    def strip_review_reason(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("建议原因不能为空")
+        return value
+
+    @model_validator(mode="after")
+    def validate_review_target(self):
+        if self.kind == "update_task" and self.target_task_id is None:
+            raise ValueError("调整任务必须指定目标分工")
+        if self.kind == "add_task" and self.target_task_id is not None:
+            raise ValueError("新增任务不能指定目标分工")
+        return self
+
+
+class AIItemReviewOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    summary: str = Field(min_length=1, max_length=500)
+    suggestions: list[AIItemReviewSuggestion] = Field(max_length=6)
+
+    @field_validator("summary")
+    @classmethod
+    def strip_review_summary(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("检查摘要不能为空")
+        return value
+
+
+class AIItemReviewApplyOut(BaseModel):
+    task: TaskOut
+    activity: ItemActivityOut
 
 
 class AIPlannerExtractOut(BaseModel):

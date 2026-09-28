@@ -753,6 +753,7 @@ def search_historical_documents(
     *,
     excluded_ids: set[int] | None = None,
     max_chars: int = MAX_HISTORY_CONTEXT_CHARS,
+    exclude_reminder_sections: bool = False,
 ) -> tuple[str, tuple[KnowledgeReference, ...]]:
     terms = _search_terms(query)
     if not terms or max_chars <= 0:
@@ -787,7 +788,20 @@ def search_historical_documents(
         available = max_chars - used_chars - len(header)
         if available <= 0:
             break
-        excerpt = _excerpt(document.content_text, terms, max_chars=min(1_200, available))
+        content = document.content_text
+        if exclude_reminder_sections:
+            content_lines: list[str] = []
+            in_reminder_section = False
+            for line in content.splitlines():
+                heading = re.match(r"^##\s+(.+?)\s*$", line.strip())
+                if heading:
+                    in_reminder_section = heading.group(1).strip() == "可提醒事项"
+                    if in_reminder_section:
+                        continue
+                if not in_reminder_section:
+                    content_lines.append(line)
+            content = "\n".join(content_lines)
+        excerpt = _excerpt(content, terms, max_chars=min(1_200, available))
         if not excerpt:
             continue
         snippet = header + excerpt

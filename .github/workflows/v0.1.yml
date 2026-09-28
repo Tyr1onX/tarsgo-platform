@@ -121,6 +121,9 @@ jobs:
       - name: Verify AI planner
         run: docker compose exec -T api python -m tests.test_ai_planner
 
+      - name: Verify AI item review
+        run: docker compose exec -T api python -m tests.test_ai_item_review
+
       - name: Verify AI provider adapters
         run: docker compose exec -T api python -m tests.test_ai_providers
 

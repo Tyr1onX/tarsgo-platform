@@ -36,6 +36,7 @@ MAX_GITHUB_SYNC_BYTES = 50 * 1024 * 1024
 MAX_EXTRACTED_TEXT_CHARS = 200_000
 MAX_CURRENT_CONTEXT_CHARS = 5_000
 MAX_HISTORY_CONTEXT_CHARS = 3_000
+MAX_SUGGESTION_CONTEXT_CHARS = 1_200
 MAX_TOTAL_KNOWLEDGE_CONTEXT_CHARS = 8_000
 MAX_HISTORY_RESULTS = 6
 MAX_SEARCH_CANDIDATES = 60
@@ -96,12 +97,13 @@ class ExtractedText:
 class KnowledgeContext:
     current_event_text: str = ""
     historical_text: str = ""
+    suggestion_text: str = ""
     current_event_documents: tuple["KnowledgeReference", ...] = ()
     historical_documents: tuple["KnowledgeReference", ...] = ()
 
     @property
     def context_chars(self) -> int:
-        return len(self.current_event_text) + len(self.historical_text)
+        return len(self.current_event_text) + len(self.historical_text) + len(self.suggestion_text)
 
 
 @dataclass(frozen=True)
@@ -797,6 +799,74 @@ def search_historical_documents(
     return "\n\n".join(snippets)[:max_chars], tuple(references)
 
 
+_HISTORICAL_ACTION_TERMS = ("实际", "曾", "使用", "携带", "发生", "采用", "执行", "出现", "完成", "记录", "失误", "问题")
+_HISTORICAL_DATE_RE = re.compile(r"20\d{2}(?:\s*年\s*|\s*[-/.]\s*)\d{1,2}")
+
+
+def _suggestion_evidence(content: str, max_chars: int = MAX_SUGGESTION_CONTEXT_CHARS) -> str:
+    """Extract compact, explicit historical-event evidence for suggestions only."""
+    if max_chars <= 0:
+        return ""
+    body = content.strip()
+    if body.startswith("---"):
+        end = body.find("\n---", 3)
+        if end >= 0:
+            body = body[end + 4 :].lstrip()
+
+    paragraphs = [part.strip() for part in re.split(r"\n\s*\n", body) if part.strip()]
+    evidence: list[str] = []
+    used = 0
+    for paragraph in paragraphs:
+        normalized = " ".join(line.strip() for line in paragraph.splitlines() if line.strip())
+        if not _HISTORICAL_DATE_RE.search(normalized):
+            continue
+        if not any(term in normalized for term in _HISTORICAL_ACTION_TERMS):
+            continue
+        available = max_chars - used - (2 if evidence else 0)
+        if available <= 0:
+            break
+        piece = normalized[:available]
+        evidence.append(piece)
+        used += len(piece) + (2 if len(evidence) > 1 else 0)
+    return "\n\n".join(evidence)[:max_chars]
+
+
+def _suggestion_grounding(
+    db: Session,
+    references: tuple[KnowledgeReference, ...],
+    *,
+    max_chars: int,
+) -> str:
+    if not references or max_chars <= 0:
+        return ""
+    ids = [reference.id for reference in references]
+    rows = db.scalars(
+        select(KnowledgeDocument).where(
+            KnowledgeDocument.id.in_(ids),
+            KnowledgeDocument.is_active.is_(True),
+            KnowledgeDocument.parse_status.in_(("ready", "truncated")),
+        )
+    ).all()
+    by_id = {row.id: row for row in rows}
+    parts: list[str] = []
+    used = 0
+    for reference in references:
+        document = by_id.get(reference.id)
+        if document is None:
+            continue
+        header = f"资料《{reference.title[:120]}》的历史事实摘录：\n"
+        available = max_chars - used - len(header) - (2 if parts else 0)
+        if available <= 0:
+            break
+        evidence = _suggestion_evidence(document.content_text, max_chars=available)
+        if not evidence:
+            continue
+        part = header + evidence
+        parts.append(part)
+        used += len(part) + (2 if len(parts) > 1 else 0)
+    return "\n\n".join(parts)[:max_chars]
+
+
 def search_historical_knowledge(
     db: Session,
     query: str,
@@ -917,9 +987,22 @@ def build_planner_context(
             | set(excluded_historical_document_ids or []),
             max_chars=remaining_history,
         )
+    remaining_suggestions = min(
+        MAX_SUGGESTION_CONTEXT_CHARS,
+        max(0, MAX_TOTAL_KNOWLEDGE_CONTEXT_CHARS - len(current_text) - len(history)),
+    )
+    suggestion_text = ""
+    if knowledge_enabled() and remaining_suggestions > 0 and historical_references:
+        suggestion_text = _suggestion_grounding(
+            db,
+            historical_references,
+            max_chars=remaining_suggestions,
+        )
+
     return KnowledgeContext(
         current_event_text=current_text,
         historical_text=history,
+        suggestion_text=suggestion_text,
         current_event_documents=tuple(current_references),
         historical_documents=historical_references,
     )
@@ -933,4 +1016,9 @@ def planner_input_text(description: str, item_title: str | None, context: Knowle
         sections.append(f"【本次事项资料】\n{context.current_event_text}")
     if context.historical_text:
         sections.append(f"【团队历史经验】\n{context.historical_text}")
+    if context.suggestion_text:
+        sections.append(
+            "【可能遗漏参考（仅用于 suggestions，不得扩大 tasks / questions）】\n"
+            + context.suggestion_text
+        )
     return "\n\n".join(sections)

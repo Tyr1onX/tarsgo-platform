@@ -64,7 +64,6 @@ def expect_http(expected: int, callback) -> None:
 
 def main() -> None:
     with SessionLocal() as db:
-        admin = db.scalar(select(Member).where(Member.email == "admin@example.com"))
         manager = db.scalar(select(Member).where(Member.email == "manager@example.com"))
         member = db.scalar(
             select(Member)
@@ -72,7 +71,17 @@ def main() -> None:
             .order_by(Member.id)
             .limit(1)
         )
-        assert admin and manager and member
+        assert manager and member
+        admin = Member(
+            name="Review 测试管理员",
+            email="ai-review-admin@example.com",
+            password_hash=None,
+            role="admin",
+            status="active",
+        )
+        db.add(admin)
+        db.commit()
+        db.refresh(admin)
         os.environ.update({
             "AI_PLANNER_ENABLED": "true",
             "AI_PLANNER_ALLOWED_MEMBER_IDS": str(admin.id),
@@ -376,6 +385,9 @@ def main() -> None:
             db.delete(task)
         db.delete(db.get(Task, root_id))
         db.delete(db.get(KnowledgeDocument, doc_id))
+        for usage in db.scalars(select(AIPlannerDailyUsage).where(AIPlannerDailyUsage.member_id == admin.id)).all():
+            db.delete(usage)
+        db.delete(admin)
         db.commit()
         assert db.scalar(select(func.count(Task.id))) == before_tasks - 3
 

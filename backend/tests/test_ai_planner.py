@@ -160,6 +160,25 @@ def main() -> None:
         assert not hasattr(draft.tasks[0], "owner_id")
         assert draft.tasks[0].execution_points and draft.tasks[0].cautions and draft.tasks[0].prerequisites
         assert [suggestion.title for suggestion in draft.suggestions] == ["战队周边展示"]
+        rejected_live_draft = AIPlannerDraft(
+            item=AIPlannerItemDraft(title="机器人科技展", deliverable="模型生成的 root 总标准。", deadline=None),
+            tasks=[AIPlannerTaskDraft(title="现场展示", deliverable="展示完成。", execution_points=[], cautions=[], prerequisites=[], owner_claimable=True, collaboration_open=False)],
+            questions=[],
+            suggestions=[
+                AIPlannerSuggestionDraft(title="现场直播", reason="团队指南将直播作为可选方式。"),
+                AIPlannerSuggestionDraft(title="活动宣传安排", reason="团队指南将宣传作为可选模块。"),
+            ],
+        )
+        rejected_live_provider = FakeProvider(draft=rejected_live_draft)
+        rejected_live_result = planner_router.generate_plan(
+            AIPlannerRequest(description="10 月 12 日去小学参加机器人科技展，不需要直播。"),
+            current=admin,
+            db=db,
+            provider=rejected_live_provider,
+        )
+        assert rejected_live_provider.calls == 1
+        assert [item.title for item in rejected_live_result.draft.suggestions] == ["活动宣传安排"]
+        assert rejected_live_result.draft.item.deliverable == ""
         empty_root_batch = tasks_router.create_task_batch(
             TaskBatchCreate(
                 item=TaskBatchItemIn(title="空 root 完成标准兼容测试", deliverable="", deadline=datetime(2026, 10, 12, 18, 0)),

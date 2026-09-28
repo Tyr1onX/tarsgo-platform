@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
@@ -40,6 +41,13 @@ from ..schemas import (
 router = APIRouter(prefix="/api/ai/planner", tags=["ai-planner"])
 logger = logging.getLogger(__name__)
 DAILY_REQUEST_LIMIT = 20
+_LIVESTREAM_TERMS = re.compile(r"直播|线上转播")
+_LIVESTREAM_NEGATION = re.compile(
+    r"(?:不需要|不必|不要|无需|不用|不做|不安排|不考虑|不打算|不进行|取消)"
+    r"[^。；;，,\n]{0,8}(?:现场直播|线上直播|直播|线上转播)"
+    r"|(?:现场直播|线上直播|直播|线上转播)[^。；;，,\n]{0,8}"
+    r"(?:不需要|不必|不要|无需|不用|不做|不安排|不考虑|不打算|取消)"
+)
 
 
 def _enabled() -> bool:
@@ -65,6 +73,17 @@ def _server_configured() -> bool:
 
 def _has_access(member: Member) -> bool:
     return member.role == "admin" and member.id in _allowed_member_ids() and _enabled() and _server_configured()
+
+
+def _suppress_explicitly_rejected_suggestions(draft: AIPlannerDraft, current_facts: str) -> None:
+    """A clear user rejection is a deterministic veto for the matching optional live reminder."""
+    if not _LIVESTREAM_NEGATION.search(current_facts):
+        return
+    draft.suggestions = [
+        suggestion
+        for suggestion in draft.suggestions
+        if not _LIVESTREAM_TERMS.search(suggestion.title)
+    ]
 
 
 def _require_planner_access(member: Member) -> None:
@@ -223,6 +242,10 @@ def generate_plan(
     usage_date = _reserve_request(db, current.id, context.context_chars)
     generation = _generate_once(provider, planner_input)
     generation.draft.item.deliverable = ""
+    _suppress_explicitly_rejected_suggestions(
+        generation.draft,
+        "\n".join((payload.description, payload.current_event_context or "")),
+    )
     _record_generation_tokens(db, current.id, usage_date, generation)
     return _generation_out(generation, context)
 
@@ -268,6 +291,11 @@ def refine_plan(
         generation.draft = merged
     else:
         generation.draft.item.deliverable = ""
+
+    _suppress_explicitly_rejected_suggestions(
+        generation.draft,
+        "\n".join((payload.description, payload.current_event_context or "", payload.instruction)),
+    )
 
     _record_generation_tokens(db, current.id, usage_date, generation)
     return _generation_out(generation, context)

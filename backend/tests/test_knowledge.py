@@ -497,7 +497,6 @@ def main() -> None:
             # A planner action makes one provider call, records context size, and survives an index failure.
             os.environ.update({
                 "AI_PLANNER_ENABLED": "true",
-                "AI_PLANNER_ALLOWED_MEMBER_IDS": str(admin.id),
                 "AI_API_KEY": "ci-placeholder",
                 "AI_MODEL": "ci-placeholder",
             })

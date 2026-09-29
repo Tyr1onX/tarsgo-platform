@@ -102,7 +102,7 @@ Historical tasks may continue to reference disabled members. Existing assignment
 - /invite/:token — one-time password setup
 - / — “what do I need to do now?” home view
 - /tasks — single task entry for every role
-- /ai-planner — allowlisted admin-only AI planning workspace; not global navigation
+- /ai-planner — active-admin-only AI planning workspace; not global navigation
 - /knowledge — admin-only GitHub and document knowledge management; visible in the desktop main navigation
 - /team — admin-only member account management
 - /me — personal information, system role and logout
@@ -169,7 +169,6 @@ Access requires all of:
 
 - active authenticated user
 - system role admin
-- member ID listed in AI_PLANNER_ALLOWED_MEMBER_IDS
 - AI_PLANNER_ENABLED=true
 - server-side AI_API_KEY and AI_MODEL
 
@@ -183,7 +182,6 @@ Production .env adds:
 
 ~~~text
 AI_PLANNER_ENABLED=true
-AI_PLANNER_ALLOWED_MEMBER_IDS=<comma-separated member ids>
 AI_PLANNER_DAILY_REQUEST_LIMIT=100
 AI_PROVIDER=openai
 AI_BASE_URL=
@@ -341,7 +339,7 @@ Coverage includes:
 - disabled-member blocking
 - database restart persistence
 - V0.1 legacy-data migration
-- AI planner admin + allowlist authorization
+- AI planner authorization for all active admins
 - missing AI configuration and overlong input
 - mocked one-call structured draft generation without task writes
 - editable draft confirmation and atomic batch rollback

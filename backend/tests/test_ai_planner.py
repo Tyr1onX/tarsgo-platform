@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from starlette.datastructures import UploadFile
 
 from app.ai_planner import PlannerGeneration, PlannerInvalidResponse, SYSTEM_PROMPT
+from app.auth import get_current_member
 from app.db import SessionLocal
 from app.main import app
 from app.knowledge import MAX_UPLOAD_BYTES
@@ -74,15 +75,25 @@ def expect_http(expected: int, callback, *, detail: str | None = None) -> None:
     raise AssertionError(f"expected HTTP {expected}")
 
 
+def planner_access_for(member: Member) -> bool:
+    app.dependency_overrides[get_current_member] = lambda: member
+    try:
+        response = TestClient(app).get("/api/ai/planner/access")
+    finally:
+        app.dependency_overrides.pop(get_current_member, None)
+    assert response.status_code == 200, response.status_code
+    return response.json()["available"]
+
+
 def main() -> None:
     with SessionLocal() as db:
         assert planner_router.DAILY_REQUEST_LIMIT == 100
         admin = db.scalar(select(Member).where(Member.email == "admin@example.com"))
         manager = db.scalar(select(Member).where(Member.email == "manager@example.com"))
-        assert admin is not None and manager is not None
+        member = db.scalar(select(Member).where(Member.role == "member", Member.status == "active").order_by(Member.id).limit(1))
+        assert admin is not None and manager is not None and member is not None
         os.environ.update({
             "AI_PLANNER_ENABLED": "true",
-            "AI_PLANNER_ALLOWED_MEMBER_IDS": str(admin.id),
             "AI_API_KEY": "ci-placeholder",
             "AI_MODEL": "ci-placeholder",
         })
@@ -141,8 +152,18 @@ def main() -> None:
         db.commit()
 
         request = AIPlannerRequest(description="准备一次校园科技展示，需要展示、摄影和资料整理。")
+        inactive_admin = Member(name="停用管理员", email="inactive-ai-admin@example.com", password_hash=None, role="admin", status="disabled")
+        assert planner_access_for(admin)
+        assert planner_access_for(extra_admin)
+        assert not planner_access_for(manager)
+        assert not planner_access_for(member)
+        assert not planner_access_for(inactive_admin)
         expect_http(403, lambda: planner_router.generate_plan(request, current=manager, db=db, provider=FakeProvider()))
-        expect_http(403, lambda: planner_router.generate_plan(request, current=extra_admin, db=db, provider=FakeProvider()))
+        expect_http(403, lambda: planner_router.generate_plan(request, current=member, db=db, provider=FakeProvider()))
+        expect_http(403, lambda: planner_router.generate_plan(request, current=inactive_admin, db=db, provider=FakeProvider()))
+        extra_admin_generate = FakeProvider()
+        planner_router.generate_plan(request, current=extra_admin, db=db, provider=extra_admin_generate)
+        assert extra_admin_generate.calls == 1
 
         saved_key = os.environ.pop("AI_API_KEY")
         expect_http(503, lambda: planner_router.generate_plan(request, current=admin, db=db, provider=FakeProvider()))
@@ -238,6 +259,11 @@ def main() -> None:
             instruction="检查遗漏",
         )
         expect_http(403, lambda: planner_router.refine_plan(denied_refine, current=manager, db=db, provider=FakeProvider()))
+        expect_http(403, lambda: planner_router.refine_plan(denied_refine, current=member, db=db, provider=FakeProvider()))
+        expect_http(403, lambda: planner_router.refine_plan(denied_refine, current=inactive_admin, db=db, provider=FakeProvider()))
+        extra_admin_refine = FakeProvider()
+        planner_router.refine_plan(denied_refine, current=extra_admin, db=db, provider=extra_admin_refine)
+        assert extra_admin_refine.calls == 1
 
         attachment_facts = "文件《科技展通知.txt》：\n本次活动日期为 10 月 12 日，地点为力旺实验小学。"
         attachment_request = AIPlannerRequest(
@@ -473,6 +499,13 @@ def main() -> None:
             detail=expected_limit_message,
         )
         assert denied_refine_provider.calls == 0
+
+        for usage_row in db.scalars(
+            select(AIPlannerDailyUsage).where(AIPlannerDailyUsage.member_id == extra_admin.id)
+        ).all():
+            db.delete(usage_row)
+        db.delete(extra_admin)
+        db.commit()
 
     print("AI planner tests passed")
 

@@ -55,25 +55,12 @@ def _enabled() -> bool:
     return os.getenv("AI_PLANNER_ENABLED", "false").strip().lower() in {"1", "true", "yes"}
 
 
-def _allowed_member_ids() -> set[int]:
-    result: set[int] = set()
-    for part in os.getenv("AI_PLANNER_ALLOWED_MEMBER_IDS", "").split(","):
-        value = part.strip()
-        if not value:
-            continue
-        try:
-            result.add(int(value))
-        except ValueError:
-            continue
-    return result
-
-
 def _server_configured() -> bool:
     return bool(os.getenv("AI_API_KEY", "").strip() and os.getenv("AI_MODEL", "").strip())
 
 
 def _has_access(member: Member) -> bool:
-    return member.role == "admin" and member.id in _allowed_member_ids() and _enabled() and _server_configured()
+    return member.status == "active" and member.role == "admin" and _enabled() and _server_configured()
 
 
 def _remove_blocked_fragments(value: str, blocked_terms: re.Pattern[str]) -> str:
@@ -134,7 +121,7 @@ def _apply_explicit_topic_veto(draft: AIPlannerDraft, current_facts: str) -> Non
 
 
 def _require_planner_access(member: Member) -> None:
-    if member.role != "admin" or member.id not in _allowed_member_ids():
+    if member.status != "active" or member.role != "admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权使用 AI 规划")
     if not _enabled():
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="AI 规划当前未启用")

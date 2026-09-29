@@ -89,9 +89,10 @@ AI planner 必须同时满足：
 
 1. 已登录且账号 active
 2. 系统角色为 admin
-3. member ID 在服务器 AI_PLANNER_ALLOWED_MEMBER_IDS 白名单
-4. AI_PLANNER_ENABLED=true
-5. 服务器已配置 AI_API_KEY 和 AI_MODEL
+3. AI_PLANNER_ENABLED=true
+4. 服务器已配置 AI_API_KEY 和 AI_MODEL
+
+所有 active admin 共享同一权限规则，不再按 member ID 配置 allowlist；manager 和 member 不能使用 Planner Generate、Refine 或 Execution Review。
 
 后端校验是安全边界。前端隐藏按钮只是体验优化。
 
@@ -137,7 +138,7 @@ DeepSeek 使用 `AI_BASE_URL=https://api.deepseek.com`，模型仍由 `AI_MODEL`
 - 输入最多 5000 字符
 - 输出最多 15 个分工、6 个问题
 - max_output_tokens=2200 for OpenAI and 4096 for DeepSeek; DeepSeek reasoning effort remains `none`
-- 每个白名单用户按 UTC 日共享最多 100 次 Generate、Refine、Review 请求；通过 `AI_PLANNER_DAILY_REQUEST_LIMIT` 配置，默认值为 100
+- 每个 active admin 按 UTC 日共享最多 100 次 Generate、Refine、Review 请求；通过 `AI_PLANNER_DAILY_REQUEST_LIMIT` 配置，默认值为 100
 - ai_planner_daily_usage 只保存请求次数、input/output/total token 汇总和知识上下文字符数
 - 不保存用户完整输入和 AI 完整输出到 usage 表或普通日志
 

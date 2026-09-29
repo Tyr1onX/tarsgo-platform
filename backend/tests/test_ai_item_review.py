@@ -86,7 +86,6 @@ def main() -> None:
         db.refresh(admin)
         os.environ.update({
             "AI_PLANNER_ENABLED": "true",
-            "AI_PLANNER_ALLOWED_MEMBER_IDS": str(admin.id),
             "AI_API_KEY": "ci-placeholder",
             "AI_MODEL": "ci-placeholder",
             "KNOWLEDGE_ENABLED": "true",
@@ -341,6 +340,30 @@ def main() -> None:
             403,
             lambda: ai_items.review_item_plan(root_id, current=manager, db=db, provider=provider),
         )
+        expect_http(
+            403,
+            lambda: ai_items.review_item_plan(root_id, current=member, db=db, provider=provider),
+        )
+        second_admin = Member(
+            name="Review 第二管理员",
+            email="ai-review-second-admin@example.com",
+            password_hash=None,
+            role="admin",
+            status="active",
+        )
+        db.add(second_admin)
+        db.commit()
+        db.refresh(second_admin)
+        second_admin_provider = FakeReviewProvider(
+            AIItemReviewOut(summary="第二位管理员可检查当前方案。", suggestions=[])
+        )
+        second_admin_result = ai_items.review_item_plan(
+            root_id,
+            current=second_admin,
+            db=db,
+            provider=second_admin_provider,
+        )
+        assert second_admin_provider.calls == 1 and second_admin_result.suggestions == []
         app.dependency_overrides[get_db] = lambda: db
         app.dependency_overrides[get_current_member] = lambda: member
         try:
@@ -413,8 +436,11 @@ def main() -> None:
         db.flush()
         db.delete(db.get(Task, root_id))
         db.delete(db.get(KnowledgeDocument, doc_id))
-        for usage in db.scalars(select(AIPlannerDailyUsage).where(AIPlannerDailyUsage.member_id == admin.id)).all():
+        for usage in db.scalars(
+            select(AIPlannerDailyUsage).where(AIPlannerDailyUsage.member_id.in_([admin.id, second_admin.id]))
+        ).all():
             db.delete(usage)
+        db.delete(second_admin)
         db.delete(admin)
         db.commit()
         assert db.scalar(select(func.count(Task.id))) == before_tasks - 3

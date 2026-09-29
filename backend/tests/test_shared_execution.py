@@ -421,7 +421,7 @@ def main() -> None:
             expect_http(
                 403,
                 lambda: tasks_router.publish_task_progress(
-                    second_id,
+                    third_id,
                     TaskProgressCreate(content="越权进展"),
                     current=unrelated,
                     db=db,

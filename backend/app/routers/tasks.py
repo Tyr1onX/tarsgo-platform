@@ -62,9 +62,19 @@ def _visible_facts(db: Session, root: Task, current: Member, task_id: int | None
     if _is_manager(current) or root.owner_id == current.id:
         return list(db.scalars(query.order_by(ItemFact.created_at.asc(), ItemFact.id.asc())).unique().all())
     if task_id is not None and task_id != root.id:
-        query = query.where(
-            or_(ItemFact.scope == "global", ItemFact.related_tasks.any(Task.id == task_id))
-        )
+        is_participant = db.scalar(
+            select(Task.id).where(
+                Task.id == task_id,
+                Task.parent_id == root.id,
+                or_(Task.owner_id == current.id, Task.collaborators.any(Member.id == current.id)),
+            )
+        ) is not None
+        if is_participant:
+            query = query.where(
+                or_(ItemFact.scope == "global", ItemFact.related_tasks.any(Task.id == task_id))
+            )
+        else:
+            query = query.where(ItemFact.scope == "global")
     else:
         participating_ids = list(db.scalars(
             select(Task.id)

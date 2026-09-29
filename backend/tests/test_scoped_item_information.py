@@ -93,7 +93,8 @@ def main():
             task_b = create_task(db, manager, title="准备参观路线", parent_id=root_id, claimable=True, dependencies=[task_a])
             task_c = create_task(db, manager, title="准备展示设备", parent_id=root_id, owner_id=manager.id, collaborators=[collaborator.id])
             task_d = create_task(db, manager, title="归档活动资料", parent_id=root_id, owner_id=unrelated.id)
-            child_ids.update((task_a, task_b, task_c, task_d))
+            task_e = create_task(db, manager, title="准备接待资料", parent_id=root_id, owner_id=claimant.id)
+            child_ids.update((task_a, task_b, task_c, task_d, task_e))
             other_root = create_task(db, manager, title=f"Other Scoped Root {token}", owner_id=manager.id)
             root_ids.add(other_root)
             other_child = create_task(db, manager, title="其他事项任务", parent_id=other_root, owner_id=manager.id)
@@ -118,6 +119,11 @@ def main():
             assert "来访团队从东门进入。" not in tasks_router.get_task(root_id, current=unrelated, db=db).context_facts
             assert all(row.id != activity_b.id for row in tasks_router.list_item_activities(
                 root_id, task_id=task_b, current=claimant, db=db,
+            ))
+            # A member may participate in multiple assignments; the selected
+            # task page must still exclude another assignment's history.
+            assert all(row.id != activity_b.id for row in tasks_router.list_item_activities(
+                root_id, task_id=task_e, current=claimant, db=db,
             ))
 
             claimed = tasks_router.claim_task_owner(task_b, current=claimant, db=db)

@@ -706,6 +706,7 @@ def claim_task_owner(task_id: int, current: Member = Depends(get_current_member)
 
     db.execute(delete(task_collaborators).where(task_collaborators.c.task_id == task_id, task_collaborators.c.member_id == current.id))
     db.commit()
+    db.expire(db.get(Task, task_id))
     return _task_out(_get_task(db, task_id))
 
 

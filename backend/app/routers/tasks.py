@@ -620,7 +620,10 @@ def update_task(
     if not _is_manager(current):
         if task.owner_id != current.id:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="只有负责人可以更新任务状态和执行结果")
-        if task.parent_id is None and "status" in fields:
+        has_child_tasks = task.parent_id is None and db.scalar(
+            select(Task.id).where(Task.parent_id == task.id).limit(1)
+        ) is not None
+        if has_child_tasks and "status" in fields:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="事项状态由执行分工自动汇总")
         allowed_fields = {"status", "result"}
         if not fields or not fields.issubset(allowed_fields):

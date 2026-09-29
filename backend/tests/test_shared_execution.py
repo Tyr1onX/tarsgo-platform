@@ -172,6 +172,18 @@ def main() -> None:
             tasks_router.sync_root_status(db, empty_root_id)
             assert db.get(Task, empty_root_id).status == "doing"
 
+            standalone_member_task_id = create_task(
+                db, manager, title="成员独立任务状态兼容", owner_id=owner.id
+            )
+            root_ids.add(standalone_member_task_id)
+            tasks_router.update_task(
+                standalone_member_task_id,
+                TaskUpdate(status="doing"),
+                current=owner,
+                db=db,
+            )
+            assert db.get(Task, standalone_member_task_id).status == "doing"
+
             assert db.get(Task, root_id).status == "todo"
             expect_http(
                 400,

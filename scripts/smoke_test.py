@@ -387,12 +387,23 @@ def run_workflow():
         data={"content": "活动地点已确认。"},
     )
     assert manual_fact["context_facts"][-1] == "活动地点已确认。"
-    after_delete = call(
+    # A regular participant may add an item fact, but only the item owner or
+    # manager may change its scope or deactivate it. Verify both sides of that
+    # boundary before checking that the source activity remains in history.
+    call(
         owner,
+        f"/api/tasks/{root['id']}/context-facts/1",
+        method="DELETE",
+        expected=403,
+    )
+    after_delete = call(
+        manager,
         f"/api/tasks/{root['id']}/context-facts/1",
         method="DELETE",
     )
     assert after_delete["context_facts"] == ["主办方要求当天提前 20 分钟完成布展。"]
+    activities_after_delete = call(manager, f"/api/tasks/{root['id']}/activities")
+    assert any(item["content"] == "主办方要求当天提前 20 分钟完成布展。" for item in activities_after_delete)
 
     promoted = call(
         owner,

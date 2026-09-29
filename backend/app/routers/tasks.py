@@ -1,10 +1,12 @@
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import delete, or_, select, update
 from sqlalchemy.orm import Session, selectinload
 
 from ..auth import get_current_member, require_manager
 from ..db import get_db
-from ..models import ItemActivity, Member, Task, task_collaborators, task_dependencies
+from ..models import ItemActivity, ItemFact, Member, Task, item_fact_tasks, task_collaborators, task_dependencies
 from ..schemas import (
     ContextFactsBatchIn,
     TaskCompleteCreate,
@@ -14,6 +16,9 @@ from ..schemas import (
     ItemActivityCreate,
     ItemActivityOut,
     ItemFactCreate,
+    ItemFactOut,
+    ItemFactScopeUpdate,
+    ItemFactsBatchIn,
     MemberSummary,
     TaskBatchCreate,
     TaskBatchOut,
@@ -45,7 +50,59 @@ def _activity_query():
     return select(ItemActivity).options(selectinload(ItemActivity.author))
 
 
-def _task_out(task: Task) -> TaskOut:
+def _fact_query():
+    return select(ItemFact).options(
+        selectinload(ItemFact.creator),
+        selectinload(ItemFact.related_tasks),
+    )
+
+
+def _visible_facts(db: Session, root: Task, current: Member, task_id: int | None) -> list[ItemFact]:
+    query = _fact_query().where(ItemFact.root_task_id == root.id, ItemFact.is_active.is_(True))
+    if _is_manager(current) or root.owner_id == current.id:
+        return list(db.scalars(query.order_by(ItemFact.created_at.asc(), ItemFact.id.asc())).unique().all())
+    if task_id is not None and task_id != root.id:
+        query = query.where(
+            or_(ItemFact.scope == "global", ItemFact.related_tasks.any(Task.id == task_id))
+        )
+    else:
+        participating_ids = list(db.scalars(
+            select(Task.id)
+            .where(
+                Task.parent_id == root.id,
+                or_(Task.owner_id == current.id, Task.collaborators.any(Member.id == current.id)),
+            )
+        ).all())
+        if participating_ids:
+            query = query.where(
+                or_(ItemFact.scope == "global", ItemFact.related_tasks.any(Task.id.in_(participating_ids)))
+            )
+        else:
+            query = query.where(ItemFact.scope == "global")
+    return list(db.scalars(query.order_by(ItemFact.created_at.asc(), ItemFact.id.asc())).unique().all())
+
+
+def _fact_out(fact: ItemFact) -> ItemFactOut:
+    return ItemFactOut(
+        id=fact.id,
+        root_task_id=fact.root_task_id,
+        content=fact.content,
+        scope=fact.scope,
+        related_tasks=[{"id": task.id, "title": task.title} for task in fact.related_tasks],
+        source_activity_id=fact.source_activity_id,
+        created_by={"id": fact.creator.id, "name": fact.creator.name},
+        created_at=fact.created_at,
+        superseded_by_id=fact.superseded_by_id,
+    )
+
+
+def _task_out(task: Task, db: Session | None = None, current: Member | None = None) -> TaskOut:
+    facts: list[ItemFact] = []
+    if db is not None and current is not None:
+        root = task if task.parent_id is None else db.get(Task, task.parent_id)
+        if root is not None:
+            facts = _visible_facts(db, root, current, task.id if task.parent_id is not None else None)
+    item_facts = [_fact_out(fact) for fact in facts]
     return TaskOut(
         id=task.id,
         parent_id=task.parent_id,
@@ -54,7 +111,8 @@ def _task_out(task: Task) -> TaskOut:
         execution_points=task.execution_points or [],
         cautions=task.cautions or [],
         prerequisites=task.prerequisites or [],
-        context_facts=task.context_facts or [],
+        item_facts=item_facts,
+        context_facts=[fact.content for fact in item_facts],
         result=task.result or "",
         owner=MemberSummary.model_validate(task.owner) if task.owner else None,
         owner_claimable=task.owner_claimable,
@@ -150,21 +208,79 @@ def _require_item_writer(db: Session, root: Task, current: Member) -> None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="只有事项参与者可以更新事项信息")
 
 
-def _append_context_fact(root: Task, content: str) -> None:
-    facts = list(root.context_facts or [])
-    if len(content) > 500:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="当前信息单条最多 500 字")
-    if len(facts) >= 30:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="当前信息最多保留 30 条")
-    root.context_facts = [*facts, content]
+def _require_fact_manager(root: Task, current: Member) -> None:
+    if not _is_manager(current) and root.owner_id != current.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="只有管理者或事项负责人可以调整当前信息范围")
 
 
-def _append_context_fact_if_new(root: Task, content: str) -> bool:
-    facts = list(root.context_facts or [])
-    if content in facts:
-        return False
-    _append_context_fact(root, content)
-    return True
+def _validate_fact_tasks(db: Session, root: Task, scope: str, related_task_ids: list[int]) -> list[Task]:
+    if scope == "global":
+        if related_task_ids:
+            raise HTTPException(status_code=422, detail="整个事项信息不需要选择具体分工")
+        return []
+    if not related_task_ids:
+        raise HTTPException(status_code=422, detail="请选择至少一项相关分工")
+    if len(related_task_ids) != len(set(related_task_ids)):
+        raise HTTPException(status_code=422, detail="相关分工不能重复")
+    tasks = list(db.scalars(
+        select(Task).where(Task.id.in_(related_task_ids), Task.parent_id == root.id)
+    ).all())
+    if {task.id for task in tasks} != set(related_task_ids):
+        raise HTTPException(status_code=422, detail="只能关联当前事项下的执行任务")
+    return tasks
+
+
+def _create_item_fact(
+    db: Session,
+    root: Task,
+    current: Member,
+    *,
+    content: str,
+    scope: str = "global",
+    related_task_ids: list[int] | None = None,
+    source_activity_id: int | None = None,
+    supersedes_fact_id: int | None = None,
+) -> ItemFact:
+    db.scalar(select(Task.id).where(Task.id == root.id).with_for_update())
+    text = content.strip()
+    if not text or len(text) > 500:
+        raise HTTPException(status_code=422, detail="当前信息单条最多 500 字")
+    related_task_ids = related_task_ids or []
+    related_tasks = _validate_fact_tasks(db, root, scope, related_task_ids)
+    if source_activity_id is not None:
+        source = db.get(ItemActivity, source_activity_id)
+        if source is None or source.root_task_id != root.id:
+            raise HTTPException(status_code=422, detail="来源进展不属于当前事项")
+
+    existing = list(db.scalars(select(ItemFact).where(ItemFact.root_task_id == root.id, ItemFact.is_active.is_(True))).all())
+    if any(fact.content == text for fact in existing):
+        raise HTTPException(status_code=409, detail="当前信息中已存在相同内容")
+
+    previous = None
+    if supersedes_fact_id is not None:
+        _require_fact_manager(root, current)
+        previous = db.get(ItemFact, supersedes_fact_id)
+        if previous is None or previous.root_task_id != root.id or not previous.is_active:
+            raise HTTPException(status_code=409, detail="待更新的当前信息已变化，请刷新后重试")
+    active_count = len(existing) - (1 if previous else 0)
+    if active_count >= 30:
+        raise HTTPException(status_code=409, detail="当前信息最多保留 30 条")
+
+    fact = ItemFact(
+        root_task_id=root.id,
+        content=text,
+        scope=scope,
+        source_activity_id=source_activity_id,
+        created_by=current.id,
+        related_tasks=related_tasks,
+    )
+    db.add(fact)
+    db.flush()
+    if previous is not None:
+        previous.is_active = False
+        previous.superseded_by_id = fact.id
+        previous.superseded_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    return fact
 
 
 def sync_root_status(db: Session, root_id: int) -> None:
@@ -300,7 +416,7 @@ def list_tasks(
         query = query.where(Task.owner_id.is_(None), Task.owner_claimable.is_(True), Task.status != "done")
 
     tasks = db.scalars(query.order_by(Task.deadline.asc(), Task.id.asc())).unique().all()
-    return [_task_out(task) for task in tasks]
+    return [_task_out(task, db, current) for task in tasks]
 
 
 @router.get("/assignees", response_model=list[MemberSummary])
@@ -311,24 +427,40 @@ def list_task_assignees(_: Member = Depends(require_manager), db: Session = Depe
 @router.get("/{task_id}", response_model=TaskOut)
 def get_task(
     task_id: int,
-    _: Member = Depends(get_current_member),
+    current: Member = Depends(get_current_member),
     db: Session = Depends(get_db),
 ) -> TaskOut:
-    return _task_out(_get_task(db, task_id))
+    return _task_out(_get_task(db, task_id), db, current)
 
 
 @router.get("/{root_task_id}/activities", response_model=list[ItemActivityOut])
 def list_item_activities(
     root_task_id: int,
-    _: Member = Depends(get_current_member),
+    current: Member = Depends(get_current_member),
     db: Session = Depends(get_db),
 ) -> list[ItemActivityOut]:
     root = _get_root_task(db, root_task_id)
-    activities = db.scalars(
-        _activity_query()
-        .where(ItemActivity.root_task_id == root.id)
-        .order_by(ItemActivity.created_at.desc(), ItemActivity.id.desc())
-    ).all()
+    query = _activity_query().where(ItemActivity.root_task_id == root.id)
+    if not _is_manager(current) and root.owner_id != current.id:
+        task_ids = list(db.scalars(select(Task.id).where(
+            Task.parent_id == root.id,
+            or_(Task.owner_id == current.id, Task.collaborators.any(Member.id == current.id)),
+        )).all())
+        fact_query = select(ItemFact.source_activity_id).where(ItemFact.root_task_id == root.id)
+        if task_ids:
+            fact_query = fact_query.where(
+                or_(ItemFact.scope == "global", ItemFact.related_tasks.any(Task.id.in_(task_ids)))
+            )
+        else:
+            fact_query = fact_query.where(ItemFact.scope == "global")
+        source_ids = [value for value in db.scalars(fact_query).all() if value is not None]
+        visible = [ItemActivity.task_id.is_(None)]
+        if task_ids:
+            visible.append(ItemActivity.task_id.in_(task_ids))
+        if source_ids:
+            visible.append(ItemActivity.id.in_(source_ids))
+        query = query.where(or_(*visible))
+    activities = db.scalars(query.order_by(ItemActivity.created_at.desc(), ItemActivity.id.desc())).all()
     return [_activity_out(activity) for activity in activities]
 
 
@@ -345,7 +477,14 @@ def create_item_activity(
     try:
         db.add(activity)
         if payload.add_to_context:
-            _append_context_fact(root, payload.content)
+            db.flush()
+            _create_item_fact(
+                db, root, current,
+                content=payload.content,
+                scope=payload.fact_scope,
+                related_task_ids=payload.related_task_ids,
+                source_activity_id=activity.id,
+            )
         db.commit()
     except HTTPException:
         db.rollback()
@@ -402,7 +541,7 @@ def publish_task_progress(
     saved_activity = db.scalar(_activity_query().where(ItemActivity.id == activity.id))
     if saved_activity is None:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="进展保存失败")
-    return TaskProgressOut(task=_task_out(saved_task), activity=_activity_out(saved_activity))
+    return TaskProgressOut(task=_task_out(saved_task, db, current), activity=_activity_out(saved_activity))
 
 
 @router.post("/{task_id}/complete", response_model=TaskProgressOut)
@@ -432,8 +571,6 @@ def complete_task(
     try:
         task.result = payload.result
         task.status = "done"
-        if payload.sync_to_item:
-            _append_context_fact_if_new(root, payload.result)
         activity = ItemActivity(
             root_task_id=root.id,
             task_id=task.id,
@@ -441,6 +578,16 @@ def complete_task(
             content=f"完成任务「{task.title}」。",
         )
         db.add(activity)
+        db.flush()
+        duplicate_fact = db.scalar(select(ItemFact.id).where(
+            ItemFact.root_task_id == root.id,
+            ItemFact.is_active.is_(True),
+            ItemFact.content == payload.result,
+        )) if payload.sync_to_item else None
+        if payload.sync_to_item and not duplicate_fact:
+            _create_item_fact(
+                db, root, current, content=payload.result, source_activity_id=activity.id
+            )
         sync_root_status(db, root.id)
         db.commit()
         db.refresh(activity)
@@ -454,7 +601,7 @@ def complete_task(
     saved_activity = db.scalar(_activity_query().where(ItemActivity.id == activity.id))
     if saved_activity is None:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="任务完成记录保存失败")
-    return TaskProgressOut(task=_task_out(saved_task), activity=_activity_out(saved_activity))
+    return TaskProgressOut(task=_task_out(saved_task, db, current), activity=_activity_out(saved_activity))
 
 
 @router.post("/{root_task_id}/context-facts", response_model=TaskOut)
@@ -466,9 +613,14 @@ def add_context_fact(
 ) -> TaskOut:
     root = _get_root_task(db, root_task_id)
     _require_item_writer(db, root, current)
-    _append_context_fact(root, payload.content)
+    _create_item_fact(
+        db, root, current, content=payload.content, scope=payload.scope,
+        related_task_ids=payload.related_task_ids,
+        source_activity_id=payload.source_activity_id,
+        supersedes_fact_id=payload.supersedes_fact_id,
+    )
     db.commit()
-    return _task_out(_get_task(db, root.id))
+    return _task_out(_get_task(db, root.id), db, current)
 
 
 @router.post("/{root_task_id}/context-facts/batch", response_model=TaskOut)
@@ -480,17 +632,19 @@ def add_context_facts_batch(
 ) -> TaskOut:
     root = _get_root_task(db, root_task_id)
     _require_item_writer(db, root, current)
-    existing = list(root.context_facts or [])
-    additions = list(dict.fromkeys(fact for fact in payload.facts if fact not in existing))
-    if len(existing) + len(additions) > 30:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="当前信息最多保留 30 条")
-    root.context_facts = [*existing, *additions]
     try:
+        existing = set(db.scalars(select(ItemFact.content).where(
+            ItemFact.root_task_id == root.id, ItemFact.is_active.is_(True)
+        )).all())
+        for fact in dict.fromkeys(payload.facts):
+            if fact not in existing:
+                _create_item_fact(db, root, current, content=fact)
+                existing.add(fact)
         db.commit()
     except Exception:
         db.rollback()
         raise
-    return _task_out(_get_task(db, root.id))
+    return _task_out(_get_task(db, root.id), db, current)
 
 
 @router.delete("/{root_task_id}/context-facts/{fact_index}", response_model=TaskOut)
@@ -502,12 +656,79 @@ def delete_context_fact(
 ) -> TaskOut:
     root = _get_root_task(db, root_task_id)
     _require_item_writer(db, root, current)
-    facts = list(root.context_facts or [])
+    _require_fact_manager(root, current)
+    facts = list(db.scalars(select(ItemFact).where(
+        ItemFact.root_task_id == root.id, ItemFact.is_active.is_(True)
+    ).order_by(ItemFact.created_at.asc(), ItemFact.id.asc())).all())
     if fact_index < 0 or fact_index >= len(facts):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="当前信息不存在")
-    root.context_facts = [fact for index, fact in enumerate(facts) if index != fact_index]
+    facts[fact_index].is_active = False
     db.commit()
-    return _task_out(_get_task(db, root.id))
+    return _task_out(_get_task(db, root.id), db, current)
+
+
+@router.post("/{root_task_id}/facts/batch", response_model=TaskOut)
+def add_scoped_facts_batch(
+    root_task_id: int,
+    payload: ItemFactsBatchIn,
+    current: Member = Depends(get_current_member),
+    db: Session = Depends(get_db),
+) -> TaskOut:
+    root = _get_root_task(db, root_task_id)
+    _require_item_writer(db, root, current)
+    try:
+        for fact in payload.facts:
+            _create_item_fact(
+                db, root, current,
+                content=fact.content,
+                scope=fact.scope,
+                related_task_ids=fact.related_task_ids,
+                source_activity_id=fact.source_activity_id,
+                supersedes_fact_id=fact.supersedes_fact_id,
+            )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    return _task_out(_get_task(db, root.id), db, current)
+
+
+@router.patch("/{root_task_id}/facts/{fact_id}/scope", response_model=TaskOut)
+def update_item_fact_scope(
+    root_task_id: int,
+    fact_id: int,
+    payload: ItemFactScopeUpdate,
+    current: Member = Depends(get_current_member),
+    db: Session = Depends(get_db),
+) -> TaskOut:
+    root = _get_root_task(db, root_task_id)
+    _require_item_writer(db, root, current)
+    _require_fact_manager(root, current)
+    fact = db.get(ItemFact, fact_id)
+    if fact is None or fact.root_task_id != root.id or not fact.is_active:
+        raise HTTPException(status_code=404, detail="当前信息不存在")
+    fact.related_tasks = _validate_fact_tasks(db, root, payload.scope, payload.related_task_ids)
+    fact.scope = payload.scope
+    db.commit()
+    return _task_out(_get_task(db, root.id), db, current)
+
+
+@router.delete("/{root_task_id}/facts/{fact_id}", response_model=TaskOut)
+def deactivate_item_fact(
+    root_task_id: int,
+    fact_id: int,
+    current: Member = Depends(get_current_member),
+    db: Session = Depends(get_db),
+) -> TaskOut:
+    root = _get_root_task(db, root_task_id)
+    _require_item_writer(db, root, current)
+    _require_fact_manager(root, current)
+    fact = db.get(ItemFact, fact_id)
+    if fact is None or fact.root_task_id != root.id or not fact.is_active:
+        raise HTTPException(status_code=404, detail="当前信息不存在")
+    fact.is_active = False
+    db.commit()
+    return _task_out(_get_task(db, root.id), db, current)
 
 
 @router.post("/{task_id}/result-to-context", response_model=TaskOut)
@@ -528,8 +749,13 @@ def add_task_result_to_context(
         content=f"任务「{task.title}」的执行结果已确认加入事项信息。",
     )
     try:
-        _append_context_fact(root, result)
         db.add(activity)
+        db.flush()
+        duplicate = db.scalar(select(ItemFact.id).where(
+            ItemFact.root_task_id == root.id, ItemFact.is_active.is_(True), ItemFact.content == result
+        ))
+        if not duplicate:
+            _create_item_fact(db, root, current, content=result, source_activity_id=activity.id)
         db.commit()
     except HTTPException:
         db.rollback()
@@ -537,7 +763,7 @@ def add_task_result_to_context(
     except Exception:
         db.rollback()
         raise
-    return _task_out(_get_task(db, root.id))
+    return _task_out(_get_task(db, root.id), db, current)
 
 
 @router.post("", response_model=TaskOut, status_code=status.HTTP_201_CREATED)
@@ -547,7 +773,7 @@ def create_task(payload: TaskCreate, current: Member = Depends(require_manager),
         sync_root_status(db, task.parent_id)
     db.commit()
     db.expire(task)
-    return _task_out(_get_task(db, task.id))
+    return _task_out(_get_task(db, task.id), db, current)
 
 
 @router.post("/batch", response_model=TaskBatchOut, status_code=status.HTTP_201_CREATED)
@@ -602,8 +828,8 @@ def create_task_batch(
         raise
 
     return TaskBatchOut(
-        item=_task_out(_get_task(db, root.id)),
-        tasks=[_task_out(_get_task(db, child.id)) for child in children],
+        item=_task_out(_get_task(db, root.id), db, current),
+        tasks=[_task_out(_get_task(db, child.id), db, current) for child in children],
     )
 
 
@@ -640,7 +866,7 @@ def update_task(
             sync_root_status(db, task.parent_id)
         db.commit()
         db.expire(task)
-        return _task_out(_get_task(db, task.id))
+        return _task_out(_get_task(db, task.id), db, current)
 
     required_non_null = {
         "title", "deliverable", "execution_points", "cautions", "prerequisites", "result",
@@ -688,7 +914,7 @@ def update_task(
 
     db.commit()
     db.expire(task)
-    return _task_out(_get_task(db, task.id))
+    return _task_out(_get_task(db, task.id), db, current)
 
 
 @router.post("/{task_id}/claim", response_model=TaskOut)
@@ -707,7 +933,7 @@ def claim_task_owner(task_id: int, current: Member = Depends(get_current_member)
     db.execute(delete(task_collaborators).where(task_collaborators.c.task_id == task_id, task_collaborators.c.member_id == current.id))
     db.commit()
     db.expire(db.get(Task, task_id))
-    return _task_out(_get_task(db, task_id))
+    return _task_out(_get_task(db, task_id), db, current)
 
 
 @router.post("/{task_id}/unclaim", response_model=TaskOut)
@@ -722,7 +948,7 @@ def unclaim_task_owner(task_id: int, current: Member = Depends(get_current_membe
     task.owner_id = None
     db.commit()
     db.expire(task)
-    return _task_out(_get_task(db, task_id))
+    return _task_out(_get_task(db, task_id), db, current)
 
 
 @router.post("/{task_id}/collaborators/join", response_model=TaskOut)
@@ -736,7 +962,7 @@ def join_task_collaboration(task_id: int, current: Member = Depends(get_current_
         task.collaborators.append(current)
         db.commit()
         db.expire(task)
-    return _task_out(_get_task(db, task_id))
+    return _task_out(_get_task(db, task_id), db, current)
 
 
 @router.post("/{task_id}/collaborators/leave", response_model=TaskOut)
@@ -749,4 +975,4 @@ def leave_task_collaboration(task_id: int, current: Member = Depends(get_current
     task.collaborators = [member for member in task.collaborators if member.id != current.id]
     db.commit()
     db.expire(task)
-    return _task_out(_get_task(db, task_id))
+    return _task_out(_get_task(db, task_id), db, current)

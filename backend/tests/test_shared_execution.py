@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from fastapi import HTTPException
 from pydantic import ValidationError
-from sqlalchemy import delete, or_, select
+from sqlalchemy import delete, or_, select, update
 
 from app.ai_planner import (
     PlannerFactExtractionGeneration,
@@ -17,6 +17,7 @@ from app.db import SessionLocal
 from app.models import (
     AIPlannerDailyUsage,
     ItemActivity,
+    ItemFact,
     Member,
     Task,
     task_collaborators,
@@ -82,6 +83,27 @@ def create_task(db, manager, *, title, parent_id=None, owner_id=None,
         db=db,
     )
     return task.id
+
+
+def current_fact_texts(db, root_id):
+    return list(db.scalars(
+        select(ItemFact.content)
+        .where(ItemFact.root_task_id == root_id, ItemFact.is_active.is_(True))
+        .order_by(ItemFact.created_at.asc(), ItemFact.id.asc())
+    ).all())
+
+
+def replace_fixture_facts(db, root_id, actor, contents):
+    db.execute(
+        update(ItemFact)
+        .where(ItemFact.root_task_id == root_id, ItemFact.is_active.is_(True))
+        .values(is_active=False)
+    )
+    db.flush()
+    root = db.get(Task, root_id)
+    for content in contents:
+        tasks_router._create_item_fact(db, root, actor, content=content)
+    db.commit()
 
 
 def main() -> None:
@@ -248,7 +270,7 @@ def main() -> None:
                     provider=no_fact_provider,
                 )
                 assert no_fact_provider.calls == 1 and no_facts.suggestions == []
-                assert db.get(Task, root_id).context_facts == []
+                assert current_fact_texts(db, root_id) == []
 
                 # A second authorized task participant may request the same root-scoped extraction.
                 collaborator_provider = FakeFactProvider()
@@ -272,9 +294,9 @@ def main() -> None:
                 assert second_progress.task.status == "doing"
                 assert second_progress.activity.task_id == first_id
                 suggestions = [
-                    AIItemFactSuggestion(text="来访时间为周三 14:00。", reason="更新明确写明到达时间。"),
-                    AIItemFactSuggestion(text="来访地点为一教 109。", reason="更新明确写明地点。"),
-                    AIItemFactSuggestion(text="预计来访人数为 20 人。", reason="更新明确写明人数。"),
+                    AIItemFactSuggestion(text="来访时间为周三 14:00。", reason="更新明确写明到达时间。", scope="global", related_task_ids=[], supersedes_fact_id=None),
+                    AIItemFactSuggestion(text="来访地点为一教 109。", reason="更新明确写明地点。", scope="global", related_task_ids=[], supersedes_fact_id=None),
+                    AIItemFactSuggestion(text="预计来访人数为 20 人。", reason="更新明确写明人数。", scope="global", related_task_ids=[], supersedes_fact_id=None),
                 ]
                 fact_provider = FakeFactProvider(suggestions=suggestions)
                 extracted = ai_items.extract_activity_facts(
@@ -287,7 +309,7 @@ def main() -> None:
                 assert fact_provider.calls == 1 and len(extracted.suggestions) == 3
                 assert owner.name not in fact_provider.context and owner.email not in fact_provider.context
                 assert collaborator.name not in fact_provider.context and collaborator.email not in fact_provider.context
-                assert db.get(Task, root_id).context_facts == []  # Suggestions require human confirmation.
+                assert current_fact_texts(db, root_id) == []  # Suggestions require human confirmation.
 
                 outsider_provider = FakeFactProvider(suggestions=suggestions)
                 expect_http(
@@ -368,25 +390,23 @@ def main() -> None:
                 db=db,
             )
             root = db.get(Task, root_id)
-            assert root.context_facts == [suggestions[0].text, suggestions[1].text]
+            assert current_fact_texts(db, root_id) == [suggestions[0].text, suggestions[1].text]
             tasks_router.add_context_facts_batch(
                 root_id,
                 ContextFactsBatchIn(facts=[suggestions[0].text]),
                 current=collaborator,
                 db=db,
             )
-            assert db.get(Task, root_id).context_facts == [suggestions[0].text, suggestions[1].text]
+            assert current_fact_texts(db, root_id) == [suggestions[0].text, suggestions[1].text]
 
-            root = db.get(Task, root_id)
-            root.context_facts = [f"已确认事项 {index}" for index in range(28)]
-            db.commit()
+            replace_fixture_facts(db, root_id, owner, [f"已确认事项 {index}" for index in range(28)])
             tasks_router.add_context_facts_batch(
                 root_id,
                 ContextFactsBatchIn(facts=["新增事实甲", "新增事实甲", "新增事实乙"]),
                 current=owner,
                 db=db,
             )
-            assert len(db.get(Task, root_id).context_facts) == 30
+            assert len(current_fact_texts(db, root_id)) == 30
             expect_http(
                 409,
                 lambda: tasks_router.add_context_facts_batch(
@@ -397,7 +417,7 @@ def main() -> None:
                 ),
             )
             db.rollback()
-            assert len(db.get(Task, root_id).context_facts) == 30
+            assert len(current_fact_texts(db, root_id)) == 30
             try:
                 ContextFactsBatchIn(facts=[f"fact {index}" for index in range(31)])
             except ValidationError:
@@ -411,12 +431,11 @@ def main() -> None:
             else:
                 raise AssertionError("batch API must reject facts longer than 500 characters")
 
-            db.get(Task, root_id).context_facts = []
-            db.commit()
+            replace_fixture_facts(db, root_id, owner, [])
 
             # Unrelated active members retain read access but cannot write shared state.
-            assert tasks_router.get_task(second_id, _=unrelated, db=db).id == second_id
-            activities = tasks_router.list_item_activities(root_id, _=unrelated, db=db)
+            assert tasks_router.get_task(second_id, current=unrelated, db=db).id == second_id
+            activities = tasks_router.list_item_activities(root_id, current=unrelated, db=db)
             assert any(activity.task_id == first_id for activity in activities)
             expect_http(
                 403,
@@ -464,7 +483,7 @@ def main() -> None:
             assert completed.task.execution_points == []
             assert completed.task.cautions == [] and completed.task.prerequisites == []
             assert completed.activity.task_id == first_id
-            assert result in db.get(Task, root_id).context_facts
+            assert result in current_fact_texts(db, root_id)
             assert tasks_router._task_out(tasks_router._get_task(db, second_id)).blocked is False
             db.expire_all()
             assert db.get(Task, root_id).status == "doing"
@@ -482,10 +501,8 @@ def main() -> None:
             # Completion overflow rolls back result, status, activity and root facts together.
             overflow_id = create_task(db, manager, title="原子完成校验", parent_id=root_id, owner_id=owner.id)
             child_ids.add(overflow_id)
-            root = db.get(Task, root_id)
-            root.context_facts = [f"上限事实 {index}" for index in range(30)]
-            db.commit()
-            before_activity_ids = {activity.id for activity in tasks_router.list_item_activities(root_id, _=owner, db=db)}
+            replace_fixture_facts(db, root_id, owner, [f"上限事实 {index}" for index in range(30)])
+            before_activity_ids = {activity.id for activity in tasks_router.list_item_activities(root_id, current=owner, db=db)}
             expect_http(
                 409,
                 lambda: tasks_router.complete_task(
@@ -498,18 +515,17 @@ def main() -> None:
             db.rollback()
             db.expire_all()
             assert db.get(Task, overflow_id).status == "todo" and db.get(Task, overflow_id).result == ""
-            assert {activity.id for activity in tasks_router.list_item_activities(root_id, _=owner, db=db)} == before_activity_ids
+            assert {activity.id for activity in tasks_router.list_item_activities(root_id, current=owner, db=db)} == before_activity_ids
 
             # Clear fixture facts, finish remaining work, then verify deterministic root aggregation.
-            db.get(Task, root_id).context_facts = []
-            db.commit()
+            replace_fixture_facts(db, root_id, owner, [])
             tasks_router.complete_task(
                 second_id,
                 TaskCompleteCreate(result="参观路线已准备完成。"),
                 current=collaborator,
                 db=db,
             )
-            assert "参观路线已准备完成。" not in db.get(Task, root_id).context_facts
+            assert "参观路线已准备完成。" not in current_fact_texts(db, root_id)
             tasks_router.complete_task(
                 third_id,
                 TaskCompleteCreate(result="展示设备已准备完成。"),

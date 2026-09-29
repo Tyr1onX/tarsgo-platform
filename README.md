@@ -233,6 +233,7 @@ Current Alembic chain:
 -> 0005_task_execution_details
 -> 0006_dynamic_item_execution
 -> 0007_shared_execution_scene
+-> 0008_scoped_item_information
 ~~~
 
 It upgrades the existing V0.1 tasks table without deleting data:
@@ -245,7 +246,7 @@ It upgrades the existing V0.1 tasks table without deleting data:
 - existing completion standards and statuses remain unchanged
 
 CI includes a real 0001_v0_1 -> 0002_operations_claiming compatibility check using seeded legacy data.
-Migrations add JSON arrays for execution points, cautions and prerequisites, backfilled as empty arrays for existing tasks. `0007_shared_execution_scene` adds nullable `item_activities.task_id` (old activity rows remain unlinked) and the same-item `task_dependencies` association table.
+Migrations add JSON arrays for execution points, cautions and prerequisites, backfilled as empty arrays for existing tasks. `0007_shared_execution_scene` adds nullable `item_activities.task_id` (old activity rows remain unlinked) and the same-item `task_dependencies` association table. `0008_scoped_item_information` migrates legacy root `context_facts` into global `ItemFact` rows, then removes the JSON column; related facts are linked to same-item child tasks.
 
 ## Knowledge Source V0.1
 

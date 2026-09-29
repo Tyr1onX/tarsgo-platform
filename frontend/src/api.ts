@@ -10,6 +10,7 @@ import type {
   InvitationInfo,
   InviteResult,
   ItemActivity,
+  ItemFactInput,
   Member,
   MemberSummary,
   KnowledgeDocument,
@@ -133,10 +134,21 @@ export const api = {
   taskAssignees: () => request<MemberSummary[]>("/api/tasks/assignees"),
   tasks: (scope: TaskView = "mine") => request<Task[]>(`/api/tasks?scope=${scope}`),
   itemActivities: (rootTaskId: number) => request<ItemActivity[]>(`/api/tasks/${rootTaskId}/activities`),
-  addItemActivity: (rootTaskId: number, content: string, addToContext: boolean) =>
+  addItemActivity: (
+    rootTaskId: number,
+    content: string,
+    addToContext: boolean,
+    factScope: "global" | "related" = "global",
+    relatedTaskIds: number[] = [],
+  ) =>
     request<ItemActivity>(`/api/tasks/${rootTaskId}/activities`, {
       method: "POST",
-      body: JSON.stringify({ content, add_to_context: addToContext }),
+      body: JSON.stringify({
+        content,
+        add_to_context: addToContext,
+        fact_scope: factScope,
+        related_task_ids: relatedTaskIds,
+      }),
     }),
   publishTaskProgress: (taskId: number, content: string) =>
     request<TaskProgressResult>(`/api/tasks/${taskId}/progress`, {
@@ -163,6 +175,18 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ facts }),
     }),
+  addScopedFactsBatch: (rootTaskId: number, facts: ItemFactInput[]) =>
+    request<Task>(`/api/tasks/${rootTaskId}/facts/batch`, {
+      method: "POST",
+      body: JSON.stringify({ facts }),
+    }),
+  updateFactScope: (rootTaskId: number, factId: number, scope: "global" | "related", relatedTaskIds: number[]) =>
+    request<Task>(`/api/tasks/${rootTaskId}/facts/${factId}/scope`, {
+      method: "PATCH",
+      body: JSON.stringify({ scope, related_task_ids: relatedTaskIds }),
+    }),
+  deleteItemFact: (rootTaskId: number, factId: number) =>
+    request<Task>(`/api/tasks/${rootTaskId}/facts/${factId}`, { method: "DELETE" }),
   deleteContextFact: (rootTaskId: number, factIndex: number) =>
     request<Task>(`/api/tasks/${rootTaskId}/context-facts/${factIndex}`, { method: "DELETE" }),
   taskResultToContext: (taskId: number) =>

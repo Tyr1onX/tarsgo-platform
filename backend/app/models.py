@@ -47,6 +47,15 @@ task_dependencies = Table(
 )
 
 
+item_fact_tasks = Table(
+    "item_fact_tasks",
+    Base.metadata,
+    Column("fact_id", ForeignKey("item_facts.id", ondelete="CASCADE"), primary_key=True),
+    Column("task_id", ForeignKey("tasks.id", ondelete="CASCADE"), primary_key=True),
+    Index("ix_item_fact_tasks_task_id", "task_id"),
+)
+
+
 class Member(Base):
     __tablename__ = "members"
     __table_args__ = (
@@ -110,9 +119,6 @@ class Task(Base):
     prerequisites: Mapped[list[str]] = mapped_column(
         JSON(), default=list, server_default=text("(JSON_ARRAY())"), nullable=False
     )
-    context_facts: Mapped[list[str]] = mapped_column(
-        JSON(), default=list, server_default=text("(JSON_ARRAY())"), nullable=False
-    )
     result: Mapped[str] = mapped_column(Text(), default="", nullable=False)
     owner_id: Mapped[int | None] = mapped_column(ForeignKey("members.id"), nullable=True)
     owner_claimable: Mapped[bool] = mapped_column(Boolean(), default=False, server_default="0")
@@ -150,6 +156,33 @@ class ItemActivity(Base):
     root_task: Mapped[Task] = relationship(foreign_keys=[root_task_id])
     task: Mapped[Task | None] = relationship(foreign_keys=[task_id])
     author: Mapped[Member] = relationship(foreign_keys=[author_id])
+
+
+class ItemFact(Base):
+    __tablename__ = "item_facts"
+    __table_args__ = (
+        CheckConstraint("scope IN ('global','related')", name="ck_item_facts_scope"),
+        Index("ix_item_facts_root_active", "root_task_id", "is_active", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    root_task_id: Mapped[int] = mapped_column(ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False)
+    content: Mapped[str] = mapped_column(Text(), nullable=False)
+    scope: Mapped[str] = mapped_column(String(20), nullable=False)
+    source_activity_id: Mapped[int | None] = mapped_column(
+        ForeignKey("item_activities.id", ondelete="SET NULL"), nullable=True
+    )
+    created_by: Mapped[int] = mapped_column(ForeignKey("members.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(), server_default=func.now(), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean(), default=True, server_default="1", nullable=False)
+    superseded_by_id: Mapped[int | None] = mapped_column(
+        ForeignKey("item_facts.id", ondelete="SET NULL"), nullable=True
+    )
+    superseded_at: Mapped[datetime | None] = mapped_column(DateTime(), nullable=True)
+
+    related_tasks: Mapped[list[Task]] = relationship(secondary=item_fact_tasks)
+    source_activity: Mapped[ItemActivity | None] = relationship(foreign_keys=[source_activity_id])
+    creator: Mapped[Member] = relationship(foreign_keys=[created_by])
 
 
 class AIPlannerDailyUsage(Base):

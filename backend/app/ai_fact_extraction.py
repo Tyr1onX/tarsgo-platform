@@ -6,7 +6,7 @@ import re
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .models import Member, Task
+from .models import ItemFact, Member, Task
 
 MAX_FACT_EXTRACTION_CONTEXT_CHARS = 6_000
 
@@ -34,9 +34,17 @@ def build_activity_fact_context(
     root: Task,
     task: Task,
     activity_content: str,
+    current: Member,
 ) -> str:
     """Send one activity and only the nearby execution context needed to interpret it."""
     redact = _member_redactor(db)
+    fact_query = select(ItemFact).where(ItemFact.root_task_id == root.id, ItemFact.is_active.is_(True))
+    if current.role not in {"admin", "manager"} and root.owner_id != current.id:
+        fact_query = fact_query.where(
+            (ItemFact.scope == "global")
+            | ItemFact.related_tasks.any(Task.id == task.id)
+        )
+    active_facts = list(db.scalars(fact_query.order_by(ItemFact.created_at.asc(), ItemFact.id.asc())).all())
     context = {
         "事项标题": redact(root.title[:200]),
         "来源任务": {
@@ -45,26 +53,37 @@ def build_activity_fact_context(
             "deliverable": redact((task.deliverable or "")[:600]),
         },
         "本次执行更新": redact(activity_content[:2_000]),
-        "当前已确认信息": [
-            redact(fact[:240]) for fact in (root.context_facts or [])[-10:]
+        "当前有效信息": [
+            {
+                "id": fact.id,
+                "text": redact(fact.content[:300]),
+                "scope": fact.scope,
+                "related_task_ids": [related.id for related in fact.related_tasks],
+            }
+            for fact in active_facts[-15:]
         ],
-        "同事项其他分工标题": [],
+        "同事项其他分工": [],
     }
     base_chars = len(json.dumps(context, ensure_ascii=False, separators=(",", ":")))
     if base_chars > MAX_FACT_EXTRACTION_CONTEXT_CHARS:
-        context["当前已确认信息"] = []
+        context["当前有效信息"] = []
         base_chars = len(json.dumps(context, ensure_ascii=False, separators=(",", ":")))
 
-    sibling_titles = db.scalars(
-        select(Task.title)
+    siblings = db.scalars(
+        select(Task)
         .where(Task.parent_id == root.id, Task.id != task.id)
         .order_by(Task.id.asc())
     ).all()
-    for title in sibling_titles[:20]:
-        candidate = redact(title[:200])
-        context["同事项其他分工标题"].append(candidate)
+    for sibling in siblings[:20]:
+        candidate = {
+            "id": sibling.id,
+            "title": redact(sibling.title[:200]),
+            "deliverable": redact((sibling.deliverable or "")[:240]),
+            "depends_on_task_ids": [dependency.id for dependency in sibling.depends_on_tasks],
+        }
+        context["同事项其他分工"].append(candidate)
         if len(json.dumps(context, ensure_ascii=False, separators=(",", ":"))) > MAX_FACT_EXTRACTION_CONTEXT_CHARS:
-            context["同事项其他分工标题"].pop()
+            context["同事项其他分工"].pop()
             break
 
     return (

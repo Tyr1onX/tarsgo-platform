@@ -12,7 +12,7 @@ from app.db import SessionLocal
 from app.auth import get_current_member
 from app.db import get_db
 from app.main import app
-from app.models import AIPlannerDailyUsage, ItemActivity, KnowledgeDocument, Member, Task
+from app.models import AIPlannerDailyUsage, ItemActivity, ItemFact, KnowledgeDocument, Member, Task
 from app.routers import ai_items, ai_planner
 from app.schemas import (
     AIItemReviewOut,
@@ -96,7 +96,6 @@ def main() -> None:
             parent_id=None,
             title="测试事项：小学机器人科技展",
             deliverable="",
-            context_facts=["主办方要求提前 20 分钟完成布展。"],
             owner_id=admin.id,
             owner_claimable=False,
             collaboration_open=False,
@@ -106,6 +105,13 @@ def main() -> None:
         )
         db.add(root)
         db.flush()
+        db.add(ItemFact(
+            root_task_id=root.id,
+            content="主办方要求提前 20 分钟完成布展。",
+            scope="global",
+            created_by=admin.id,
+            is_active=True,
+        ))
         todo = Task(
             parent_id=root.id,
             title="完成现场布展与设备运行确认",
@@ -113,7 +119,6 @@ def main() -> None:
             execution_points=["按活动流程完成布置"],
             cautions=["仅按本次明确要求执行。"],
             prerequisites=[],
-            context_facts=[],
             result="先前已完成场地初检。",
             owner_id=admin.id,
             owner_claimable=False,
@@ -130,7 +135,6 @@ def main() -> None:
             execution_points=[],
             cautions=[],
             prerequisites=[],
-            context_facts=[],
             result="主办方已确认时间、地点及现场条件。",
             owner_id=admin.id,
             owner_claimable=False,

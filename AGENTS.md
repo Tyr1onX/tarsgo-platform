@@ -85,7 +85,7 @@ Current task structure:
 - cautions: up to five concise task-specific reminders
 - prerequisites: up to four readable conditions that would prevent the task from reasonably starting; separate from structured same-item task dependencies
 - depends_on_tasks: child Task relationships under the same root only; backend rejects self/cross-root/cyclic edges; blocked is computed from dependency task status and is not a fourth status
-- context_facts: root-item current confirmed facts; child rows keep an empty list
+- item_facts: active confirmed facts on a root item, each global or linked to one or more child tasks; response-only context_facts is derived from facts visible to the current member
 - result: optional execution outcome text
 - owner_id: nullable
 - owner_claimable
@@ -202,6 +202,7 @@ Current migration chain:
 -> 0005_task_execution_details
 -> 0006_dynamic_item_execution
 -> 0007_shared_execution_scene
+-> 0008_scoped_item_information
 ~~~
 
 Migrations must preserve current production rows. Never clear or silently rewrite production data to simplify a schema change.
@@ -301,9 +302,9 @@ Do not expand this slice into automatic scheduling, member recommendation, workl
 
 ## Dynamic item execution
 
-Published tasks remain editable. A root Task stores current confirmed facts in context_facts. Task.result stores the actual execution outcome and is distinct from deliverable.
+Published tasks remain editable. `ItemFact` stores current confirmed facts on the root item. A global fact is visible across the item; a related fact is linked to one or more same-root child Tasks through `item_fact_tasks`. `Task.result` stores the actual execution outcome and is distinct from deliverable. The old root JSON facts migrate to global ItemFact rows; the JSON column is then removed. Any response-only `context_facts` list must be derived from facts visible to the current member.
 
-ItemActivity is intentionally narrow: a timestamped human-written record attached to a root item. Its nullable task_id links child progress/completion while preserving existing root-only activity rows. Child owner/collaborator progress saves an activity and todo→doing transition atomically; task completion saves result, done, an activity and optional current-fact sync atomically. Only the owner or manager can complete. Root status is recomputed deterministically after any child status change. Never let AI choose or mutate status.
+ItemActivity is intentionally narrow: a timestamped human-written record attached to a root item. Its nullable task_id links child progress/completion while preserving existing root-only activity rows. Activities are history; current fact replacement deactivates the old fact without deleting its source activity. Task relations, rather than member ids, define the work context inherited by future owners and collaborators. Backend responses must filter related facts and their history by the current member's task participation; managers and root owners may view the whole item. Child owner/collaborator progress saves an activity and todo→doing transition atomically; task completion saves result, done, an activity and optional current-fact sync atomically. Only the owner or manager can complete. Root status is recomputed deterministically after any child status change. Never let AI choose or mutate status.
 
 AI fact extraction is a separate provider service called at most once after a progress activity has committed. It receives only bounded root/current facts, source task context and that activity, with member names/emails redacted. It can return at most five suggestions and never writes current facts; a human-approved batch endpoint handles exact de-duplication and the 30-fact limit. Authorized progress participants can use extraction under the existing shared daily request quota; unrelated readers cannot.
 

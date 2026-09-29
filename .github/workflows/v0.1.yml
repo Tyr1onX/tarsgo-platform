@@ -73,7 +73,8 @@ jobs:
           VALUES
             (100, '旧版任务', '旧版交付', 101, '2026-09-20 18:00:00', 'todo', 100);
           SQL
-          docker compose exec -T -e DB_NAME="$MIGRATION_DB" api alembic upgrade 0006_dynamic_item_execution
+          docker compose exec -T -e DB_NAME="$MIGRATION_DB" api alembic upgrade 0007_shared_execution_scene
+          docker compose exec -T db mysql -uroot -p"$CI_MYSQL_ROOT_PASSWORD" tarsgo_migration -e "UPDATE tasks SET context_facts = JSON_ARRAY('legacy global fact') WHERE id = 100;"
           docker compose exec -T db mysql -uroot -p"$CI_MYSQL_ROOT_PASSWORD" tarsgo_migration -e "
             INSERT INTO item_activities (root_task_id, author_id, content)
             VALUES (100, 100, 'legacy activity stays unlinked');
@@ -89,15 +90,17 @@ jobs:
               JSON_LENGTH(execution_points), '|',
               JSON_LENGTH(cautions), '|',
               JSON_LENGTH(prerequisites), '|',
-              JSON_LENGTH(context_facts), '|',
               CHAR_LENGTH(result), '|',
+              (SELECT COUNT(*) FROM item_facts WHERE root_task_id = 100 AND content = 'legacy global fact' AND scope = 'global' AND is_active = 1), '|',
               (SELECT IF(task_id IS NULL, 'NULL', task_id) FROM item_activities WHERE content = 'legacy activity stays unlinked'), '|',
               (SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'tarsgo_migration' AND table_name = 'task_dependencies'), '|',
-              (SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = 'tarsgo_migration' AND table_name = 'item_activities' AND column_name = 'task_id')
+              (SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = 'tarsgo_migration' AND table_name = 'item_activities' AND column_name = 'task_id'), '|',
+              (SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = 'tarsgo_migration' AND table_name = 'tasks' AND column_name = 'context_facts'), '|',
+              (SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'tarsgo_migration' AND table_name = 'item_fact_tasks')
             )
             FROM tasks WHERE id = 100;
           ")"
-          test "$RESULT" = "101|NULL|0|0|旧版交付|0|0|0|0|0|NULL|1|1"
+          test "$RESULT" = "101|NULL|0|0|旧版交付|0|0|0|0|1|NULL|1|1|0|1"
           docker compose exec -T db mysql -uroot -p"$CI_MYSQL_ROOT_PASSWORD" -e "DROP DATABASE tarsgo_migration;"
 
       - name: Create initial administrator
@@ -128,6 +131,9 @@ jobs:
 
       - name: Verify shared execution scene
         run: docker compose exec -T api python -m tests.test_shared_execution
+
+      - name: Verify scoped item information
+        run: docker compose exec -T api python -m tests.test_scoped_item_information
 
       - name: Verify AI planner
         run: docker compose exec -T api python -m tests.test_ai_planner

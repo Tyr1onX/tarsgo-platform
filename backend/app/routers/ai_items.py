@@ -19,7 +19,7 @@ from ..ai_planner import (
 from ..auth import get_current_member, require_manager
 from ..db import get_db
 from ..knowledge import knowledge_enabled, search_historical_documents
-from ..models import ItemActivity, Member, Task
+from ..models import ItemActivity, ItemFact, Member, Task
 from ..routers.ai_planner import (
     _enabled,
     _record_generation_tokens,
@@ -81,13 +81,20 @@ def _review_context(
 ) -> tuple[str, int]:
     """Build a bounded current-state snapshot without member identity fields."""
     redact = _member_redactor(db)
+    active_facts = list(db.scalars(select(ItemFact).where(
+        ItemFact.root_task_id == root.id, ItemFact.is_active.is_(True)
+    ).order_by(ItemFact.created_at.asc(), ItemFact.id.asc())).all())
     context: dict = {
         "事项": {
             "title": redact(root.title),
             "deadline": root.deadline.isoformat() if root.deadline else None,
             "status": root.status,
         },
-        "当前已知": [redact(fact) for fact in (root.context_facts or [])],
+        "当前已知": [
+            {"text": redact(fact.content), "scope": fact.scope,
+             "related_task_ids": [task.id for task in fact.related_tasks]}
+            for fact in active_facts
+        ],
         # IDs, titles and statuses are always retained for every direct child.
         "执行任务": [
             {"id": child.id, "title": redact(child.title), "status": child.status}
@@ -132,7 +139,7 @@ def _review_context(
     knowledge_chars = 0
     if knowledge_enabled():
         query = "\n".join(
-            [root.title, *(root.context_facts or []), *(task.title for task in children)]
+            [root.title, *(fact.content for fact in active_facts), *(task.title for task in children)]
         )[:4_000]
         remaining = max(
             0,
@@ -227,11 +234,27 @@ def extract_activity_facts(
         root=root,
         task=task,
         activity_content=activity.content,
+        current=current,
     )
     usage_date = _reserve_request(db, current.id)
     generation = _extract_facts_once(provider, context)
     _record_generation_tokens(db, current.id, usage_date, generation)
-    return generation.extraction
+    child_ids = set(db.scalars(select(Task.id).where(Task.parent_id == root.id)).all())
+    visible_facts = list(db.scalars(select(ItemFact).where(
+        ItemFact.root_task_id == root.id, ItemFact.is_active.is_(True),
+        (ItemFact.scope == "global") | ItemFact.related_tasks.any(Task.id == task.id),
+    )).all())
+    fact_ids = {fact.id for fact in visible_facts}
+    normalized = []
+    for suggestion in generation.extraction.suggestions:
+        related_ids = [task_id for task_id in suggestion.related_task_ids if task_id in child_ids]
+        if suggestion.scope == "related" and not related_ids:
+            related_ids = [task.id]
+        normalized.append(suggestion.model_copy(update={
+            "related_task_ids": related_ids if suggestion.scope == "related" else [],
+            "supersedes_fact_id": suggestion.supersedes_fact_id if suggestion.supersedes_fact_id in fact_ids else None,
+        }))
+    return generation.extraction.model_copy(update={"suggestions": normalized})
 
 
 def _same_task_content(task: Task, proposed) -> bool:
@@ -339,7 +362,6 @@ def apply_item_review_suggestion(
             execution_points=suggestion.proposed_task.execution_points,
             cautions=suggestion.proposed_task.cautions,
             prerequisites=suggestion.proposed_task.prerequisites,
-            context_facts=[],
             result="",
             owner_id=None,
             owner_claimable=True,
@@ -366,4 +388,4 @@ def apply_item_review_suggestion(
     saved_activity = db.get(ItemActivity, activity.id)
     if saved_activity is None:
         raise HTTPException(status_code=500, detail="方案检查记录保存失败")
-    return AIItemReviewApplyOut(task=_task_out(saved_task), activity=_activity_out(saved_activity))
+    return AIItemReviewApplyOut(task=_task_out(saved_task, db, current), activity=_activity_out(saved_activity))

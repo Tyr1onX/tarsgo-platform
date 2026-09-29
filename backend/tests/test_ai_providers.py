@@ -86,7 +86,13 @@ def review() -> AIItemReviewOut:
 def fact_extraction() -> AIItemFactExtractionOut:
     return AIItemFactExtractionOut(
         suggestions=[
-            AIItemFactSuggestion(text="来访时间为周三 14:00。", reason="更新明确写明了到达时间。")
+            AIItemFactSuggestion(
+                text="来访时间为周三 14:00。",
+                reason="更新明确写明了到达时间。",
+                scope="global",
+                related_task_ids=[],
+                supersedes_fact_id=None,
+            )
         ]
     )
 

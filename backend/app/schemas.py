@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_vali
 Role = Literal["admin", "manager", "member"]
 MemberStatus = Literal["invited", "active", "disabled"]
 TaskStatus = Literal["todo", "doing", "done"]
+ItemFactScope = Literal["global", "related"]
 TaskDetailText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=240)]
 ContextFactText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)]
 ItemActivityText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2000)]
@@ -206,6 +207,23 @@ class TaskDependencyOut(BaseModel):
     owner: MemberSummary | None
 
 
+class ItemFactTaskOut(BaseModel):
+    id: int
+    title: str
+
+
+class ItemFactOut(BaseModel):
+    id: int
+    root_task_id: int
+    content: str
+    scope: ItemFactScope
+    related_tasks: list[ItemFactTaskOut] = Field(default_factory=list)
+    source_activity_id: int | None = None
+    created_by: MemberSummary
+    created_at: datetime
+    superseded_by_id: int | None = None
+
+
 class TaskOut(BaseModel):
     id: int
     parent_id: int | None
@@ -214,6 +232,8 @@ class TaskOut(BaseModel):
     execution_points: list[str] = Field(default_factory=list)
     cautions: list[str] = Field(default_factory=list)
     prerequisites: list[str] = Field(default_factory=list)
+    item_facts: list[ItemFactOut] = Field(default_factory=list)
+    # Kept as a response convenience; values are derived from visible ItemFact rows.
     context_facts: list[str] = Field(default_factory=list)
     result: str = ""
     owner: MemberSummary | None
@@ -231,11 +251,54 @@ class TaskOut(BaseModel):
 
 class ItemFactCreate(BaseModel):
     content: ContextFactText
+    scope: ItemFactScope = "global"
+    related_task_ids: list[int] = Field(default_factory=list, max_length=20)
+    source_activity_id: int | None = Field(default=None, ge=1)
+    supersedes_fact_id: int | None = Field(default=None, ge=1)
+
+    @model_validator(mode="after")
+    def validate_scope(self):
+        if self.scope == "global" and self.related_task_ids:
+            raise ValueError("整个事项信息不需要选择具体分工")
+        if self.scope == "related" and not self.related_task_ids:
+            raise ValueError("请选择至少一项相关分工")
+        if len(set(self.related_task_ids)) != len(self.related_task_ids):
+            raise ValueError("相关分工不能重复")
+        return self
+
+
+class ItemFactScopeUpdate(BaseModel):
+    scope: ItemFactScope
+    related_task_ids: list[int] = Field(default_factory=list, max_length=20)
+
+    @model_validator(mode="after")
+    def validate_scope(self):
+        if self.scope == "global" and self.related_task_ids:
+            raise ValueError("整个事项信息不需要选择具体分工")
+        if self.scope == "related" and not self.related_task_ids:
+            raise ValueError("请选择至少一项相关分工")
+        if len(set(self.related_task_ids)) != len(self.related_task_ids):
+            raise ValueError("相关分工不能重复")
+        return self
 
 
 class ItemActivityCreate(BaseModel):
     content: ItemActivityText
     add_to_context: bool = False
+    fact_scope: ItemFactScope = "global"
+    related_task_ids: list[int] = Field(default_factory=list, max_length=20)
+
+    @model_validator(mode="after")
+    def validate_fact_scope(self):
+        if not self.add_to_context and (self.related_task_ids or self.fact_scope != "global"):
+            raise ValueError("请选择同步事项信息后再设置同步范围")
+        if self.fact_scope == "global" and self.related_task_ids:
+            raise ValueError("整个事项信息不需要选择具体分工")
+        if self.fact_scope == "related" and self.add_to_context and not self.related_task_ids:
+            raise ValueError("请选择至少一项相关分工")
+        if len(set(self.related_task_ids)) != len(self.related_task_ids):
+            raise ValueError("相关分工不能重复")
+        return self
 
 
 class ItemActivityOut(BaseModel):
@@ -273,10 +336,25 @@ class ContextFactsBatchIn(BaseModel):
     facts: list[ContextFactText] = Field(min_length=1, max_length=30)
 
 
+class ItemFactsBatchIn(BaseModel):
+    facts: list[ItemFactCreate] = Field(min_length=1, max_length=5)
+
+
 class AIItemFactSuggestion(BaseModel):
     model_config = ConfigDict(extra="forbid")
     text: ContextFactText
     reason: str = Field(min_length=1, max_length=200)
+    scope: ItemFactScope
+    related_task_ids: list[int] = Field(max_length=20)
+    supersedes_fact_id: int | None = Field(ge=1)
+
+    @model_validator(mode="after")
+    def validate_scope(self):
+        if self.scope == "global" and self.related_task_ids:
+            raise ValueError("整个事项信息不能关联具体分工")
+        if len(set(self.related_task_ids)) != len(self.related_task_ids):
+            raise ValueError("相关分工不能重复")
+        return self
 
 
 class AIItemFactExtractionOut(BaseModel):

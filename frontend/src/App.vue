@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue"
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 
 import { ApiError, api } from "./api"
+import { revealInvalidField } from "./formFeedback.js"
 import { filterIgnoredPlannerSuggestions, ignorePlannerSuggestion, plannerSuggestionJoinInstruction } from "./plannerSuggestions.js"
 import { itemReviewChanges, removeItemReviewSuggestion } from "./itemReview.js"
 import {
@@ -21,6 +22,9 @@ import type {
   InvitationInfo,
   InviteResult,
   ItemActivity,
+  ItemFact,
+  ItemFactInput,
+  ItemFactScope,
   KnowledgeDocument,
   KnowledgeSyncSummary,
   Member,
@@ -37,6 +41,9 @@ const loading = ref(true)
 const routeNotFound = ref(false)
 const error = ref("")
 const notice = ref("")
+const fieldErrors = ref<Record<string, string>>({})
+const feedback = ref<{ kind: "success" | "error" | "info"; message: string } | null>(null)
+let feedbackTimer: number | undefined
 
 const loginEmail = ref("")
 const loginPassword = ref("")
@@ -86,7 +93,14 @@ const knowledgeUploadRef = ref<HTMLInputElement | null>(null)
 
 const itemActivityDraft = ref("")
 const itemActivityAddToFacts = ref(false)
+const itemActivityFactScope = ref<ItemFactScope>("global")
+const itemActivityRelatedTaskIds = ref<number[]>([])
 const itemFactDraft = ref("")
+const itemFactScope = ref<ItemFactScope>("global")
+const itemFactRelatedTaskIds = ref<number[]>([])
+const editingFactScopeId = ref<number | null>(null)
+const editingFactScope = ref<ItemFactScope>("global")
+const editingFactTaskIds = ref<number[]>([])
 const taskResultDraft = ref("")
 const taskProgressDraft = ref("")
 const taskCompletionDraft = ref("")
@@ -96,6 +110,8 @@ const taskCompletionSaving = ref(false)
 const factExtractionLoading = ref(false)
 const factSuggestions = ref<AIItemFactSuggestion[]>([])
 const selectedFactSuggestions = ref<string[]>([])
+const confirmedFactSupersessions = ref<string[]>([])
+const factSuggestionActivityId = ref<number | null>(null)
 const itemReviewSummary = ref("")
 const itemReviewSuggestions = ref<{ key: string; suggestion: AIItemReviewSuggestion }[]>([])
 const itemReviewLoading = ref(false)
@@ -172,10 +188,13 @@ const detailChildren = computed(() =>
   detailRoot.value ? tasks.value.filter((task) => task.parent_id === detailRoot.value?.id) : [],
 )
 const detailProgress = computed(() => executionSummary(detailChildren.value))
-const recentItemFacts = computed(() => [...(detailRoot.value?.context_facts ?? [])].slice(-4).reverse())
+const recentItemFacts = computed(() => [...(detailTask.value?.item_facts ?? [])].slice(-4).reverse())
 const detailTaskActivities = computed(() =>
-  itemActivities.value.filter((activity) => activity.task_id === detailTask.value?.id),
+  itemActivities.value,
 )
+const canManageFactScope = computed(() => Boolean(
+  detailRoot.value && (isManager.value || detailRoot.value.owner?.id === user.value?.id),
+))
 const canWriteDetailItem = computed(() => {
   const root = detailRoot.value
   const currentId = user.value?.id
@@ -254,6 +273,98 @@ function messageOf(reason: unknown): string {
   return reason instanceof Error ? reason.message : "操作失败"
 }
 
+function clearFeedback() {
+  if (feedbackTimer !== undefined) window.clearTimeout(feedbackTimer)
+  feedbackTimer = undefined
+  feedback.value = null
+}
+
+function showFeedback(kind: "success" | "error" | "info", message: string) {
+  clearFeedback()
+  feedback.value = { kind, message }
+  if (kind !== "error") {
+    feedbackTimer = window.setTimeout(clearFeedback, 3_500)
+  } else {
+    feedbackTimer = window.setTimeout(clearFeedback, 7_000)
+  }
+}
+
+watch(error, (message) => {
+  if (message) showFeedback("error", message)
+})
+watch(notice, (message) => {
+  if (message) showFeedback("success", message)
+})
+watch(path, (nextPath, previousPath) => {
+  if (nextPath === previousPath) return
+  fieldErrors.value = {}
+  error.value = ""
+  showAllDetailActivities.value = false
+  if (feedback.value?.kind === "error") clearFeedback()
+})
+
+function clearFieldError(field: string) {
+  if (!fieldErrors.value[field]) return
+  const next = { ...fieldErrors.value }
+  delete next[field]
+  fieldErrors.value = next
+}
+
+async function showFieldError(field: string, toastMessage: string, inlineMessage: string) {
+  fieldErrors.value = { ...fieldErrors.value, [field]: inlineMessage }
+  error.value = toastMessage
+  if (field.startsWith("planner-item-")) {
+    document.querySelector<HTMLDetailsElement>(".planner-item-edit")?.setAttribute("open", "")
+  }
+  const taskTitleMatch = field.match(/^planner-task-title-(\d+)$/)
+  if (taskTitleMatch) plannerSelectedTaskIndex.value = Number(taskTitleMatch[1])
+  if (field === "planner-task-details") {
+    const match = toastMessage.match(/第 (\d+) 项(怎么做|注意|开始前需要)/)
+    if (match) {
+      plannerSelectedTaskIndex.value = Number(match[1]) - 1
+      plannerEmptyDetailSection.value = match[2] === "怎么做" ? "execution_points" :
+        match[2] === "注意" ? "cautions" : "prerequisites"
+    }
+  }
+  await nextTick()
+  const targetField = field === "planner-task-details" ?
+    plannerEmptyDetailSection.value === "execution_points" ? "planner-execution-points" :
+      plannerEmptyDetailSection.value === "cautions" ? "planner-cautions" : "planner-prerequisites" : field
+  revealInvalidField(document, targetField)
+}
+
+function ensureFactRelatedSelection(scope: ItemFactScope, taskIds: number[]) {
+  if (scope !== "related" || taskIds.length || !detailTask.value) return taskIds
+  const currentTaskId = detailTask.value.parent_id === null ? null : detailTask.value.id
+  return currentTaskId ? [currentTaskId] : detailChildren.value.slice(0, 1).map((task) => task.id)
+}
+
+function ensureFactSuggestionTasks(index: number) {
+  const suggestion = factSuggestions.value[index]
+  if (!suggestion || suggestion.scope !== "related" || suggestion.related_task_ids.length) return
+  suggestion.related_task_ids = ensureFactRelatedSelection("related", [])
+}
+
+function factScopeDescription(fact: ItemFact) {
+  if (fact.scope === "global") return "整个事项"
+  return `相关工作 · ${fact.related_tasks.map((task) => task.title).join("、")}`
+}
+
+function toggleActivityFactScope(scope: ItemFactScope) {
+  itemActivityFactScope.value = scope
+  itemActivityRelatedTaskIds.value = ensureFactRelatedSelection(scope, itemActivityRelatedTaskIds.value)
+}
+
+function toggleNewFactScope(scope: ItemFactScope) {
+  itemFactScope.value = scope
+  itemFactRelatedTaskIds.value = ensureFactRelatedSelection(scope, itemFactRelatedTaskIds.value)
+}
+
+const showAllDetailActivities = ref(false)
+const visibleDetailActivities = computed(() =>
+  showAllDetailActivities.value ? detailTaskActivities.value : detailTaskActivities.value.slice(0, 5),
+)
+
 function navigate(nextPath: string) {
   const nextRoute = nextPath.split("?")[0]
   const wasTaskDetail = /^\/tasks\/\d+$/.test(path.value)
@@ -271,6 +382,9 @@ function navigate(nextPath: string) {
   path.value = window.location.pathname
   syncCollaborationRefreshTimer()
   error.value = ""
+  showAllDetailActivities.value = false
+  fieldErrors.value = {}
+  if (feedback.value?.kind === "error") clearFeedback()
   void loadRoute()
 }
 
@@ -285,6 +399,8 @@ function clearFactSuggestions() {
   factExtractionEpoch += 1
   factSuggestions.value = []
   selectedFactSuggestions.value = []
+  confirmedFactSupersessions.value = []
+  factSuggestionActivityId.value = null
   factExtractionLoading.value = false
 }
 
@@ -750,21 +866,28 @@ async function enableMember(memberId: number) {
 
 async function submitTask() {
   error.value = ""
+  fieldErrors.value = {}
   const desiredOwnerId = taskOwnerMode.value === "assigned" ? taskOwnerId.value : null
   const desiredOwnerClaimable =
     taskOwnerMode.value === "claimable" ? true : taskOwnerClaimable.value
 
+  if (!taskTitle.value.trim()) {
+    await showFieldError("task-title", "请填写任务标题", "需要填写任务标题")
+    return
+  }
   if (!taskDeadline.value) {
-    error.value = "请选择截止时间"
+    await showFieldError("task-deadline", "请补充截止时间", "需要设置截止时间")
     return
   }
   if (taskOwnerMode.value === "assigned" && !desiredOwnerId) {
-    error.value = "请选择负责人"
+    await showFieldError("task-owner", "请选择负责人", "需要选择负责人")
     return
   }
   const lineLimitError = taskLineLimitMessage()
   if (lineLimitError) {
-    error.value = lineLimitError
+    const field = lineLimitError.includes("注意") ? "task-cautions" :
+      lineLimitError.includes("开始前") ? "task-prerequisites" : "task-execution-points"
+    await showFieldError(field, lineLimitError, lineLimitError)
     return
   }
   const executionPoints = parseTaskLines(taskExecutionPointsText.value)
@@ -943,6 +1066,7 @@ async function publishTaskProgress() {
       if (isCurrentFactSuggestionRequest(task.id, taskDetailId.value, epoch, factExtractionEpoch)) {
         factSuggestions.value = extracted.suggestions
         selectedFactSuggestions.value = defaultFactSelection(extracted.suggestions)
+        factSuggestionActivityId.value = published.activity.id
         if (extracted.suggestions.length) {
           notice.value = `进展已发布，有 ${extracted.suggestions.length} 条信息可能需要同步给团队`
         }
@@ -965,14 +1089,23 @@ async function publishTaskProgress() {
 
 async function addSuggestedFactsToItem() {
   const root = detailRoot.value
-  const chosen = selectedFactSuggestions.value
-  if (!root || !chosen.length || !canWriteDetailItem.value) return
+  const chosen = factSuggestions.value.filter((suggestion) => selectedFactSuggestions.value.includes(suggestion.text))
+  if (!root || !chosen.length || !canWriteDetailItem.value || factSuggestionActivityId.value === null) return
   error.value = ""
   try {
-    await api.addContextFactsBatch(root.id, chosen)
+    const facts: ItemFactInput[] = chosen.map((suggestion) => ({
+      content: suggestion.text,
+      scope: suggestion.scope,
+      related_task_ids: suggestion.scope === "related" ? suggestion.related_task_ids : [],
+      source_activity_id: factSuggestionActivityId.value,
+      supersedes_fact_id: canManageFactScope.value && confirmedFactSupersessions.value.includes(suggestion.text)
+        ? suggestion.supersedes_fact_id
+        : null,
+    }))
+    await api.addScopedFactsBatch(root.id, facts)
     clearFactSuggestions()
     clearItemReview()
-    notice.value = "已将确认信息同步给整个事项"
+    notice.value = "已按确认范围同步信息"
     await refreshExecutionScene(true)
   } catch (reason) {
     error.value = messageOf(reason)
@@ -1014,22 +1147,58 @@ async function addCurrentFact() {
   if (!root || !content || !canWriteDetailItem.value) return
   error.value = ""
   try {
-    await api.addContextFact(root.id, content)
+    await api.addScopedFactsBatch(root.id, [{
+      content,
+      scope: itemFactScope.value,
+      related_task_ids: itemFactScope.value === "related" ? itemFactRelatedTaskIds.value : [],
+    }])
     clearItemReview()
     itemFactDraft.value = ""
+    itemFactScope.value = "global"
+    itemFactRelatedTaskIds.value = []
     await loadRoute()
   } catch (reason) {
     error.value = messageOf(reason)
   }
 }
 
-async function removeCurrentFact(index: number) {
+async function removeCurrentFact(factId: number) {
   const root = detailRoot.value
-  if (!root || !canWriteDetailItem.value) return
+  if (!root || !canManageFactScope.value) return
+  if (!window.confirm("移除这条当前信息？已有的历史动态会保留。")) return
   error.value = ""
   try {
-    await api.deleteContextFact(root.id, index)
+    await api.deleteItemFact(root.id, factId)
     clearItemReview()
+    await loadRoute()
+  } catch (reason) {
+    error.value = messageOf(reason)
+  }
+}
+
+function beginFactScopeEdit(fact: ItemFact) {
+  editingFactScopeId.value = fact.id
+  editingFactScope.value = fact.scope
+  editingFactTaskIds.value = fact.related_tasks.map((task) => task.id)
+}
+
+function cancelFactScopeEdit() {
+  editingFactScopeId.value = null
+  editingFactTaskIds.value = []
+}
+
+async function saveFactScope(factId: number) {
+  const root = detailRoot.value
+  if (!root || !canManageFactScope.value) return
+  error.value = ""
+  try {
+    await api.updateFactScope(
+      root.id,
+      factId,
+      editingFactScope.value,
+      editingFactScope.value === "related" ? editingFactTaskIds.value : [],
+    )
+    cancelFactScopeEdit()
     await loadRoute()
   } catch (reason) {
     error.value = messageOf(reason)
@@ -1044,12 +1213,24 @@ async function recordItemActivity() {
     error.value = "加入当前信息时，单条最多 500 字。"
     return
   }
+  if (itemActivityAddToFacts.value && itemActivityFactScope.value === "related" && !itemActivityRelatedTaskIds.value.length) {
+    error.value = "请选择至少一个相关分工"
+    return
+  }
   error.value = ""
   try {
-    await api.addItemActivity(root.id, content, itemActivityAddToFacts.value)
+    await api.addItemActivity(
+      root.id,
+      content,
+      itemActivityAddToFacts.value,
+      itemActivityFactScope.value,
+      itemActivityFactScope.value === "related" ? itemActivityRelatedTaskIds.value : [],
+    )
     clearItemReview()
     itemActivityDraft.value = ""
     itemActivityAddToFacts.value = false
+    itemActivityFactScope.value = "global"
+    itemActivityRelatedTaskIds.value = []
     await loadRoute()
   } catch (reason) {
     error.value = messageOf(reason)
@@ -1385,21 +1566,23 @@ async function regenerateAIPlan() {
 async function publishAIPlan() {
   const draft = plannerDraft.value
   if (!draft) return
+  fieldErrors.value = {}
   if (!draft.item.title.trim()) {
-    error.value = "请填写事项标题。"
+    await showFieldError("planner-item-title", "请填写事项标题", "需要填写事项标题")
     return
   }
   if (!draft.item.deadline) {
-    error.value = "请确认事项截止时间。"
+    await showFieldError("planner-item-deadline", "请确认事项截止时间", "需要设置事项截止时间")
     return
   }
-  if (draft.tasks.some((task) => !task.title.trim())) {
-    error.value = "每个分工都需要填写标题。"
+  const emptyTaskIndex = draft.tasks.findIndex((task) => !task.title.trim())
+  if (emptyTaskIndex >= 0) {
+    await showFieldError(`planner-task-title-${emptyTaskIndex}`, `请填写第 ${emptyTaskIndex + 1} 项分工标题`, "需要填写标题")
     return
   }
   const lineLimitError = plannerTaskLineLimitMessage()
   if (lineLimitError) {
-    error.value = lineLimitError
+    await showFieldError("planner-task-details", lineLimitError, lineLimitError)
     return
   }
   syncPlannerTaskDetails()
@@ -1556,6 +1739,10 @@ function handlePopState() {
   }
   if (window.location.pathname !== path.value) clearItemReview()
   path.value = window.location.pathname
+  fieldErrors.value = {}
+  error.value = ""
+  showAllDetailActivities.value = false
+  if (feedback.value?.kind === "error") clearFeedback()
   syncCollaborationRefreshTimer()
   void loadRoute()
 }
@@ -1580,10 +1767,18 @@ onBeforeUnmount(() => {
   window.removeEventListener("focus", handleExecutionRefreshSignal)
   document.removeEventListener("visibilitychange", handleExecutionRefreshSignal)
   if (collaborationRefreshTimer !== undefined) window.clearInterval(collaborationRefreshTimer)
+  if (feedbackTimer !== undefined) window.clearTimeout(feedbackTimer)
 })
 </script>
 
 <template>
+  <div v-if="feedback" class="toast-layer" aria-label="操作提示">
+    <div class="toast-message" :class="`toast-${feedback.kind}`" :role="feedback.kind === 'error' ? 'alert' : 'status'" :aria-live="feedback.kind === 'error' ? 'assertive' : 'polite'">
+      <span>{{ feedback.message }}</span>
+      <button type="button" aria-label="关闭提示" @click="clearFeedback">×</button>
+    </div>
+  </div>
+
   <main v-if="path === '/login'" class="auth-shell">
     <form class="auth-form" @submit.prevent="submitLogin">
       <p class="brand">TARS BASE</p>
@@ -1601,8 +1796,6 @@ onBeforeUnmount(() => {
           required
         />
       </label>
-      <p v-if="error" class="message error" role="alert">{{ error }}</p>
-      <p v-if="notice" class="message success" role="status">{{ notice }}</p>
       <button class="primary" type="submit">登录</button>
     </form>
   </main>
@@ -1639,7 +1832,6 @@ onBeforeUnmount(() => {
               required
             />
           </label>
-          <p v-if="error" class="message error" role="alert">{{ error }}</p>
           <button class="primary" type="submit">激活账号</button>
         </form>
       </template>
@@ -1724,9 +1916,6 @@ onBeforeUnmount(() => {
     </div>
 
     <div v-else class="page">
-      <p v-if="error" class="message error" role="alert">{{ error }}</p>
-      <p v-if="notice" class="message success" role="status">{{ notice }}</p>
-
       <template v-if="routeNotFound">
         <section class="system-state">
           <span class="system-code">BASE / 404</span>
@@ -1954,11 +2143,25 @@ onBeforeUnmount(() => {
                 <div class="planner-fields">
                   <label>
                     事项标题
-                    <input v-model="plannerDraft.item.title" maxlength="200" />
+                    <input
+                      v-model="plannerDraft.item.title"
+                      data-validation-field="planner-item-title"
+                      :aria-invalid="Boolean(fieldErrors['planner-item-title'])"
+                      maxlength="200"
+                      @input="clearFieldError('planner-item-title')"
+                    />
+                    <small v-if="fieldErrors['planner-item-title']" class="field-error">{{ fieldErrors['planner-item-title'] }}</small>
                   </label>
                   <label>
                     截止时间
-                    <input v-model="plannerDraft.item.deadline" type="datetime-local" required />
+                    <input
+                      v-model="plannerDraft.item.deadline"
+                      data-validation-field="planner-item-deadline"
+                      :aria-invalid="Boolean(fieldErrors['planner-item-deadline'])"
+                      type="datetime-local"
+                      @input="clearFieldError('planner-item-deadline')"
+                    />
+                    <small v-if="fieldErrors['planner-item-deadline']" class="field-error">{{ fieldErrors['planner-item-deadline'] }}</small>
                   </label>
                 </div>
               </details>
@@ -2035,9 +2238,13 @@ onBeforeUnmount(() => {
                     ref="plannerDetailTitleInput"
                     v-model="plannerSelectedTask.title"
                     class="planner-task-title"
+                    :data-validation-field="`planner-task-title-${plannerSelectedTaskIndex}`"
+                    :aria-invalid="Boolean(fieldErrors[`planner-task-title-${plannerSelectedTaskIndex}`])"
                     maxlength="200"
                     aria-label="任务标题"
+                    @input="clearFieldError(`planner-task-title-${plannerSelectedTaskIndex}`)"
                   />
+                  <small v-if="fieldErrors[`planner-task-title-${plannerSelectedTaskIndex}`]" class="field-error">{{ fieldErrors[`planner-task-title-${plannerSelectedTaskIndex}`] }}</small>
                 </label>
                 <label class="planner-detail-deliverable">
                   做到什么算完成
@@ -2054,6 +2261,7 @@ onBeforeUnmount(() => {
                     <textarea
                       v-model="plannerTaskDetailsText[plannerSelectedTaskIndex].execution_points"
                       data-planner-detail-field="execution_points"
+                      data-validation-field="planner-execution-points"
                       rows="2"
                       maxlength="1600"
                       aria-label="怎么做，每行一条，最多 6 条"
@@ -2066,6 +2274,7 @@ onBeforeUnmount(() => {
                     <textarea
                       v-model="plannerTaskDetailsText[plannerSelectedTaskIndex].cautions"
                       data-planner-detail-field="cautions"
+                      data-validation-field="planner-cautions"
                       rows="2"
                       maxlength="1200"
                       aria-label="注意，每行一条，最多 5 条"
@@ -2084,6 +2293,7 @@ onBeforeUnmount(() => {
                   <textarea
                     v-model="plannerTaskDetailsText[plannerSelectedTaskIndex].prerequisites"
                     data-planner-detail-field="prerequisites"
+                    data-validation-field="planner-prerequisites"
                     rows="2"
                     maxlength="960"
                     aria-label="开始前需要，每行一条，最多 4 条"
@@ -2165,17 +2375,61 @@ onBeforeUnmount(() => {
 
           <section class="execution-section">
             <div class="section-heading review-section-heading">
-              <div class="review-section-title"><h2>当前信息</h2><span>{{ detailRoot.context_facts.length }} 条</span></div>
+              <div class="review-section-title"><h2>当前信息</h2><span>{{ detailRoot.item_facts.length }} 条</span></div>
             </div>
-            <div v-if="detailRoot.context_facts.length" class="fact-list">
-              <div v-for="(fact, index) in detailRoot.context_facts" :key="`${index}-${fact}`" class="fact-row">
-                <span>{{ fact }}</span>
-                <button v-if="canWriteDetailItem" type="button" @click="removeCurrentFact(index)">删除</button>
-              </div>
+            <div v-if="detailRoot.item_facts.length" class="fact-list">
+              <article v-for="fact in detailRoot.item_facts" :key="fact.id" class="fact-row fact-row-scoped">
+                <div class="fact-row-content">
+                  <p>{{ fact.content }}</p>
+                  <small>{{ factScopeDescription(fact) }}</small>
+                </div>
+                <div v-if="canManageFactScope && editingFactScopeId === fact.id" class="fact-scope-editor">
+                  <label>
+                    同步范围
+                    <select v-model="editingFactScope">
+                      <option value="global">整个事项都需要知道</option>
+                      <option value="related">只与部分分工相关</option>
+                    </select>
+                  </label>
+                  <fieldset v-if="editingFactScope === 'related'" class="fact-task-picker">
+                    <legend>相关分工</legend>
+                    <label v-for="task in detailChildren" :key="task.id" class="check-row">
+                      <input v-model="editingFactTaskIds" type="checkbox" :value="task.id" />
+                      {{ task.title }}
+                    </label>
+                  </fieldset>
+                  <div class="fact-scope-actions">
+                    <button type="button" @click="cancelFactScopeEdit">取消</button>
+                    <button class="primary small-action" type="button" :disabled="editingFactScope === 'related' && !editingFactTaskIds.length" @click="saveFactScope(fact.id)">保存范围</button>
+                  </div>
+                </div>
+                <div v-else-if="canManageFactScope" class="fact-row-actions">
+                  <button type="button" @click="beginFactScopeEdit(fact)">调整范围</button>
+                  <button type="button" @click="removeCurrentFact(fact.id)">移除</button>
+                </div>
+                <span v-else class="fact-scope-label">{{ fact.scope === 'global' ? '整个事项' : '与你的工作相关' }}</span>
+              </article>
             </div>
-            <form v-if="canWriteDetailItem" class="inline-entry" @submit.prevent="addCurrentFact">
-              <input v-model="itemFactDraft" maxlength="500" placeholder="新增一条当前信息" />
-              <button type="submit" :disabled="!itemFactDraft.trim()">＋ 添加</button>
+            <form v-if="canWriteDetailItem" class="scoped-fact-form" @submit.prevent="addCurrentFact">
+              <label>
+                新增一条当前信息
+                <input v-model="itemFactDraft" maxlength="500" placeholder="写下已经确认、后续执行需要知道的内容" />
+              </label>
+              <label>
+                同步范围
+                <select :value="itemFactScope" @change="toggleNewFactScope(($event.target as HTMLSelectElement).value as ItemFactScope)">
+                  <option value="global">整个事项都需要知道</option>
+                  <option value="related">只与部分分工相关</option>
+                </select>
+              </label>
+              <fieldset v-if="itemFactScope === 'related'" class="fact-task-picker">
+                <legend>相关分工</legend>
+                <label v-for="task in detailChildren" :key="task.id" class="check-row">
+                  <input v-model="itemFactRelatedTaskIds" type="checkbox" :value="task.id" />
+                  {{ task.title }}
+                </label>
+              </fieldset>
+              <button type="submit" :disabled="!itemFactDraft.trim() || (itemFactScope === 'related' && !itemFactRelatedTaskIds.length)">＋ 添加信息</button>
             </form>
           </section>
 
@@ -2200,13 +2454,18 @@ onBeforeUnmount(() => {
           <section class="execution-section">
             <div class="section-heading"><h2>最近进展</h2></div>
             <div v-if="itemActivities.length" class="activity-list">
-              <article v-for="activity in itemActivities" :key="activity.id" class="activity-row">
-                <time>{{ formatDate(activity.created_at) }}</time>
-                <strong v-if="activity.task_id" class="activity-source">{{ sourceTaskTitle(activity, tasks) }}</strong>
+              <article v-for="activity in visibleDetailActivities" :key="activity.id" class="activity-row">
+                <div class="activity-byline">
+                  <time>{{ formatDate(activity.created_at) }}</time>
+                  <small>{{ activity.author.name }}</small>
+                  <span v-if="activity.task_id" class="activity-source">{{ sourceTaskTitle(activity, tasks) }}</span>
+                </div>
                 <p>{{ activity.content }}</p>
-                <small>— {{ activity.author.name }}</small>
               </article>
             </div>
+            <button v-if="detailTaskActivities.length > 5" type="button" class="text-action activity-more" @click="showAllDetailActivities = !showAllDetailActivities">
+              {{ showAllDetailActivities ? '收起进展' : `查看全部 ${detailTaskActivities.length} 条进展` }}
+            </button>
             <form v-if="canWriteDetailItem" class="activity-entry" @submit.prevent="recordItemActivity">
               <textarea
                 v-model="itemActivityDraft"
@@ -2217,10 +2476,24 @@ onBeforeUnmount(() => {
               <div class="activity-entry-actions">
                 <label class="check-row">
                   <input v-model="itemActivityAddToFacts" type="checkbox" />
-                  同时同步到当前信息
+                  同时加入当前信息
                 </label>
-                <button class="primary" type="submit" :disabled="!itemActivityDraft.trim()">发布更新</button>
+                <label v-if="itemActivityAddToFacts" class="fact-scope-select">
+                  同步范围
+                  <select :value="itemActivityFactScope" @change="toggleActivityFactScope(($event.target as HTMLSelectElement).value as ItemFactScope)">
+                    <option value="global">整个事项都需要知道</option>
+                    <option value="related">只与部分分工相关</option>
+                  </select>
+                </label>
+                <button class="primary" type="submit" :disabled="!itemActivityDraft.trim() || (itemActivityAddToFacts && itemActivityFactScope === 'related' && !itemActivityRelatedTaskIds.length)">发布更新</button>
               </div>
+              <fieldset v-if="itemActivityAddToFacts && itemActivityFactScope === 'related'" class="fact-task-picker">
+                <legend>相关分工</legend>
+                <label v-for="task in detailChildren" :key="task.id" class="check-row">
+                  <input v-model="itemActivityRelatedTaskIds" type="checkbox" :value="task.id" />
+                  {{ task.title }}
+                </label>
+              </fieldset>
             </form>
           </section>
 
@@ -2273,7 +2546,7 @@ onBeforeUnmount(() => {
 
           <section class="execution-section shared-scene">
             <div class="section-heading shared-scene-heading">
-              <h2>事项最新信息</h2>
+              <h2>与你当前工作相关的信息</h2>
               <button type="button" class="text-action" @click="openTaskDetail(detailRoot)">查看全部事项信息 →</button>
             </div>
             <div v-if="detailProgress.total" class="shared-progress-line">
@@ -2282,7 +2555,10 @@ onBeforeUnmount(() => {
               <span v-if="detailProgress.blocked">{{ detailProgress.blocked }} 项等待前置任务</span>
             </div>
             <ul v-if="recentItemFacts.length" class="shared-facts-list">
-              <li v-for="(fact, index) in recentItemFacts" :key="`${index}-${fact}`">{{ fact }}</li>
+              <li v-for="fact in recentItemFacts" :key="fact.id">
+                <span>{{ fact.content }}</span>
+                <small>{{ fact.scope === 'global' ? '整个事项' : '相关分工' }}</small>
+              </li>
             </ul>
             <p v-else class="muted">暂时还没有新的确认信息。</p>
           </section>
@@ -2298,6 +2574,16 @@ onBeforeUnmount(() => {
           </section>
           <p v-else-if="detailTask.depends_on_tasks.length" class="dependency-cleared">前置任务已完成 ✓</p>
 
+          <section v-if="detailTask.deliverable" class="execution-section">
+            <div class="section-heading"><h2>做到什么算完成</h2></div>
+            <p class="execution-description">{{ detailTask.deliverable }}</p>
+          </section>
+
+          <section v-for="section in taskDetailSections(detailTask)" :key="section.title" class="execution-section">
+            <div class="section-heading"><h2>{{ section.title }}</h2></div>
+            <ul class="execution-list"><li v-for="item in section.items" :key="item">{{ item }}</li></ul>
+          </section>
+
           <section v-if="canPublishTaskProgress" class="execution-section progress-entry-section">
             <div class="section-heading"><h2>更新进展</h2></div>
             <form class="progress-entry" @submit.prevent="publishTaskProgress">
@@ -2310,40 +2596,68 @@ onBeforeUnmount(() => {
           </section>
 
           <section v-if="factExtractionLoading || factSuggestions.length" class="execution-section fact-suggestions-panel" aria-live="polite">
-            <div class="section-heading"><h2>可能需要同步给团队的信息</h2></div>
+            <div class="section-heading"><h2>发现可能需要同步的信息</h2></div>
             <p v-if="factExtractionLoading" class="muted">正在整理这次更新中的已确认信息…</p>
             <template v-else>
-              <p>请确认后再加入事项信息；系统不会自动写入。</p>
-              <label v-for="(suggestion, index) in factSuggestions" :key="`${index}-${suggestion.text}`" class="fact-suggestion-row">
-                <input v-model="selectedFactSuggestions" type="checkbox" :value="suggestion.text" />
-                <span>{{ suggestion.text }}<small>{{ suggestion.reason }}</small></span>
-              </label>
+              <p>AI 只提供建议。请确认内容与同步范围后再发布。</p>
+              <article v-for="(suggestion, index) in factSuggestions" :key="`${index}-${suggestion.text}`" class="fact-suggestion-card">
+                <label class="fact-suggestion-check">
+                  <input v-model="selectedFactSuggestions" type="checkbox" :value="suggestion.text" />
+                  <span>{{ suggestion.text }}<small>{{ suggestion.reason }}</small></span>
+                </label>
+                <label class="fact-scope-select">
+                  同步范围
+                  <select v-model="suggestion.scope" @change="ensureFactSuggestionTasks(index)">
+                    <option value="global">整个事项都需要知道</option>
+                    <option value="related">只与部分分工相关</option>
+                  </select>
+                </label>
+                <fieldset v-if="suggestion.scope === 'related'" class="fact-task-picker">
+                  <legend>选择相关分工</legend>
+                  <label v-for="task in detailChildren" :key="task.id" class="check-row">
+                    <input v-model="suggestion.related_task_ids" type="checkbox" :value="task.id" />
+                    {{ task.title }}
+                  </label>
+                </fieldset>
+                <div v-if="suggestion.supersedes_fact_id && detailTask.item_facts.some((fact) => fact.id === suggestion.supersedes_fact_id)" class="fact-replacement">
+                  <span>这条信息可能更新现有内容</span>
+                  <p>{{ detailTask.item_facts.find((fact) => fact.id === suggestion.supersedes_fact_id)?.content }}</p>
+                  <span aria-hidden="true">↓</span>
+                  <p>{{ suggestion.text }}</p>
+                  <label v-if="canManageFactScope" class="check-row">
+                    <input v-model="confirmedFactSupersessions" type="checkbox" :value="suggestion.text" />
+                    确认后用新信息替代旧信息
+                  </label>
+                  <small v-if="!canManageFactScope">替代旧信息需要管理者或事项负责人确认。</small>
+                </div>
+              </article>
               <div class="fact-suggestion-actions">
-                <button type="button" @click="dismissFactSuggestions">暂不加入</button>
-                <button class="primary" type="button" :disabled="!selectedFactSuggestions.length" @click="addSuggestedFactsToItem">加入事项信息</button>
+                <button type="button" @click="dismissFactSuggestions">不需要同步</button>
+                <button
+                  class="primary"
+                  type="button"
+                  :disabled="!selectedFactSuggestions.length || factSuggestions.some((suggestion) => selectedFactSuggestions.includes(suggestion.text) && suggestion.scope === 'related' && !suggestion.related_task_ids.length)"
+                  @click="addSuggestedFactsToItem"
+                >确认同步</button>
               </div>
             </template>
           </section>
 
-          <section v-if="detailTask.deliverable" class="execution-section">
-            <div class="section-heading"><h2>做到什么算完成</h2></div>
-            <p class="execution-description">{{ detailTask.deliverable }}</p>
-          </section>
-
-          <section v-for="section in taskDetailSections(detailTask)" :key="section.title" class="execution-section">
-            <div class="section-heading"><h2>{{ section.title }}</h2></div>
-            <ul class="execution-list"><li v-for="item in section.items" :key="item">{{ item }}</li></ul>
-          </section>
-
           <section v-if="detailTaskActivities.length" class="execution-section">
-            <div class="section-heading"><h2>这项分工的进展</h2></div>
+            <div class="section-heading"><h2>相关进展</h2></div>
             <div class="activity-list">
-              <article v-for="activity in detailTaskActivities" :key="activity.id" class="activity-row">
-                <time>{{ formatDate(activity.created_at) }}</time>
+              <article v-for="activity in visibleDetailActivities" :key="activity.id" class="activity-row">
+                <div class="activity-byline">
+                  <time>{{ formatDate(activity.created_at) }}</time>
+                  <small>{{ activity.author.name }}</small>
+                  <span v-if="activity.task_id" class="activity-source">{{ sourceTaskTitle(activity, tasks) }}</span>
+                </div>
                 <p>{{ activity.content }}</p>
-                <small>— {{ activity.author.name }}</small>
               </article>
             </div>
+            <button v-if="detailTaskActivities.length > 5" type="button" class="text-action activity-more" @click="showAllDetailActivities = !showAllDetailActivities">
+              {{ showAllDetailActivities ? '收起进展' : `查看全部 ${detailTaskActivities.length} 条进展` }}
+            </button>
           </section>
 
           <section class="execution-section">
@@ -2442,7 +2756,15 @@ onBeforeUnmount(() => {
 
           <label>
             要做什么？
-            <input v-model="taskTitle" maxlength="200" required placeholder="例如：现场摄影" />
+            <input
+              v-model="taskTitle"
+              data-validation-field="task-title"
+              :aria-invalid="Boolean(fieldErrors['task-title'])"
+              maxlength="200"
+              placeholder="例如：现场摄影"
+              @input="clearFieldError('task-title')"
+            />
+            <small v-if="fieldErrors['task-title']" class="field-error">{{ fieldErrors['task-title'] }}</small>
           </label>
 
           <fieldset>
@@ -2457,16 +2779,30 @@ onBeforeUnmount(() => {
                 待认领
               </label>
             </div>
-            <select v-if="taskOwnerMode === 'assigned'" v-model="taskOwnerId" required>
+            <select
+              v-if="taskOwnerMode === 'assigned'"
+              v-model="taskOwnerId"
+              data-validation-field="task-owner"
+              :aria-invalid="Boolean(fieldErrors['task-owner'])"
+              @change="clearFieldError('task-owner')"
+            >
               <option v-for="member in ownerOptions" :key="member.id" :value="member.id">
                 {{ member.name }}{{ activeMemberIds.has(member.id) ? "" : "（已停用）" }}
               </option>
             </select>
+            <small v-if="fieldErrors['task-owner']" class="field-error">{{ fieldErrors['task-owner'] }}</small>
           </fieldset>
 
           <label>
             截止时间
-            <input v-model="taskDeadline" type="datetime-local" required />
+            <input
+              v-model="taskDeadline"
+              data-validation-field="task-deadline"
+              :aria-invalid="Boolean(fieldErrors['task-deadline'])"
+              type="datetime-local"
+              @input="clearFieldError('task-deadline')"
+            />
+            <small v-if="fieldErrors['task-deadline']" class="field-error">{{ fieldErrors['task-deadline'] }}</small>
           </label>
 
           <details class="advanced-fields">
@@ -2486,11 +2822,13 @@ onBeforeUnmount(() => {
                 <h3>执行提示</h3>
                 <label>
                   怎么做（每行一条，最多 6 条）
-                  <textarea v-model="taskExecutionPointsText" rows="2" placeholder="写完成责任所需的关键步骤" />
+                  <textarea v-model="taskExecutionPointsText" data-validation-field="task-execution-points" rows="2" placeholder="写完成责任所需的关键步骤" />
+                  <small v-if="fieldErrors['task-execution-points']" class="field-error">{{ fieldErrors['task-execution-points'] }}</small>
                 </label>
                 <label v-if="taskCautionsText.trim() || taskCautionsOpen">
                   注意（每行一条，最多 5 条）
-                  <textarea v-model="taskCautionsText" rows="2" placeholder="只写与当前任务直接相关的提醒" />
+                  <textarea v-model="taskCautionsText" data-validation-field="task-cautions" rows="2" placeholder="只写与当前任务直接相关的提醒" />
+                  <small v-if="fieldErrors['task-cautions']" class="field-error">{{ fieldErrors['task-cautions'] }}</small>
                 </label>
                 <button v-else class="planner-add-detail" type="button" @click="taskCautionsOpen = true">＋ 添加注意</button>
               </section>
@@ -2498,7 +2836,8 @@ onBeforeUnmount(() => {
               <section v-if="parentTaskId !== null" class="task-edit-prerequisites">
                 <label v-if="taskPrerequisitesText.trim() || taskPrerequisitesOpen">
                   开始前需要（每行一条，最多 4 条）
-                  <textarea v-model="taskPrerequisitesText" rows="2" placeholder="只有缺少时任务就不能合理开始的条件" />
+                  <textarea v-model="taskPrerequisitesText" data-validation-field="task-prerequisites" rows="2" placeholder="只有缺少时任务就不能合理开始的条件" />
+                  <small v-if="fieldErrors['task-prerequisites']" class="field-error">{{ fieldErrors['task-prerequisites'] }}</small>
                 </label>
                 <button v-else class="planner-add-detail" type="button" @click="taskPrerequisitesOpen = true">＋ 添加开始条件</button>
               </section>

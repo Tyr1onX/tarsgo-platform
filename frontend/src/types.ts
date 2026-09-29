@@ -2,6 +2,7 @@ export type Role = "admin" | "manager" | "member"
 export type MemberStatus = "invited" | "active" | "disabled"
 export type TaskStatus = "todo" | "doing" | "done"
 export type TaskView = "mine" | "claimable" | "all"
+export type ItemFactScope = "global" | "related"
 
 export interface Member {
   id: number
@@ -25,6 +26,7 @@ export interface Task {
   execution_points: string[]
   cautions: string[]
   prerequisites: string[]
+  item_facts: ItemFact[]
   context_facts: string[]
   result: string
   owner: MemberSummary | null
@@ -56,6 +58,26 @@ export interface ItemActivity {
   created_at: string
 }
 
+export interface ItemFact {
+  id: number
+  root_task_id: number
+  content: string
+  scope: ItemFactScope
+  related_tasks: Array<{ id: number; title: string }>
+  source_activity_id: number | null
+  created_by: MemberSummary
+  created_at: string
+  superseded_by_id: number | null
+}
+
+export interface ItemFactInput {
+  content: string
+  scope: ItemFactScope
+  related_task_ids: number[]
+  source_activity_id?: number | null
+  supersedes_fact_id?: number | null
+}
+
 export interface TaskProgressResult {
   task: Task
   activity: ItemActivity
@@ -64,6 +86,9 @@ export interface TaskProgressResult {
 export interface AIItemFactSuggestion {
   text: string
   reason: string
+  scope: ItemFactScope
+  related_task_ids: number[]
+  supersedes_fact_id: number | null
 }
 
 export interface AIItemFactExtractionResult {

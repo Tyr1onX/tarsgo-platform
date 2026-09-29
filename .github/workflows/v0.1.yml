@@ -73,6 +73,11 @@ jobs:
           VALUES
             (100, '旧版任务', '旧版交付', 101, '2026-09-20 18:00:00', 'todo', 100);
           SQL
+          docker compose exec -T -e DB_NAME="$MIGRATION_DB" api alembic upgrade 0006_dynamic_item_execution
+          docker compose exec -T db mysql -uroot -p"$CI_MYSQL_ROOT_PASSWORD" tarsgo_migration -e "
+            INSERT INTO item_activities (root_task_id, author_id, content)
+            VALUES (100, 100, 'legacy activity stays unlinked');
+          "
           docker compose exec -T -e DB_NAME="$MIGRATION_DB" api alembic upgrade head
           RESULT="$(docker compose exec -T db mysql -uroot -p"$CI_MYSQL_ROOT_PASSWORD" -N -B tarsgo_migration -e "
             SELECT CONCAT(
@@ -85,11 +90,14 @@ jobs:
               JSON_LENGTH(cautions), '|',
               JSON_LENGTH(prerequisites), '|',
               JSON_LENGTH(context_facts), '|',
-              CHAR_LENGTH(result)
+              CHAR_LENGTH(result), '|',
+              (SELECT IF(task_id IS NULL, 'NULL', task_id) FROM item_activities WHERE content = 'legacy activity stays unlinked'), '|',
+              (SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'tarsgo_migration' AND table_name = 'task_dependencies'), '|',
+              (SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = 'tarsgo_migration' AND table_name = 'item_activities' AND column_name = 'task_id')
             )
             FROM tasks WHERE id = 100;
           ")"
-          test "$RESULT" = "101|NULL|0|0|旧版交付|0|0|0|0|0"
+          test "$RESULT" = "101|NULL|0|0|旧版交付|0|0|0|0|0|NULL|1|1"
           docker compose exec -T db mysql -uroot -p"$CI_MYSQL_ROOT_PASSWORD" -e "DROP DATABASE tarsgo_migration;"
 
       - name: Create initial administrator
@@ -117,6 +125,9 @@ jobs:
 
       - name: Verify V0.2 workflow
         run: python scripts/smoke_test.py workflow http://127.0.0.1
+
+      - name: Verify shared execution scene
+        run: docker compose exec -T api python -m tests.test_shared_execution
 
       - name: Verify AI planner
         run: docker compose exec -T api python -m tests.test_ai_planner

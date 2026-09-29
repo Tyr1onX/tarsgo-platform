@@ -4,12 +4,20 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue"
 import { ApiError, api } from "./api"
 import { filterIgnoredPlannerSuggestions, ignorePlannerSuggestion, plannerSuggestionJoinInstruction } from "./plannerSuggestions.js"
 import { itemReviewChanges, removeItemReviewSuggestion } from "./itemReview.js"
+import {
+  defaultFactSelection,
+  executionSummary,
+  isCurrentFactSuggestionRequest,
+  preserveEditableDraft,
+  sourceTaskTitle,
+} from "./execution.js"
 import type {
   AIPlannerDraft,
   AIPlannerExtractedFile,
   AIPlannerSuggestionDraft,
   AIPlannerTaskDraft,
   AIItemReviewSuggestion,
+  AIItemFactSuggestion,
   InvitationInfo,
   InviteResult,
   ItemActivity,
@@ -80,11 +88,23 @@ const itemActivityDraft = ref("")
 const itemActivityAddToFacts = ref(false)
 const itemFactDraft = ref("")
 const taskResultDraft = ref("")
+const taskProgressDraft = ref("")
+const taskCompletionDraft = ref("")
+const taskCompletionSync = ref(false)
+const taskProgressSaving = ref(false)
+const taskCompletionSaving = ref(false)
+const factExtractionLoading = ref(false)
+const factSuggestions = ref<AIItemFactSuggestion[]>([])
+const selectedFactSuggestions = ref<string[]>([])
 const itemReviewSummary = ref("")
 const itemReviewSuggestions = ref<{ key: string; suggestion: AIItemReviewSuggestion }[]>([])
 const itemReviewLoading = ref(false)
 const itemReviewApplyingKey = ref("")
 let itemReviewEpoch = 0
+let factExtractionEpoch = 0
+let collaborationRefreshTimer: number | undefined
+let collaborationRefreshInFlight = false
+let lastCollaborationRefreshAt = 0
 
 const memberName = ref("")
 const memberEmail = ref("")
@@ -107,6 +127,7 @@ const taskCollaboratorIds = ref<number[]>([])
 const taskCollaborationOpen = ref(false)
 const taskDeadline = ref("")
 const taskStatus = ref<TaskStatus>("todo")
+const taskDependencyIds = ref<number[]>([])
 
 const isAdmin = computed(() => user.value?.role === "admin")
 const isManager = computed(
@@ -150,6 +171,11 @@ const detailRoot = computed(() => {
 const detailChildren = computed(() =>
   detailRoot.value ? tasks.value.filter((task) => task.parent_id === detailRoot.value?.id) : [],
 )
+const detailProgress = computed(() => executionSummary(detailChildren.value))
+const recentItemFacts = computed(() => [...(detailRoot.value?.context_facts ?? [])].slice(-4).reverse())
+const detailTaskActivities = computed(() =>
+  itemActivities.value.filter((activity) => activity.task_id === detailTask.value?.id),
+)
 const canWriteDetailItem = computed(() => {
   const root = detailRoot.value
   const currentId = user.value?.id
@@ -160,7 +186,24 @@ const canWriteDetailItem = computed(() => {
   )
 })
 const canEditDetailResult = computed(
-  () => Boolean(detailTask.value && (isManager.value || detailTask.value.owner?.id === user.value?.id)),
+  () => Boolean(detailTask.value && isManager.value),
+)
+const canPublishTaskProgress = computed(() => {
+  const task = detailTask.value
+  const currentId = user.value?.id
+  return Boolean(
+    task && task.parent_id !== null && task.status !== "done" && !task.blocked && currentId &&
+    (isManager.value || task.owner?.id === currentId || task.collaborators.some((person) => person.id === currentId)),
+  )
+})
+const canCompleteDetailTask = computed(() =>
+  Boolean(detailTask.value && detailTask.value.parent_id !== null && detailTask.value.status !== "done" && !detailTask.value.blocked &&
+    (isManager.value || detailTask.value.owner?.id === user.value?.id)),
+)
+const availableDependencyTasks = computed(() =>
+  parentTaskId.value === null
+    ? []
+    : tasks.value.filter((task) => task.parent_id === parentTaskId.value && task.id !== editingTaskId.value),
 )
 
 const homeOpenTasks = computed(() => homeMineTasks.value.filter((task) => task.status !== "done"))
@@ -213,11 +256,20 @@ function messageOf(reason: unknown): string {
 
 function navigate(nextPath: string) {
   const nextRoute = nextPath.split("?")[0]
+  const wasTaskDetail = /^\/tasks\/\d+$/.test(path.value)
+  const isNextTaskDetail = /^\/tasks\/\d+$/.test(nextRoute)
+  if (path.value !== nextRoute && (wasTaskDetail || isNextTaskDetail)) {
+    clearFactSuggestions()
+    taskProgressDraft.value = ""
+    taskCompletionDraft.value = ""
+    taskCompletionSync.value = false
+  }
   if (taskDetailId.value !== null && nextRoute !== path.value) clearItemReview()
   if (window.location.pathname + window.location.search !== nextPath) {
     window.history.pushState({}, "", nextPath)
   }
   path.value = window.location.pathname
+  syncCollaborationRefreshTimer()
   error.value = ""
   void loadRoute()
 }
@@ -227,6 +279,64 @@ function clearItemReview() {
   itemReviewSummary.value = ""
   itemReviewSuggestions.value = []
   itemReviewApplyingKey.value = ""
+}
+
+function clearFactSuggestions() {
+  factExtractionEpoch += 1
+  factSuggestions.value = []
+  selectedFactSuggestions.value = []
+  factExtractionLoading.value = false
+}
+
+async function refreshExecutionScene(force = false) {
+  const taskId = taskDetailId.value
+  const selected = detailTask.value
+  if (taskId === null || !selected || document.visibilityState !== "visible" || collaborationRefreshInFlight) return
+  const now = Date.now()
+  if (!force && now - lastCollaborationRefreshAt < 2_000) return
+  lastCollaborationRefreshAt = now
+  collaborationRefreshInFlight = true
+  const routeAtStart = path.value
+  const rootId = selected.parent_id ?? selected.id
+  try {
+    const [freshTasks, freshActivities] = await Promise.all([
+      api.tasks("all"),
+      api.itemActivities(rootId),
+    ])
+    if (path.value !== routeAtStart || taskDetailId.value !== taskId) return
+    const previousTask = tasks.value.find((task) => task.id === taskId)
+    const resultDraftDirty = Boolean(previousTask && taskResultDraft.value !== (previousTask.result ?? ""))
+    tasks.value = freshTasks
+    const refreshedTask = freshTasks.find((task) => task.id === taskId)
+    if (refreshedTask) {
+      taskResultDraft.value = preserveEditableDraft(
+        taskResultDraft.value,
+        refreshedTask.result ?? "",
+        resultDraftDirty,
+      )
+    }
+    itemActivities.value = freshActivities
+  } catch {
+    // Background refresh is best effort; preserve the current view and draft text.
+  } finally {
+    collaborationRefreshInFlight = false
+  }
+}
+
+function handleExecutionRefreshSignal() {
+  void refreshExecutionScene()
+}
+
+function syncCollaborationRefreshTimer() {
+  if (collaborationRefreshTimer !== undefined) {
+    window.clearInterval(collaborationRefreshTimer)
+    collaborationRefreshTimer = undefined
+  }
+  if (/^\/tasks\/\d+$/.test(path.value)) {
+    collaborationRefreshTimer = window.setInterval(() => {
+      void refreshExecutionScene()
+    }, 60_000)
+  }
 }
 
 async function reviewCurrentItemPlan() {
@@ -368,6 +478,7 @@ function resetTaskForm() {
   taskCollaborationOpen.value = false
   taskDeadline.value = ""
   taskStatus.value = "todo"
+  taskDependencyIds.value = []
 }
 
 function closeTaskForm() {
@@ -409,6 +520,7 @@ function editTask(task: Task) {
   taskCollaborationOpen.value = task.collaboration_open
   taskDeadline.value = toLocalInput(task.deadline)
   taskStatus.value = task.status
+  taskDependencyIds.value = task.depends_on_tasks.map((dependency) => dependency.id)
   window.scrollTo({ top: 0, behavior: "smooth" })
 }
 
@@ -681,6 +793,9 @@ async function submitTask() {
         payload.deadline = taskDeadline.value
       }
       if (taskStatus.value !== original.status) payload.status = taskStatus.value
+      if (!sameIds(taskDependencyIds.value, original.depends_on_tasks.map((dependency) => dependency.id))) {
+        payload.depends_on_task_ids = taskDependencyIds.value
+      }
 
       const originalActiveCollaborators = original.collaborators
         .filter((member) => activeMemberIds.value.has(member.id))
@@ -706,6 +821,7 @@ async function submitTask() {
         collaboration_open: taskCollaborationOpen.value,
         deadline: taskDeadline.value,
         status: taskStatus.value,
+        depends_on_task_ids: taskDependencyIds.value,
       })
     }
 
@@ -801,6 +917,94 @@ async function saveTaskResult() {
     await loadRoute()
   } catch (reason) {
     error.value = messageOf(reason)
+  }
+}
+
+async function publishTaskProgress() {
+  const task = detailTask.value
+  const content = taskProgressDraft.value.trim()
+  if (!task || !content || !canPublishTaskProgress.value || taskProgressSaving.value) return
+  error.value = ""
+  clearFactSuggestions()
+  taskProgressSaving.value = true
+  const epoch = factExtractionEpoch
+  try {
+    const published = await api.publishTaskProgress(task.id, content)
+    taskProgressDraft.value = ""
+    clearItemReview()
+    notice.value = "进展已发布"
+    await refreshExecutionScene(true)
+
+    if (isCurrentFactSuggestionRequest(task.id, taskDetailId.value, epoch, factExtractionEpoch)) {
+      factExtractionLoading.value = true
+    }
+    try {
+      const extracted = await api.extractActivityFacts(published.task.parent_id as number, published.activity.id)
+      if (isCurrentFactSuggestionRequest(task.id, taskDetailId.value, epoch, factExtractionEpoch)) {
+        factSuggestions.value = extracted.suggestions
+        selectedFactSuggestions.value = defaultFactSelection(extracted.suggestions)
+        if (extracted.suggestions.length) {
+          notice.value = `进展已发布，有 ${extracted.suggestions.length} 条信息可能需要同步给团队`
+        }
+      }
+    } catch {
+      if (isCurrentFactSuggestionRequest(task.id, taskDetailId.value, epoch, factExtractionEpoch)) {
+        notice.value = "进展已发布，暂时无法提取可同步信息"
+      }
+    } finally {
+      if (isCurrentFactSuggestionRequest(task.id, taskDetailId.value, epoch, factExtractionEpoch)) {
+        factExtractionLoading.value = false
+      }
+    }
+  } catch (reason) {
+    error.value = messageOf(reason)
+  } finally {
+    taskProgressSaving.value = false
+  }
+}
+
+async function addSuggestedFactsToItem() {
+  const root = detailRoot.value
+  const chosen = selectedFactSuggestions.value
+  if (!root || !chosen.length || !canWriteDetailItem.value) return
+  error.value = ""
+  try {
+    await api.addContextFactsBatch(root.id, chosen)
+    clearFactSuggestions()
+    clearItemReview()
+    notice.value = "已将确认信息同步给整个事项"
+    await refreshExecutionScene(true)
+  } catch (reason) {
+    error.value = messageOf(reason)
+  }
+}
+
+function dismissFactSuggestions() {
+  clearFactSuggestions()
+}
+
+async function completeDetailTask() {
+  const task = detailTask.value
+  const result = taskCompletionDraft.value.trim()
+  if (!task || !result || !canCompleteDetailTask.value || taskCompletionSaving.value) return
+  if (taskCompletionSync.value && result.length > 500) {
+    error.value = "同步到事项信息的最终结果最多 500 字。"
+    return
+  }
+  error.value = ""
+  taskCompletionSaving.value = true
+  try {
+    await api.completeTask(task.id, result, taskCompletionSync.value)
+    taskCompletionDraft.value = ""
+    taskCompletionSync.value = false
+    clearFactSuggestions()
+    clearItemReview()
+    notice.value = "任务已完成"
+    await refreshExecutionScene(true)
+  } catch (reason) {
+    error.value = messageOf(reason)
+  } finally {
+    taskCompletionSaving.value = false
   }
 }
 
@@ -1343,25 +1547,39 @@ async function logout() {
 }
 
 function handlePopState() {
+  const nextPath = window.location.pathname
+  if (path.value !== nextPath && (/^\/tasks\/\d+$/.test(path.value) || /^\/tasks\/\d+$/.test(nextPath))) {
+    clearFactSuggestions()
+    taskProgressDraft.value = ""
+    taskCompletionDraft.value = ""
+    taskCompletionSync.value = false
+  }
   if (window.location.pathname !== path.value) clearItemReview()
   path.value = window.location.pathname
+  syncCollaborationRefreshTimer()
   void loadRoute()
 }
 
 onMounted(async () => {
   window.addEventListener("popstate", handlePopState)
   window.addEventListener("keydown", handlePlannerDetailKeydown)
+  window.addEventListener("focus", handleExecutionRefreshSignal)
+  document.addEventListener("visibilitychange", handleExecutionRefreshSignal)
   try {
     await loadCurrentUser()
   } catch (reason) {
     error.value = messageOf(reason)
   }
   await loadRoute()
+  syncCollaborationRefreshTimer()
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener("popstate", handlePopState)
   window.removeEventListener("keydown", handlePlannerDetailKeydown)
+  window.removeEventListener("focus", handleExecutionRefreshSignal)
+  document.removeEventListener("visibilitychange", handleExecutionRefreshSignal)
+  if (collaborationRefreshTimer !== undefined) window.clearInterval(collaborationRefreshTimer)
 })
 </script>
 
@@ -1934,16 +2152,20 @@ onBeforeUnmount(() => {
             </div>
           </section>
 
+          <section v-if="detailChildren.length" class="execution-section progress-summary">
+            <div class="progress-summary-heading">
+              <strong>{{ detailProgress.label }}</strong>
+              <span>{{ detailProgress.detail || "所有分工已完成" }}</span>
+            </div>
+            <div class="progress-track" role="progressbar" :aria-valuenow="detailProgress.done" :aria-valuemax="detailProgress.total" aria-label="事项完成分工数">
+              <span :style="{ width: `${Math.round(detailProgress.done / detailProgress.total * 100)}%` }" />
+            </div>
+            <small v-if="detailProgress.blocked">{{ detailProgress.blocked }} 项等待前置任务</small>
+          </section>
+
           <section class="execution-section">
             <div class="section-heading review-section-heading">
-              <div class="review-section-title"><h2>当前已知</h2><span>{{ detailRoot.context_facts.length }} 条</span></div>
-              <button
-                v-if="aiPlannerAvailable && detailTask.parent_id === null"
-                class="review-trigger"
-                type="button"
-                :disabled="itemReviewLoading"
-                @click="reviewCurrentItemPlan"
-              >{{ itemReviewLoading ? "正在检查…" : "让 AI 检查方案" }}</button>
+              <div class="review-section-title"><h2>当前信息</h2><span>{{ detailRoot.context_facts.length }} 条</span></div>
             </div>
             <div v-if="detailRoot.context_facts.length" class="fact-list">
               <div v-for="(fact, index) in detailRoot.context_facts" :key="`${index}-${fact}`" class="fact-row">
@@ -1952,63 +2174,9 @@ onBeforeUnmount(() => {
               </div>
             </div>
             <form v-if="canWriteDetailItem" class="inline-entry" @submit.prevent="addCurrentFact">
-              <input v-model="itemFactDraft" maxlength="500" placeholder="新增一条已确认信息" />
+              <input v-model="itemFactDraft" maxlength="500" placeholder="新增一条当前信息" />
               <button type="submit" :disabled="!itemFactDraft.trim()">＋ 添加</button>
             </form>
-
-            <section v-if="itemReviewSummary" class="ai-review-panel" aria-live="polite">
-              <div class="ai-review-heading">
-                <div>
-                  <span class="eyebrow">AI 检查结果</span>
-                  <p>{{ itemReviewSummary }}</p>
-                </div>
-                <span class="ai-review-count">{{ itemReviewSuggestions.length }} 条建议</span>
-              </div>
-              <p v-if="!itemReviewSuggestions.length" class="ai-review-empty">当前方案暂未发现需要调整的地方</p>
-              <article v-for="entry in itemReviewSuggestions" :key="entry.key" class="ai-review-card">
-                <div class="ai-review-card-heading">
-                  <span class="eyebrow">{{ entry.suggestion.kind === "add_task" ? "新增任务" : "调整现有任务" }}</span>
-                  <h3>
-                    {{ entry.suggestion.kind === "add_task"
-                      ? entry.suggestion.proposed_task.title
-                      : detailChildren.find((task) => task.id === entry.suggestion.target_task_id)?.title ?? entry.suggestion.proposed_task.title }}
-                  </h3>
-                </div>
-                <p class="ai-review-reason"><strong>原因</strong>{{ entry.suggestion.reason }}</p>
-                <div v-if="entry.suggestion.kind === 'update_task'" class="ai-review-diffs">
-                  <div v-for="change in changesForReviewSuggestion(entry.suggestion)" :key="change.field" class="ai-review-diff">
-                    <strong>{{ change.label }}</strong>
-                    <div class="ai-review-values">
-                      <p class="ai-review-before">{{ change.before }}</p>
-                      <span aria-hidden="true">→</span>
-                      <p>{{ change.after }}</p>
-                    </div>
-                  </div>
-                </div>
-                <div v-else class="ai-review-proposal">
-                  <div v-if="entry.suggestion.proposed_task.deliverable">
-                    <strong>做到什么算完成</strong>
-                    <p>{{ entry.suggestion.proposed_task.deliverable }}</p>
-                  </div>
-                  <div v-for="section in reviewProposalSections" :key="section.field">
-                    <template v-if="entry.suggestion.proposed_task[section.field].length">
-                      <strong>{{ section.label }}</strong>
-                      <ul><li v-for="value in entry.suggestion.proposed_task[section.field]" :key="value">{{ value }}</li></ul>
-                    </template>
-                  </div>
-                </div>
-                <div class="ai-review-actions">
-                  <button type="button" @click="dismissItemReviewSuggestion(entry.key)">忽略</button>
-                  <button
-                    v-if="isManager"
-                    class="primary small-action"
-                    type="button"
-                    :disabled="Boolean(itemReviewApplyingKey)"
-                    @click="applyItemReviewSuggestion(entry)"
-                  >{{ itemReviewApplyingKey === entry.key ? "正在应用…" : "应用" }}</button>
-                </div>
-              </article>
-            </section>
           </section>
 
           <section class="execution-section">
@@ -2021,6 +2189,7 @@ onBeforeUnmount(() => {
                 <span class="state">{{ statusLabels[task.status] }}</span>
                 <strong>{{ task.title }}</strong>
                 <span v-if="task.deliverable">{{ task.deliverable }}</span>
+                <small v-if="task.blocked" class="blocked-inline">等待：{{ task.blocked_by.map((dependency) => dependency.title).join("、") }}</small>
                 <small>{{ task.owner ? task.owner.name + " 负责" : "待认领" }} · {{ formatDate(task.deadline) }}</small>
                 <span class="home-task-arrow" aria-hidden="true">›</span>
               </button>
@@ -2029,10 +2198,11 @@ onBeforeUnmount(() => {
           </section>
 
           <section class="execution-section">
-            <div class="section-heading"><h2>最近动态</h2></div>
+            <div class="section-heading"><h2>最近进展</h2></div>
             <div v-if="itemActivities.length" class="activity-list">
               <article v-for="activity in itemActivities" :key="activity.id" class="activity-row">
                 <time>{{ formatDate(activity.created_at) }}</time>
+                <strong v-if="activity.task_id" class="activity-source">{{ sourceTaskTitle(activity, tasks) }}</strong>
                 <p>{{ activity.content }}</p>
                 <small>— {{ activity.author.name }}</small>
               </article>
@@ -2047,11 +2217,47 @@ onBeforeUnmount(() => {
               <div class="activity-entry-actions">
                 <label class="check-row">
                   <input v-model="itemActivityAddToFacts" type="checkbox" />
-                  同时加入当前已知信息
+                  同时同步到当前信息
                 </label>
-                <button class="primary" type="submit" :disabled="!itemActivityDraft.trim()">记录</button>
+                <button class="primary" type="submit" :disabled="!itemActivityDraft.trim()">发布更新</button>
               </div>
             </form>
+          </section>
+
+          <section v-if="aiPlannerAvailable" class="execution-section ai-review-section">
+            <div class="section-heading">
+              <h2>方案检查</h2>
+              <button class="review-trigger" type="button" :disabled="itemReviewLoading" @click="reviewCurrentItemPlan">
+                {{ itemReviewLoading ? "正在检查…" : "让 AI 检查方案" }}
+              </button>
+            </div>
+            <section v-if="itemReviewSummary" class="ai-review-panel" aria-live="polite">
+              <div class="ai-review-heading">
+                <div><span class="eyebrow">AI 检查结果</span><p>{{ itemReviewSummary }}</p></div>
+                <span class="ai-review-count">{{ itemReviewSuggestions.length }} 条建议</span>
+              </div>
+              <p v-if="!itemReviewSuggestions.length" class="ai-review-empty">当前方案暂未发现需要调整的地方</p>
+              <article v-for="entry in itemReviewSuggestions" :key="entry.key" class="ai-review-card">
+                <div class="ai-review-card-heading">
+                  <span class="eyebrow">{{ entry.suggestion.kind === "add_task" ? "新增任务" : "调整现有任务" }}</span>
+                  <h3>{{ entry.suggestion.kind === "add_task" ? entry.suggestion.proposed_task.title : detailChildren.find((task) => task.id === entry.suggestion.target_task_id)?.title ?? entry.suggestion.proposed_task.title }}</h3>
+                </div>
+                <p class="ai-review-reason"><strong>原因</strong>{{ entry.suggestion.reason }}</p>
+                <div v-if="entry.suggestion.kind === 'update_task'" class="ai-review-diffs">
+                  <div v-for="change in changesForReviewSuggestion(entry.suggestion)" :key="change.field" class="ai-review-diff">
+                    <strong>{{ change.label }}</strong><div class="ai-review-values"><p class="ai-review-before">{{ change.before }}</p><span aria-hidden="true">→</span><p>{{ change.after }}</p></div>
+                  </div>
+                </div>
+                <div v-else class="ai-review-proposal">
+                  <div v-if="entry.suggestion.proposed_task.deliverable"><strong>做到什么算完成</strong><p>{{ entry.suggestion.proposed_task.deliverable }}</p></div>
+                  <div v-for="section in reviewProposalSections" :key="section.field"><template v-if="entry.suggestion.proposed_task[section.field].length"><strong>{{ section.label }}</strong><ul><li v-for="value in entry.suggestion.proposed_task[section.field]" :key="value">{{ value }}</li></ul></template></div>
+                </div>
+                <div class="ai-review-actions">
+                  <button type="button" @click="dismissItemReviewSuggestion(entry.key)">忽略</button>
+                  <button v-if="isManager" class="primary small-action" type="button" :disabled="Boolean(itemReviewApplyingKey)" @click="applyItemReviewSuggestion(entry)">{{ itemReviewApplyingKey === entry.key ? "正在应用…" : "应用" }}</button>
+                </div>
+              </article>
+            </section>
           </section>
         </template>
 
@@ -2065,6 +2271,60 @@ onBeforeUnmount(() => {
             </div>
           </section>
 
+          <section class="execution-section shared-scene">
+            <div class="section-heading shared-scene-heading">
+              <h2>事项最新信息</h2>
+              <button type="button" class="text-action" @click="openTaskDetail(detailRoot)">查看全部事项信息 →</button>
+            </div>
+            <div v-if="detailProgress.total" class="shared-progress-line">
+              <strong>{{ detailProgress.label }}</strong>
+              <span>{{ detailProgress.detail || "所有分工已完成" }}</span>
+              <span v-if="detailProgress.blocked">{{ detailProgress.blocked }} 项等待前置任务</span>
+            </div>
+            <ul v-if="recentItemFacts.length" class="shared-facts-list">
+              <li v-for="(fact, index) in recentItemFacts" :key="`${index}-${fact}`">{{ fact }}</li>
+            </ul>
+            <p v-else class="muted">暂时还没有新的确认信息。</p>
+          </section>
+
+          <section v-if="detailTask.blocked" class="execution-section dependency-state">
+            <div class="section-heading"><h2>等待前置任务</h2></div>
+            <ul>
+              <li v-for="dependency in detailTask.blocked_by" :key="dependency.id">
+                <span>{{ dependency.title }}</span>
+                <small>{{ dependency.owner ? `${dependency.owner.name} 负责` : "待认领" }} · {{ statusLabels[dependency.status] }}</small>
+              </li>
+            </ul>
+          </section>
+          <p v-else-if="detailTask.depends_on_tasks.length" class="dependency-cleared">前置任务已完成 ✓</p>
+
+          <section v-if="canPublishTaskProgress" class="execution-section progress-entry-section">
+            <div class="section-heading"><h2>更新进展</h2></div>
+            <form class="progress-entry" @submit.prevent="publishTaskProgress">
+              <label for="task-progress-draft">刚刚发生了什么？</label>
+              <textarea id="task-progress-draft" v-model="taskProgressDraft" maxlength="2000" rows="3" placeholder="例如：已经联系对方老师，目前等回复。" />
+              <button class="primary" type="submit" :disabled="!taskProgressDraft.trim() || taskProgressSaving">
+                {{ taskProgressSaving ? "正在发布…" : "发布更新" }}
+              </button>
+            </form>
+          </section>
+
+          <section v-if="factExtractionLoading || factSuggestions.length" class="execution-section fact-suggestions-panel" aria-live="polite">
+            <div class="section-heading"><h2>可能需要同步给团队的信息</h2></div>
+            <p v-if="factExtractionLoading" class="muted">正在整理这次更新中的已确认信息…</p>
+            <template v-else>
+              <p>请确认后再加入事项信息；系统不会自动写入。</p>
+              <label v-for="(suggestion, index) in factSuggestions" :key="`${index}-${suggestion.text}`" class="fact-suggestion-row">
+                <input v-model="selectedFactSuggestions" type="checkbox" :value="suggestion.text" />
+                <span>{{ suggestion.text }}<small>{{ suggestion.reason }}</small></span>
+              </label>
+              <div class="fact-suggestion-actions">
+                <button type="button" @click="dismissFactSuggestions">暂不加入</button>
+                <button class="primary" type="button" :disabled="!selectedFactSuggestions.length" @click="addSuggestedFactsToItem">加入事项信息</button>
+              </div>
+            </template>
+          </section>
+
           <section v-if="detailTask.deliverable" class="execution-section">
             <div class="section-heading"><h2>做到什么算完成</h2></div>
             <p class="execution-description">{{ detailTask.deliverable }}</p>
@@ -2075,21 +2335,42 @@ onBeforeUnmount(() => {
             <ul class="execution-list"><li v-for="item in section.items" :key="item">{{ item }}</li></ul>
           </section>
 
+          <section v-if="detailTaskActivities.length" class="execution-section">
+            <div class="section-heading"><h2>这项分工的进展</h2></div>
+            <div class="activity-list">
+              <article v-for="activity in detailTaskActivities" :key="activity.id" class="activity-row">
+                <time>{{ formatDate(activity.created_at) }}</time>
+                <p>{{ activity.content }}</p>
+                <small>— {{ activity.author.name }}</small>
+              </article>
+            </div>
+          </section>
+
           <section class="execution-section">
-            <div class="section-heading"><h2>实际结果</h2></div>
+            <div class="section-heading"><h2>最终结果</h2></div>
             <template v-if="canEditDetailResult">
               <textarea v-model="taskResultDraft" maxlength="5000" rows="5" placeholder="记录实际完成后得到的结果" />
               <div class="result-actions">
                 <button class="primary" type="button" @click="saveTaskResult">保存结果</button>
-                <button
-                  v-if="detailTask.result && canWriteDetailItem"
-                  type="button"
-                  @click="addResultToContext"
-                >加入事项信息</button>
               </div>
             </template>
             <p v-else-if="detailTask.result" class="execution-description">{{ detailTask.result }}</p>
             <p v-else class="muted">暂未记录执行结果。</p>
+          </section>
+
+          <section v-if="canCompleteDetailTask" class="execution-section complete-task-section">
+            <div class="section-heading"><h2>完成任务</h2></div>
+            <form class="progress-entry" @submit.prevent="completeDetailTask">
+              <label for="task-completion-result">最终结果</label>
+              <textarea id="task-completion-result" v-model="taskCompletionDraft" maxlength="5000" rows="3" required placeholder="写下最终完成结果" />
+              <label class="check-row">
+                <input v-model="taskCompletionSync" type="checkbox" />
+                将最终确认信息同步给整个事项（最多 500 字）
+              </label>
+              <button class="primary" type="submit" :disabled="!taskCompletionDraft.trim() || taskCompletionSaving">
+                {{ taskCompletionSaving ? "正在完成…" : "完成任务" }}
+              </button>
+            </form>
           </section>
 
           <section class="execution-section task-detail-actions">
@@ -2116,7 +2397,7 @@ onBeforeUnmount(() => {
                 @click="leaveTask(detailTask)"
               >退出协作</button>
             </div>
-            <div v-if="detailTask.owner?.id === user?.id" class="status-actions">
+            <div v-if="isManager" class="status-actions">
               <button
                 v-for="value in (['todo', 'doing', 'done'] as TaskStatus[])"
                 :key="value"
@@ -2222,6 +2503,15 @@ onBeforeUnmount(() => {
                 <button v-else class="planner-add-detail" type="button" @click="taskPrerequisitesOpen = true">＋ 添加开始条件</button>
               </section>
 
+              <fieldset v-if="parentTaskId !== null" class="dependency-edit-list">
+                <legend>等待哪些分工（可选）</legend>
+                <label v-for="dependency in availableDependencyTasks" :key="dependency.id" class="check-row">
+                  <input v-model="taskDependencyIds" type="checkbox" :value="dependency.id" />
+                  {{ dependency.title }} · {{ statusLabels[dependency.status] }}
+                </label>
+                <small v-if="!availableDependencyTasks.length" class="muted">同一事项下还没有其他分工。</small>
+              </fieldset>
+
               <fieldset>
                 <legend>协作者</legend>
                 <label
@@ -2309,7 +2599,7 @@ onBeforeUnmount(() => {
                 <button v-if="isManager" type="button" @click="editTask(task)">编辑</button>
               </div>
 
-              <div v-if="task.owner?.id === user?.id" class="status-actions">
+              <div v-if="isManager" class="status-actions">
                 <button
                   v-for="value in (['todo', 'doing', 'done'] as TaskStatus[])"
                   :key="value"
@@ -2374,7 +2664,7 @@ onBeforeUnmount(() => {
                     <button v-if="isManager" type="button" @click="editTask(child)">编辑</button>
                   </div>
 
-                  <div v-if="child.owner?.id === user?.id" class="status-actions">
+                  <div v-if="isManager" class="status-actions">
                     <button
                       v-for="value in (['todo', 'doing', 'done'] as TaskStatus[])"
                       :key="value"
@@ -2431,7 +2721,7 @@ onBeforeUnmount(() => {
                 </button>
                 <button v-if="isManager" type="button" @click="editTask(task)">编辑</button>
               </div>
-              <div v-if="task.owner?.id === user?.id" class="status-actions">
+              <div v-if="isManager" class="status-actions">
                 <button
                   v-for="value in (['todo', 'doing', 'done'] as TaskStatus[])"
                   :key="value"

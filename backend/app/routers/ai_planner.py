@@ -297,6 +297,10 @@ def refine_plan(
     _require_planner_access(current)
     context = _build_context(db, payload)
     planner_input = planner_input_text(payload.description, payload.item_title, context)
+    current_task_numbering = "\n".join(
+        f"{index}. {task.title}"
+        for index, task in enumerate(payload.draft.tasks, start=1)
+    ) or "（当前草案没有执行任务）"
     scope_index = payload.scope_task_index
     scope_note = (
         f"本次只调整第 {scope_index + 1} 张任务卡。请在返回 draft.tasks 中只输出这一张调整后的任务卡；"
@@ -307,6 +311,10 @@ def refine_plan(
     planner_input += (
         "\n\n【当前 AI 草案 JSON】\n"
         + payload.draft.model_dump_json(indent=2)
+        + "\n\n【当前任务编号】\n"
+        + current_task_numbering
+        + "\n编号从 1 开始，对应当前 draft.tasks 顺序；“第 N 个 / 第 N 项 / 第 N 张任务 / 任务 N”均指此处编号。"
+        + "编号不是数据库 ID，不写入输出字段；每次 refine 都必须按收到的最新 draft 重新编号。"
         + "\n\n【调整范围】\n"
         + scope_note
         + "\n\n【用户调整指令】\n"

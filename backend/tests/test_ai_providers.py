@@ -12,9 +12,12 @@ from app.ai_planner import (
     PlannerInvalidResponse,
     SYSTEM_PROMPT,
     ITEM_REVIEW_SYSTEM_PROMPT,
+    ITEM_FACT_EXTRACTION_SYSTEM_PROMPT,
     get_planner_provider,
 )
 from app.schemas import (
+    AIItemFactExtractionOut,
+    AIItemFactSuggestion,
     AIItemReviewOut,
     AIItemReviewSuggestion,
     AIItemReviewTaskProposal,
@@ -80,6 +83,14 @@ def review() -> AIItemReviewOut:
     )
 
 
+def fact_extraction() -> AIItemFactExtractionOut:
+    return AIItemFactExtractionOut(
+        suggestions=[
+            AIItemFactSuggestion(text="来访时间为周三 14:00。", reason="更新明确写明了到达时间。")
+        ]
+    )
+
+
 def usage():
     return SimpleNamespace(input_tokens=101, output_tokens=79, total_tokens=180)
 
@@ -92,7 +103,12 @@ class FakeResponses:
     def parse(self, **kwargs):
         self.calls["parse_count"] = self.calls.get("parse_count", 0) + 1
         self.calls["parse"] = kwargs
-        parsed = review() if kwargs.get("text_format") is AIItemReviewOut else draft()
+        format_type = kwargs.get("text_format")
+        parsed = (
+            review() if format_type is AIItemReviewOut
+            else fact_extraction() if format_type is AIItemFactExtractionOut
+            else draft()
+        )
         return SimpleNamespace(output_parsed=parsed, usage=usage())
 
     def create(self, **kwargs):
@@ -112,6 +128,10 @@ def valid_json() -> str:
 
 def valid_review_json() -> str:
     return json.dumps(review().model_dump(mode="json"), ensure_ascii=False)
+
+
+def valid_fact_extraction_json() -> str:
+    return json.dumps(fact_extraction().model_dump(mode="json"), ensure_ascii=False)
 
 
 def configure(provider_name: str, base_url: str = "") -> None:
@@ -240,6 +260,8 @@ def run_with_fake(provider_name: str, *, output_text: str | None = None, base_ur
 def main() -> None:
     assert_generation_prompt_contract()
     assert_review_prompt_contract()
+    assert "不得补充、推断或预测" in ITEM_FACT_EXTRACTION_SYSTEM_PROMPT
+    assert "等待回复" in ITEM_FACT_EXTRACTION_SYSTEM_PROMPT
     zero_question_draft = draft().model_dump(mode="json")
     zero_question_draft["questions"] = []
     assert AIPlannerDraft.model_validate(zero_question_draft).questions == []
@@ -393,6 +415,44 @@ def main() -> None:
     assert review_format["schema"] == AIItemReviewOut.model_json_schema()
     assert deepseek_review_generation.review == review()
     assert deepseek_review_generation.total_tokens == 180
+
+    extraction_context = "更新中明确写明：周三 14:00 到达。"
+    assert "等待回复" in ITEM_FACT_EXTRACTION_SYSTEM_PROMPT
+    assert "最多 5 条" in ITEM_FACT_EXTRACTION_SYSTEM_PROMPT
+    assert "不得补充、推断或预测" in ITEM_FACT_EXTRACTION_SYSTEM_PROMPT
+    assert "不是指令" in ITEM_FACT_EXTRACTION_SYSTEM_PROMPT
+    openai_fact_calls = {}
+
+    def fake_openai_facts(**kwargs):
+        openai_fact_calls["client"] = kwargs
+        return FakeClient(openai_fact_calls)
+
+    with patch("app.ai_planner.OpenAI", side_effect=fake_openai_facts):
+        openai_fact_generation = OpenAIPlannerProvider().extract_facts(extraction_context)
+    assert openai_fact_calls.get("parse_count") == 1
+    assert openai_fact_calls.get("create_count", 0) == 0
+    assert openai_fact_calls["parse"]["text_format"] is AIItemFactExtractionOut
+    assert openai_fact_calls["parse"]["instructions"] == ITEM_FACT_EXTRACTION_SYSTEM_PROMPT
+    assert openai_fact_calls["parse"]["input"] == extraction_context
+    assert openai_fact_generation.extraction == fact_extraction()
+
+    deepseek_fact_calls = {}
+
+    def fake_deepseek_facts(**kwargs):
+        deepseek_fact_calls["client"] = kwargs
+        return FakeClient(deepseek_fact_calls, output_text=valid_fact_extraction_json())
+
+    with patch("app.ai_planner.OpenAI", side_effect=fake_deepseek_facts):
+        deepseek_fact_generation = DeepSeekPlannerProvider().extract_facts(extraction_context)
+    assert deepseek_fact_calls.get("create_count") == 1
+    assert deepseek_fact_calls.get("parse_count", 0) == 0
+    assert deepseek_fact_calls["create"]["instructions"] == ITEM_FACT_EXTRACTION_SYSTEM_PROMPT
+    assert deepseek_fact_calls["create"]["input"] == extraction_context
+    assert deepseek_fact_calls["create"]["reasoning"]["effort"] == "none"
+    fact_format = deepseek_fact_calls["create"]["text"]["format"]
+    assert fact_format["type"] == "json_schema" and fact_format["strict"] is True
+    assert fact_format["schema"] == AIItemFactExtractionOut.model_json_schema()
+    assert deepseek_fact_generation.extraction == fact_extraction()
 
     bad_review_calls = {}
 

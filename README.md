@@ -19,7 +19,7 @@ admin may optionally turn a natural-language requirement into an editable AI dra
 -> owner is assigned directly or opened for claiming
 -> collaborators are assigned directly or may join when collaboration is open
 -> all active members can see published work
--> owners update execution status
+-> owners / collaborators publish progress; owners complete their own assignments
 -> admin / manager keeps structure and assignments aligned with reality
 ~~~
 
@@ -62,7 +62,9 @@ System roles are independent from real-world team titles.
 - claim an ownerless task when owner claiming is open
 - cancel their own claim when the task is not completed and remains claimable
 - join / leave open collaboration
-- update status only for tasks they currently own
+- publish progress for child tasks they own or collaborate on
+- complete their own child tasks and record the execution result
+- request AI suggestions for confirmed facts from their own published progress
 
 Backend authorization is the security boundary.
 
@@ -81,7 +83,8 @@ Current task fields include:
 - optional child-task result check (“做到什么算完成”; root items do not repeat a total completion standard)
 - execution points (up to 6 short strings)
 - cautions (up to 5 short strings)
-- prerequisites (up to 4 short strings; only conditions that would prevent the task from reasonably starting, with no system dependency behavior)
+- prerequisites (up to 4 short strings; readable guidance, separate from structured dependencies)
+- same-item child-task dependencies (manager-editable; blocked is computed from unfinished dependencies)
 - optional owner
 - owner_claimable
 - collaborators
@@ -93,6 +96,10 @@ Current task fields include:
 A published task must either have an owner or allow owner claiming.
 
 Only one child level is supported in V0.2. Grandchildren are rejected.
+
+Claiming leaves status as todo. The first published progress update moves a todo child to doing; later updates preserve its status. Completing a child records its result, marks it done and creates a linked ItemActivity in one transaction. A user may explicitly sync the completion result to the root item's current information in the same transaction. Root status is derived from children: all todo means todo, any started but not all done means doing, and all done means done. Items without children retain their existing status.
+
+Dependencies only connect first-level tasks under the same root. A task is blocked while any dependency is not done; its progress and completion endpoints remain unavailable until the dependency is done. Dependencies cannot point to the task itself, cross item boundaries or form a cycle. `blocked` is a computed field, not a fourth task status.
 
 Historical tasks may continue to reference disabled members. Existing assignments are not revalidated during unrelated edits; newly submitted owners and collaborators must be active.
 
@@ -150,6 +157,20 @@ Member states are invited, active and disabled.
 
 Only active accounts can use task claiming or collaboration APIs because every action requires a valid active session.
 
+## Shared execution scene
+
+`/tasks/:id` gives a child-task owner or collaborator a primary “更新进展” action. Posting progress creates an ItemActivity linked to the child task, and moves only todo to doing. Progress does not change an already doing task. Completing a task saves its actual result, marks it done and creates a linked activity in one transaction; only the owner or a manager may complete it. Completion can optionally add that result to the root's current information in the same transaction.
+
+Root status is derived deterministically from child tasks: all todo → todo, at least one started but not all done → doing, and all done → done. Root items without children retain their existing status. The UI summarizes completed, active, not-started and blocked work without treating blocked as a status.
+
+Managers can link child tasks as same-item prerequisites. Cycles, self-dependencies and cross-item dependencies are rejected. A child is blocked while any linked prerequisite is not done. Existing natural-language prerequisites remain guidance text.
+
+After a progress update is saved, the frontend may make one AI request to extract up to five already-confirmed facts. The backend sends bounded task/item context with member names and email addresses redacted. Suggestions remain local until a human selects them; the batch endpoint de-duplicates exact matches and enforces the 30-fact limit. An AI failure does not undo the progress update. Authorized progress participants can use this extraction endpoint under the existing shared daily AI quota.
+
+Task detail views refresh when the browser regains focus or visibility and poll every 60 seconds only while a task detail is open. Background refresh preserves unsaved result text.
+
+Execution API additions are `POST /api/tasks/{task_id}/progress`, `POST /api/tasks/{task_id}/complete`, `POST /api/tasks/{root_task_id}/context-facts/batch`, and `POST /api/ai/items/{root_task_id}/extract-facts`. `TaskOut` includes `depends_on_tasks`, computed `blocked` and `blocked_by`; managers set dependencies through `depends_on_task_ids` on task create/update.
+
 ## AI planner
 
 V0.2 second-stage first slice implements a small planning flow:
@@ -164,6 +185,8 @@ natural-language requirement
 ~~~
 
 The planner is not a chatbot and never writes tasks during generation. It cannot return member IDs or assign real members.
+
+Progress fact extraction is separate from Planner Generate / Refine / Execution Review: it is available to active members authorized to publish the source progress, makes one provider request per explicit extraction, and still requires a human to apply suggestions.
 
 Access requires all of:
 
@@ -208,6 +231,8 @@ Current Alembic chain:
 -> 0003_ai_planner_usage
 -> 0004_knowledge_documents
 -> 0005_task_execution_details
+-> 0006_dynamic_item_execution
+-> 0007_shared_execution_scene
 ~~~
 
 It upgrades the existing V0.1 tasks table without deleting data:
@@ -220,7 +245,7 @@ It upgrades the existing V0.1 tasks table without deleting data:
 - existing completion standards and statuses remain unchanged
 
 CI includes a real 0001_v0_1 -> 0002_operations_claiming compatibility check using seeded legacy data.
-The latest migration adds JSON arrays for execution points, cautions and prerequisites, backfilled as empty arrays for existing tasks.
+Migrations add JSON arrays for execution points, cautions and prerequisites, backfilled as empty arrays for existing tasks. `0007_shared_execution_scene` adds nullable `item_activities.task_id` (old activity rows remain unlinked) and the same-item `task_dependencies` association table.
 
 ## Knowledge Source V0.1
 
@@ -335,7 +360,8 @@ Coverage includes:
 - member structural-edit restrictions
 - admin-only knowledge APIs, supported text extraction, file limits, GitHub path/hash sync, removed-source handling and bounded planner retrieval
 - one planner provider call and graceful operation when the knowledge index is unavailable
-- owner-only member status updates
+- owner / collaborator progress, owner-only completion, dependency validation and deterministic root status aggregation
+- one-call AI fact suggestions with human approval and shared quota accounting
 - disabled-member blocking
 - database restart persistence
 - V0.1 legacy-data migration

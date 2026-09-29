@@ -4,8 +4,13 @@ from sqlalchemy.orm import Session, selectinload
 
 from ..auth import get_current_member, require_manager
 from ..db import get_db
-from ..models import ItemActivity, Member, Task, task_collaborators
+from ..models import ItemActivity, Member, Task, task_collaborators, task_dependencies
 from ..schemas import (
+    ContextFactsBatchIn,
+    TaskCompleteCreate,
+    TaskDependencyOut,
+    TaskProgressCreate,
+    TaskProgressOut,
     ItemActivityCreate,
     ItemActivityOut,
     ItemFactCreate,
@@ -25,7 +30,15 @@ def _is_manager(member: Member) -> bool:
 
 
 def _task_query():
-    return select(Task).options(selectinload(Task.owner), selectinload(Task.collaborators))
+    return select(Task).options(
+        selectinload(Task.owner),
+        selectinload(Task.collaborators),
+        selectinload(Task.depends_on_tasks).selectinload(Task.owner),
+    )
+
+
+def _is_task_blocked(task: Task) -> bool:
+    return any(dependency.status != "done" for dependency in (task.depends_on_tasks or []))
 
 
 def _activity_query():
@@ -51,6 +64,26 @@ def _task_out(task: Task) -> TaskOut:
         status=task.status,
         created_by=task.created_by,
         created_at=task.created_at,
+        depends_on_tasks=[
+            TaskDependencyOut(
+                id=dependency.id,
+                title=dependency.title,
+                status=dependency.status,
+                owner=MemberSummary.model_validate(dependency.owner) if dependency.owner else None,
+            )
+            for dependency in (task.depends_on_tasks or [])
+        ],
+        blocked=_is_task_blocked(task),
+        blocked_by=[
+            TaskDependencyOut(
+                id=dependency.id,
+                title=dependency.title,
+                status=dependency.status,
+                owner=MemberSummary.model_validate(dependency.owner) if dependency.owner else None,
+            )
+            for dependency in (task.depends_on_tasks or [])
+            if dependency.status != "done"
+        ],
     )
 
 
@@ -58,6 +91,7 @@ def _activity_out(activity: ItemActivity) -> ItemActivityOut:
     return ItemActivityOut(
         id=activity.id,
         root_task_id=activity.root_task_id,
+        task_id=activity.task_id,
         author=MemberSummary.model_validate(activity.author),
         content=activity.content,
         created_at=activity.created_at,
@@ -125,6 +159,85 @@ def _append_context_fact(root: Task, content: str) -> None:
     root.context_facts = [*facts, content]
 
 
+def _append_context_fact_if_new(root: Task, content: str) -> bool:
+    facts = list(root.context_facts or [])
+    if content in facts:
+        return False
+    _append_context_fact(root, content)
+    return True
+
+
+def sync_root_status(db: Session, root_id: int) -> None:
+    root = db.scalar(select(Task).where(Task.id == root_id).with_for_update())
+    if root is None or root.parent_id is not None:
+        return
+    statuses = list(db.scalars(select(Task.status).where(Task.parent_id == root.id)).all())
+    if not statuses:
+        return
+    if all(value == "todo" for value in statuses):
+        root.status = "todo"
+    elif all(value == "done" for value in statuses):
+        root.status = "done"
+    else:
+        root.status = "doing"
+
+
+def _can_write_task_progress(task: Task, current: Member) -> bool:
+    return (
+        _is_manager(current)
+        or task.owner_id == current.id
+        or any(member.id == current.id for member in task.collaborators)
+    )
+
+
+def _validate_task_dependencies(db: Session, task: Task, dependency_ids: list[int]) -> None:
+    if task.parent_id is None:
+        if dependency_ids:
+            raise HTTPException(status_code=400, detail="事项本身不能设置分工依赖")
+        task.depends_on_tasks = []
+        return
+    if task.id in dependency_ids:
+        raise HTTPException(status_code=400, detail="分工不能依赖自己")
+    if len(dependency_ids) != len(set(dependency_ids)):
+        raise HTTPException(status_code=400, detail="前置分工不能重复")
+    targets = list(
+        db.scalars(
+            select(Task).where(Task.id.in_(dependency_ids), Task.parent_id == task.parent_id)
+        ).all()
+    ) if dependency_ids else []
+    if {target.id for target in targets} != set(dependency_ids):
+        raise HTTPException(status_code=400, detail="前置分工必须属于同一事项")
+
+    child_ids = set(db.scalars(select(Task.id).where(Task.parent_id == task.parent_id)).all())
+    edges = db.execute(
+        select(task_dependencies.c.task_id, task_dependencies.c.depends_on_task_id)
+        .where(task_dependencies.c.task_id.in_(child_ids))
+    ).all() if child_ids else []
+    graph: dict[int, list[int]] = {child_id: [] for child_id in child_ids}
+    for child_id, depends_on_id in edges:
+        graph.setdefault(child_id, []).append(depends_on_id)
+    graph[task.id] = list(dependency_ids)
+
+    visiting: set[int] = set()
+    visited: set[int] = set()
+
+    def has_cycle(node: int) -> bool:
+        if node in visiting:
+            return True
+        if node in visited:
+            return False
+        visiting.add(node)
+        if any(has_cycle(target) for target in graph.get(node, [])):
+            return True
+        visiting.remove(node)
+        visited.add(node)
+        return False
+
+    if any(has_cycle(node) for node in graph):
+        raise HTTPException(status_code=400, detail="分工依赖不能形成循环")
+    task.depends_on_tasks = targets
+
+
 def _validate_parent(db: Session, parent_id: int | None) -> None:
     if parent_id is None:
         return
@@ -169,6 +282,8 @@ def _build_task(db: Session, payload: TaskCreate, current: Member) -> Task:
         if member_id != payload.owner_id
     ]
     db.add(task)
+    db.flush()
+    _validate_task_dependencies(db, task, payload.depends_on_task_ids)
     return task
 
 
@@ -245,6 +360,103 @@ def create_item_activity(
     return _activity_out(saved)
 
 
+@router.post("/{task_id}/progress", response_model=TaskProgressOut, status_code=status.HTTP_201_CREATED)
+def publish_task_progress(
+    task_id: int,
+    payload: TaskProgressCreate,
+    current: Member = Depends(get_current_member),
+    db: Session = Depends(get_db),
+) -> TaskProgressOut:
+    task = db.scalar(_task_query().where(Task.id == task_id).with_for_update())
+    if task is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="任务不存在")
+    if task.parent_id is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="进展只能发布到执行任务")
+    if task.status == "done":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="已完成任务不能继续发布执行进展")
+    if _is_task_blocked(task):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="前置分工尚未完成，暂时不能推进该任务")
+    if not _can_write_task_progress(task, current):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="只有任务负责人、协作者或管理者可以发布进展")
+
+    root = db.scalar(select(Task).where(Task.id == task.parent_id).with_for_update())
+    if root is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="所属事项不存在")
+    if task.status == "todo":
+        task.status = "doing"
+    activity = ItemActivity(
+        root_task_id=root.id,
+        task_id=task.id,
+        author_id=current.id,
+        content=payload.content,
+    )
+    db.add(activity)
+    sync_root_status(db, root.id)
+    try:
+        db.commit()
+        db.refresh(activity)
+    except Exception:
+        db.rollback()
+        raise
+    saved_task = _get_task(db, task.id)
+    saved_activity = db.scalar(_activity_query().where(ItemActivity.id == activity.id))
+    if saved_activity is None:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="进展保存失败")
+    return TaskProgressOut(task=_task_out(saved_task), activity=_activity_out(saved_activity))
+
+
+@router.post("/{task_id}/complete", response_model=TaskProgressOut)
+def complete_task(
+    task_id: int,
+    payload: TaskCompleteCreate,
+    current: Member = Depends(get_current_member),
+    db: Session = Depends(get_db),
+) -> TaskProgressOut:
+    task = db.scalar(_task_query().where(Task.id == task_id).with_for_update())
+    if task is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="任务不存在")
+    if task.parent_id is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="事项不能通过完成分工操作结束")
+    if not _is_manager(current) and task.owner_id != current.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="只有任务负责人可以完成任务")
+    if task.status == "done":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="任务已经完成")
+    if _is_task_blocked(task):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="前置分工尚未完成，暂时不能完成该任务")
+    root = db.scalar(select(Task).where(Task.id == task.parent_id).with_for_update())
+    if root is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="所属事项不存在")
+    if payload.sync_to_item and len(payload.result) > 500:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="同步到事项信息的结果最多 500 字")
+
+    try:
+        task.result = payload.result
+        task.status = "done"
+        if payload.sync_to_item:
+            _append_context_fact_if_new(root, payload.result)
+        activity = ItemActivity(
+            root_task_id=root.id,
+            task_id=task.id,
+            author_id=current.id,
+            content=f"完成任务「{task.title}」。",
+        )
+        db.add(activity)
+        sync_root_status(db, root.id)
+        db.commit()
+        db.refresh(activity)
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise
+    saved_task = _get_task(db, task.id)
+    saved_activity = db.scalar(_activity_query().where(ItemActivity.id == activity.id))
+    if saved_activity is None:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="任务完成记录保存失败")
+    return TaskProgressOut(task=_task_out(saved_task), activity=_activity_out(saved_activity))
+
+
 @router.post("/{root_task_id}/context-facts", response_model=TaskOut)
 def add_context_fact(
     root_task_id: int,
@@ -256,6 +468,28 @@ def add_context_fact(
     _require_item_writer(db, root, current)
     _append_context_fact(root, payload.content)
     db.commit()
+    return _task_out(_get_task(db, root.id))
+
+
+@router.post("/{root_task_id}/context-facts/batch", response_model=TaskOut)
+def add_context_facts_batch(
+    root_task_id: int,
+    payload: ContextFactsBatchIn,
+    current: Member = Depends(get_current_member),
+    db: Session = Depends(get_db),
+) -> TaskOut:
+    root = _get_root_task(db, root_task_id)
+    _require_item_writer(db, root, current)
+    existing = list(root.context_facts or [])
+    additions = list(dict.fromkeys(fact for fact in payload.facts if fact not in existing))
+    if len(existing) + len(additions) > 30:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="当前信息最多保留 30 条")
+    root.context_facts = [*existing, *additions]
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     return _task_out(_get_task(db, root.id))
 
 
@@ -309,6 +543,8 @@ def add_task_result_to_context(
 @router.post("", response_model=TaskOut, status_code=status.HTTP_201_CREATED)
 def create_task(payload: TaskCreate, current: Member = Depends(require_manager), db: Session = Depends(get_db)) -> TaskOut:
     task = _build_task(db, payload, current)
+    if task.parent_id is not None:
+        sync_root_status(db, task.parent_id)
     db.commit()
     db.expire(task)
     return _task_out(_get_task(db, task.id))
@@ -384,6 +620,8 @@ def update_task(
     if not _is_manager(current):
         if task.owner_id != current.id:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="只有负责人可以更新任务状态和执行结果")
+        if task.parent_id is None and "status" in fields:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="事项状态由执行分工自动汇总")
         allowed_fields = {"status", "result"}
         if not fields or not fields.issubset(allowed_fields):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="普通成员只能更新自己负责任务的状态和执行结果")
@@ -395,6 +633,8 @@ def update_task(
             if payload.result is None:
                 raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="执行结果不能为空")
             task.result = payload.result
+        if "status" in fields and task.parent_id is not None:
+            sync_root_status(db, task.parent_id)
         db.commit()
         db.expire(task)
         return _task_out(_get_task(db, task.id))
@@ -433,6 +673,15 @@ def update_task(
         ]
     elif "owner_id" in fields and resulting_owner_id is not None:
         task.collaborators = [member for member in task.collaborators if member.id != resulting_owner_id]
+
+    if "depends_on_task_ids" in fields:
+        if payload.depends_on_task_ids is None:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="前置分工列表不能为空")
+        _validate_task_dependencies(db, task, payload.depends_on_task_ids)
+
+    if "status" in fields:
+        root_id = task.parent_id or task.id
+        sync_root_status(db, root_id)
 
     db.commit()
     db.expire(task)

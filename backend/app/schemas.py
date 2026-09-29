@@ -111,6 +111,7 @@ class TaskCreate(BaseModel):
     parent_id: int | None = None
     deadline: datetime
     status: TaskStatus = "todo"
+    depends_on_task_ids: list[int] = Field(default_factory=list, max_length=20)
 
     @field_validator("title")
     @classmethod
@@ -160,6 +161,7 @@ class TaskUpdate(BaseModel):
     collaboration_open: bool | None = None
     deadline: datetime | None = None
     status: TaskStatus | None = None
+    depends_on_task_ids: list[int] | None = Field(default=None, max_length=20)
 
     @field_validator("title")
     @classmethod
@@ -197,6 +199,13 @@ class TaskUpdate(BaseModel):
         return None if value is None else value.strip()
 
 
+class TaskDependencyOut(BaseModel):
+    id: int
+    title: str
+    status: TaskStatus
+    owner: MemberSummary | None
+
+
 class TaskOut(BaseModel):
     id: int
     parent_id: int | None
@@ -215,6 +224,9 @@ class TaskOut(BaseModel):
     status: TaskStatus
     created_by: int
     created_at: datetime
+    depends_on_tasks: list[TaskDependencyOut] = Field(default_factory=list)
+    blocked: bool = False
+    blocked_by: list[TaskDependencyOut] = Field(default_factory=list)
 
 
 class ItemFactCreate(BaseModel):
@@ -229,9 +241,51 @@ class ItemActivityCreate(BaseModel):
 class ItemActivityOut(BaseModel):
     id: int
     root_task_id: int
+    task_id: int | None = None
     author: MemberSummary
     content: str
     created_at: datetime
+
+
+class TaskProgressCreate(BaseModel):
+    content: ItemActivityText
+
+
+class TaskCompleteCreate(BaseModel):
+    result: str = Field(min_length=1, max_length=5000)
+    sync_to_item: bool = False
+
+    @field_validator("result")
+    @classmethod
+    def strip_completion_result(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("请填写最终结果")
+        return value
+
+
+class TaskProgressOut(BaseModel):
+    task: TaskOut
+    activity: ItemActivityOut
+
+
+class ContextFactsBatchIn(BaseModel):
+    facts: list[ContextFactText] = Field(min_length=1, max_length=30)
+
+
+class AIItemFactSuggestion(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    text: ContextFactText
+    reason: str = Field(min_length=1, max_length=200)
+
+
+class AIItemFactExtractionOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    suggestions: list[AIItemFactSuggestion] = Field(max_length=5)
+
+
+class AIItemFactExtractionRequest(BaseModel):
+    activity_id: int = Field(ge=1)
 
 
 class AIPlannerRequest(BaseModel):

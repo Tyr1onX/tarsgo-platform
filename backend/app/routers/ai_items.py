@@ -6,7 +6,9 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from ..ai_fact_extraction import build_activity_fact_context
 from ..ai_planner import (
+    ItemFactExtractionProvider,
     ItemReviewProvider,
     PlannerInvalidResponse,
     PlannerProviderError,
@@ -19,12 +21,20 @@ from ..db import get_db
 from ..knowledge import knowledge_enabled, search_historical_documents
 from ..models import ItemActivity, Member, Task
 from ..routers.ai_planner import (
+    _enabled,
     _record_generation_tokens,
     _require_planner_access,
     _reserve_request,
+    _server_configured,
 )
-from ..routers.tasks import _activity_out, _get_task, _task_out
-from ..schemas import AIItemReviewApplyOut, AIItemReviewOut, AIItemReviewSuggestion
+from ..routers.tasks import _activity_out, _can_write_task_progress, _get_task, _task_out, sync_root_status
+from ..schemas import (
+    AIItemFactExtractionOut,
+    AIItemFactExtractionRequest,
+    AIItemReviewApplyOut,
+    AIItemReviewOut,
+    AIItemReviewSuggestion,
+)
 
 router = APIRouter(prefix="/api/ai/items", tags=["ai-item-review"])
 logger = logging.getLogger(__name__)
@@ -33,6 +43,15 @@ MAX_REVIEW_CONTEXT_CHARS = 24_000
 MAX_REVIEW_KNOWLEDGE_CHARS = 3_000
 MAX_REVIEW_ACTIVITY_COUNT = 20
 _REVIEW_CONTEXT_OVERHEAD = 1_200
+
+
+def _require_fact_extraction_available(member: Member) -> None:
+    if member.status != "active":
+        raise HTTPException(status_code=403, detail="账号当前不可使用 AI 信息提取")
+    if not _enabled():
+        raise HTTPException(status_code=503, detail="AI 信息提取当前未启用")
+    if not _server_configured():
+        raise HTTPException(status_code=503, detail="AI 信息提取尚未完成服务器配置")
 
 
 def _json_chars(value: dict) -> int:
@@ -164,6 +183,57 @@ def _review_once(provider: ItemReviewProvider, context: str):
         raise HTTPException(status_code=503, detail="AI 服务暂时不可用，请稍后重试")
 
 
+def _extract_facts_once(provider: ItemFactExtractionProvider, context: str):
+    try:
+        return provider.extract_facts(context)
+    except PlannerTimeoutError:
+        raise HTTPException(status_code=503, detail="AI 信息提取超时；进展已保存，请稍后重试")
+    except PlannerRateLimitError:
+        raise HTTPException(status_code=503, detail="AI 服务暂时繁忙；进展已保存，请稍后重试")
+    except PlannerInvalidResponse:
+        raise HTTPException(status_code=502, detail="AI 暂时无法整理这条更新；进展已保存")
+    except PlannerProviderError:
+        raise HTTPException(status_code=503, detail="AI 服务暂时不可用；进展已保存")
+
+
+@router.post("/{root_task_id}/extract-facts", response_model=AIItemFactExtractionOut)
+def extract_activity_facts(
+    root_task_id: int,
+    payload: AIItemFactExtractionRequest,
+    current: Member = Depends(get_current_member),
+    db: Session = Depends(get_db),
+    provider: ItemFactExtractionProvider = Depends(get_planner_provider),
+) -> AIItemFactExtractionOut:
+    _require_fact_extraction_available(current)
+    root = db.get(Task, root_task_id)
+    if root is None:
+        raise HTTPException(status_code=404, detail="事项不存在")
+    if root.parent_id is not None:
+        raise HTTPException(status_code=400, detail="只能从事项执行进展提取信息")
+    activity = db.scalar(
+        select(ItemActivity).where(
+            ItemActivity.id == payload.activity_id,
+            ItemActivity.root_task_id == root.id,
+        )
+    )
+    if activity is None or activity.task_id is None:
+        raise HTTPException(status_code=404, detail="找不到该事项的执行进展")
+    task = _get_task(db, activity.task_id)
+    if task.parent_id != root.id or not _can_write_task_progress(task, current):
+        raise HTTPException(status_code=403, detail="只有该事项的任务参与者可以提取确认信息")
+
+    context = build_activity_fact_context(
+        db,
+        root=root,
+        task=task,
+        activity_content=activity.content,
+    )
+    usage_date = _reserve_request(db, current.id)
+    generation = _extract_facts_once(provider, context)
+    _record_generation_tokens(db, current.id, usage_date, generation)
+    return generation.extraction
+
+
 def _same_task_content(task: Task, proposed) -> bool:
     return (
         task.title == proposed.title
@@ -279,6 +349,7 @@ def apply_item_review_suggestion(
             created_by=current.id,
         )
         db.add(task)
+        sync_root_status(db, root.id)
         action = f"根据方案检查新增任务「{task.title}」。"
 
     activity = ItemActivity(root_task_id=root.id, author_id=current.id, content=action)

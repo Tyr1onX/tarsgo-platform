@@ -313,6 +313,9 @@ def main() -> None:
         )
         assert scoped_provider.calls == 1
         assert "只调整第 2 张任务卡" in scoped_provider.description
+        assert "1. 机器人与展示设备准备\n2. 现场摄影\n3. 活动资料归档" in scoped_provider.description
+        assert "编号不是数据库 ID" in scoped_provider.description
+        assert "每次 refine 都必须按收到的最新 draft 重新编号" in scoped_provider.description
         assert scoped.draft.item.title == original_dump["item"]["title"]
         assert scoped.draft.questions == result.draft.questions
         assert scoped.draft.suggestions == result.draft.suggestions
@@ -352,6 +355,23 @@ def main() -> None:
         assert global_result.draft.item.deliverable == ""
         assert len(global_result.draft.tasks) == 1 and global_result.draft.questions == []
         assert [suggestion.title for suggestion in global_result.draft.suggestions] == ["新提醒"]
+
+        reordered_draft = result.draft.model_copy(deep=True)
+        reordered_draft.tasks = list(reversed(reordered_draft.tasks))
+        reordered_provider = FakeProvider(draft=global_output)
+        planner_router.refine_plan(
+            AIPlannerRefineRequest(
+                description=request.description,
+                draft=reordered_draft,
+                instruction="移除第 1 个任务",
+            ),
+            current=admin,
+            db=db,
+            provider=reordered_provider,
+        )
+        assert reordered_provider.calls == 1
+        assert "1. 活动资料归档\n2. 现场摄影\n3. 机器人与展示设备准备" in reordered_provider.description
+        assert "任务编号】\n1." in reordered_provider.description
 
         join_output = AIPlannerDraft(
             item=result.draft.item.model_copy(deep=True),

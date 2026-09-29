@@ -8,9 +8,9 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "node tests/planner-suggestions.test.mjs && vite build",
+    "build": "npm test && vite build",
     "preview": "vite preview",
-    "test": "node tests/planner-suggestions.test.mjs"
+    "test": "node tests/planner-suggestions.test.mjs && node tests/execution.test.mjs"
   },
   "dependencies": {
     "vue": "3.5.43"

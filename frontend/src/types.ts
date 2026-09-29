@@ -35,14 +35,39 @@ export interface Task {
   status: TaskStatus
   created_by: number
   created_at: string
+  depends_on_tasks: TaskDependency[]
+  blocked: boolean
+  blocked_by: TaskDependency[]
+}
+
+export interface TaskDependency {
+  id: number
+  title: string
+  status: TaskStatus
+  owner: MemberSummary | null
 }
 
 export interface ItemActivity {
   id: number
   root_task_id: number
+  task_id: number | null
   author: MemberSummary
   content: string
   created_at: string
+}
+
+export interface TaskProgressResult {
+  task: Task
+  activity: ItemActivity
+}
+
+export interface AIItemFactSuggestion {
+  text: string
+  reason: string
+}
+
+export interface AIItemFactExtractionResult {
+  suggestions: AIItemFactSuggestion[]
 }
 
 export interface InviteResult {

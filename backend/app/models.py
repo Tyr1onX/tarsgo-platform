@@ -37,6 +37,16 @@ task_collaborators = Table(
 )
 
 
+task_dependencies = Table(
+    "task_dependencies",
+    Base.metadata,
+    Column("task_id", ForeignKey("tasks.id", ondelete="CASCADE"), primary_key=True),
+    Column("depends_on_task_id", ForeignKey("tasks.id", ondelete="CASCADE"), primary_key=True),
+    CheckConstraint("task_id <> depends_on_task_id", name="ck_task_dependencies_not_self"),
+    Index("ix_task_dependencies_depends_on", "depends_on_task_id"),
+)
+
+
 class Member(Base):
     __tablename__ = "members"
     __table_args__ = (
@@ -115,6 +125,13 @@ class Task(Base):
     owner: Mapped[Member | None] = relationship(foreign_keys=[owner_id])
     creator: Mapped[Member] = relationship(foreign_keys=[created_by])
     collaborators: Mapped[list[Member]] = relationship(secondary=task_collaborators)
+    depends_on_tasks: Mapped[list["Task"]] = relationship(
+        "Task",
+        secondary=task_dependencies,
+        primaryjoin=lambda: Task.id == task_dependencies.c.task_id,
+        secondaryjoin=lambda: Task.id == task_dependencies.c.depends_on_task_id,
+        order_by=lambda: Task.id,
+    )
 
 
 class ItemActivity(Base):
@@ -125,11 +142,13 @@ class ItemActivity(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     root_task_id: Mapped[int] = mapped_column(ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False)
+    task_id: Mapped[int | None] = mapped_column(ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True)
     author_id: Mapped[int] = mapped_column(ForeignKey("members.id"), nullable=False)
     content: Mapped[str] = mapped_column(Text(), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(), server_default=func.now(), nullable=False)
 
     root_task: Mapped[Task] = relationship(foreign_keys=[root_task_id])
+    task: Mapped[Task | None] = relationship(foreign_keys=[task_id])
     author: Mapped[Member] = relationship(foreign_keys=[author_id])
 
 

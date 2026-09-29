@@ -64,11 +64,11 @@ Implement only:
 - open collaboration join / leave
 - current task status
 
-Continue evolving Task as the item / execution-task source of truth. The current dynamic-execution slice adds one lightweight ItemActivity table only for human-written item history; it is not a comment system, event-sourcing model or structural task state.
+Continue evolving Task as the item / execution-task source of truth. The shared-execution slice keeps one lightweight ItemActivity table for human-written item history. Activities belong to the root item and may optionally reference the child Task that produced progress/completion; this is not a comment system, event-sourcing model or structural task state.
 
-The V0.2 second-stage first slice adds an allowlisted admin AI draft planner and transactional batch confirmation. Knowledge Source V0.1 adds read-only GitHub sync, admin document uploads, local text extraction and bounded keyword retrieval for the planner. Keep this knowledge slice simple: no embeddings, vector database, multi-agent flow, auto-summarization or writeback to GitHub.
+The V0.2 second-stage first slice adds an active-admin AI draft planner and transactional batch confirmation. Knowledge Source V0.1 adds read-only GitHub sync, admin document uploads, local text extraction and bounded keyword retrieval for the planner. Shared Execution Scene adds linked progress history, deterministic status aggregation, bounded fact suggestions and same-item dependencies. Keep these slices simple: no embeddings, vector database, multi-agent flow, auto-summarization or writeback to GitHub.
 
-Do not expand these slices into automatic scheduling, member recommendation, time-conflict algorithms, workload algorithms, notifications, task comments/files, leave, weekly reports, technical R&D workflows, complex dashboards or complex organization structures.
+Do not expand these slices into cross-item dependencies, automatic scheduling, member recommendation, time-conflict algorithms, workload algorithms, notifications, task comments/files, leave, weekly reports, technical R&D workflows, complex dashboards or complex organization structures.
 
 ## Task model boundary
 
@@ -83,7 +83,8 @@ Current task structure:
 - deliverable: optional child-task result check stored as text; the UI calls it “做到什么算完成”; root items do not repeat a total completion standard
 - execution_points: up to six concise execution steps
 - cautions: up to five concise task-specific reminders
-- prerequisites: up to four conditions that would prevent the task from reasonably starting; they do not create system dependency behavior
+- prerequisites: up to four readable conditions that would prevent the task from reasonably starting; separate from structured same-item task dependencies
+- depends_on_tasks: child Task relationships under the same root only; backend rejects self/cross-root/cyclic edges; blocked is computed from dependency task status and is not a fourth status
 - context_facts: root-item current confirmed facts; child rows keep an empty list
 - result: optional execution outcome text
 - owner_id: nullable
@@ -200,6 +201,7 @@ Current migration chain:
 -> 0004_knowledge_documents
 -> 0005_task_execution_details
 -> 0006_dynamic_item_execution
+-> 0007_shared_execution_scene
 ~~~
 
 Migrations must preserve current production rows. Never clear or silently rewrite production data to simplify a schema change.
@@ -232,7 +234,7 @@ Do not add controller/service/repository/facade layers without a concrete bounda
 
 The frontend intentionally has no UI framework, router library or state-management library.
 
-Primary routes are /login, /invite/:token, /, /tasks, /tasks/:id, /team and /me. /ai-planner is an allowlisted admin-only workflow entry and /knowledge is an admin-only management page; neither becomes a global navigation destination.
+Primary routes are /login, /invite/:token, /, /tasks, /tasks/:id, /team and /me. /ai-planner is an active-admin-only workflow entry and /knowledge is an admin-only management page; neither becomes a global navigation destination.
 
 Keep one task entry: /tasks.
 
@@ -283,7 +285,7 @@ Each planner task also includes concise execution_points, cautions and prerequis
 - Retrieval is deterministic title/path/content keyword scoring, capped at six historical documents and 3,000 history characters. Admin document search returns metadata only and can match title, path or source name. Do not add embeddings, vector databases, whole-repository prompts, AI retrieval calls or automatic knowledge writeback.
 - Pasted text and temporarily parsed Planner attachments belong to the current event for that request; they are not copied into long-term knowledge automatically.
 
-Only allowlisted admins may generate plans. AI access is checked server-side by role, member ID allowlist, enabled flag and server configuration. The provider key never leaves the API container.
+Only active admins may generate, refine or review plans. These routes are checked server-side by role, enabled flag and server configuration. The provider key never leaves the API container. Progress fact extraction is separately available only to active members authorized to publish the source child-task progress; it shares the daily request quota.
 
 Provider selection is configuration-only: AI_PROVIDER=openai or AI_PROVIDER=deepseek. Both must preserve the same PlannerProvider interface and AIPlannerDraft schema. OpenAI uses responses.parse(..., text_format=AIPlannerDraft). DeepSeek uses exactly one responses.create call against AI_BASE_URL=https://api.deepseek.com with text.format.type=json_schema, strict=true and schema=AIPlannerDraft.model_json_schema(), then json.loads(response.output_text) + AIPlannerDraft.model_validate(). Never implement a parse-then-create fallback or loosen the shared schema for DeepSeek. Do not fork the planner business flow by provider.
 
@@ -295,13 +297,17 @@ The AI schema may contain titles, completion standards, a tentative item deadlin
 
 Draft generation never writes Task rows. Only explicit confirmation calls the normal task batch endpoint. The confirming user owns the root item; a child with owner_claimable=true is published ownerless, while a child with owner_claimable=false is temporarily owned by the confirming manager/admin. Database state, permissions and constraints remain deterministic backend logic.
 
-Do not expand this slice into automatic scheduling, member recommendation, workload scoring, conflict detection, dependencies, AI changes to already-published tasks or AI-generated knowledge.
+Do not expand this slice into automatic scheduling, member recommendation, workload scoring, conflict detection, AI-generated dependencies, AI changes to already-published tasks or AI-generated knowledge.
 
 ## Dynamic item execution
 
 Published tasks remain editable. A root Task stores current confirmed facts in context_facts. Task.result stores the actual execution outcome and is distinct from deliverable.
 
-ItemActivity is intentionally narrow: a timestamped human-written record attached only to a root item. Item participants may record activity and optionally copy that text into current facts in one transaction. A task result may be promoted to current facts only by an explicit human action, which also records an ItemActivity.
+ItemActivity is intentionally narrow: a timestamped human-written record attached to a root item. Its nullable task_id links child progress/completion while preserving existing root-only activity rows. Child owner/collaborator progress saves an activity and todo→doing transition atomically; task completion saves result, done, an activity and optional current-fact sync atomically. Only the owner or manager can complete. Root status is recomputed deterministically after any child status change. Never let AI choose or mutate status.
+
+AI fact extraction is a separate provider service called at most once after a progress activity has committed. It receives only bounded root/current facts, source task context and that activity, with member names/emails redacted. It can return at most five suggestions and never writes current facts; a human-approved batch endpoint handles exact de-duplication and the 30-fact limit. Authorized progress participants can use extraction under the existing shared daily request quota; unrelated readers cannot.
+
+Task dependencies are manager-edited, one-level, same-root child edges only. Application validation rejects self, cross-root and cyclic dependencies. API blocked state is derived when any dependency is not done; blocked child tasks cannot accept progress/completion until unblocked. `todo | doing | done` remains the only status enum.
 
 This is not a full audit log. Do not turn ItemActivity into comments, notifications, event sourcing or automatic AI re-planning.
 

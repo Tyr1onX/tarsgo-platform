@@ -6,6 +6,7 @@ import type {
   AIPlannerRefineInput,
   AIItemReviewResult,
   AIItemReviewSuggestion,
+  AIItemFactExtractionResult,
   InvitationInfo,
   InviteResult,
   ItemActivity,
@@ -15,6 +16,7 @@ import type {
   KnowledgeSyncSummary,
   Role,
   Task,
+  TaskProgressResult,
   TaskBatchPayload,
   TaskBatchResult,
   TaskStatus,
@@ -64,6 +66,7 @@ export interface TaskPayload {
   parent_id?: number | null
   deadline: string
   status: TaskStatus
+  depends_on_task_ids?: number[]
 }
 
 export const api = {
@@ -135,10 +138,30 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ content, add_to_context: addToContext }),
     }),
+  publishTaskProgress: (taskId: number, content: string) =>
+    request<TaskProgressResult>(`/api/tasks/${taskId}/progress`, {
+      method: "POST",
+      body: JSON.stringify({ content }),
+    }),
+  completeTask: (taskId: number, result: string, syncToItem: boolean) =>
+    request<TaskProgressResult>(`/api/tasks/${taskId}/complete`, {
+      method: "POST",
+      body: JSON.stringify({ result, sync_to_item: syncToItem }),
+    }),
+  extractActivityFacts: (rootTaskId: number, activityId: number) =>
+    request<AIItemFactExtractionResult>(`/api/ai/items/${rootTaskId}/extract-facts`, {
+      method: "POST",
+      body: JSON.stringify({ activity_id: activityId }),
+    }),
   addContextFact: (rootTaskId: number, content: string) =>
     request<Task>(`/api/tasks/${rootTaskId}/context-facts`, {
       method: "POST",
       body: JSON.stringify({ content }),
+    }),
+  addContextFactsBatch: (rootTaskId: number, facts: string[]) =>
+    request<Task>(`/api/tasks/${rootTaskId}/context-facts/batch`, {
+      method: "POST",
+      body: JSON.stringify({ facts }),
     }),
   deleteContextFact: (rootTaskId: number, factIndex: number) =>
     request<Task>(`/api/tasks/${rootTaskId}/context-facts/${factIndex}`, { method: "DELETE" }),

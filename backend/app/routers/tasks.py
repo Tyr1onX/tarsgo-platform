@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import and_, delete, or_, select, update
@@ -446,7 +447,7 @@ def get_task(
 @router.get("/{root_task_id}/activities", response_model=list[ItemActivityOut])
 def list_item_activities(
     root_task_id: int,
-    task_id: int | None = Query(default=None, gt=0),
+    task_id: Annotated[int | None, Query(gt=0)] = None,
     current: Member = Depends(get_current_member),
     db: Session = Depends(get_db),
 ) -> list[ItemActivityOut]:

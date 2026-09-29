@@ -415,8 +415,8 @@ def main() -> None:
             db.commit()
 
             # Unrelated active members retain read access but cannot write shared state.
-            assert tasks_router.get_task(second_id, current=unrelated, db=db).id == second_id
-            activities = tasks_router.list_item_activities(root_id, current=unrelated, db=db)
+            assert tasks_router.get_task(second_id, _=unrelated, db=db).id == second_id
+            activities = tasks_router.list_item_activities(root_id, _=unrelated, db=db)
             assert any(activity.task_id == first_id for activity in activities)
             expect_http(
                 403,
@@ -485,7 +485,7 @@ def main() -> None:
             root = db.get(Task, root_id)
             root.context_facts = [f"上限事实 {index}" for index in range(30)]
             db.commit()
-            before_activity_ids = {activity.id for activity in tasks_router.list_item_activities(root_id, current=owner, db=db)}
+            before_activity_ids = {activity.id for activity in tasks_router.list_item_activities(root_id, _=owner, db=db)}
             expect_http(
                 409,
                 lambda: tasks_router.complete_task(
@@ -498,7 +498,7 @@ def main() -> None:
             db.rollback()
             db.expire_all()
             assert db.get(Task, overflow_id).status == "todo" and db.get(Task, overflow_id).result == ""
-            assert {activity.id for activity in tasks_router.list_item_activities(root_id, current=owner, db=db)} == before_activity_ids
+            assert {activity.id for activity in tasks_router.list_item_activities(root_id, _=owner, db=db)} == before_activity_ids
 
             # Clear fixture facts, finish remaining work, then verify deterministic root aggregation.
             db.get(Task, root_id).context_facts = []

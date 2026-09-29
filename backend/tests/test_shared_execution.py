@@ -433,10 +433,11 @@ def main() -> None:
 
             replace_fixture_facts(db, root_id, owner, [])
 
-            # Unrelated active members retain read access but cannot write shared state.
+            # Unrelated active members retain task-structure read access but
+            # only see global history, not task-scoped execution history.
             assert tasks_router.get_task(second_id, current=unrelated, db=db).id == second_id
             activities = tasks_router.list_item_activities(root_id, current=unrelated, db=db)
-            assert any(activity.task_id == first_id for activity in activities)
+            assert all(activity.task_id != first_id for activity in activities)
             expect_http(
                 403,
                 lambda: tasks_router.publish_task_progress(

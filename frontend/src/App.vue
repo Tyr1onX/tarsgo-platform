@@ -417,7 +417,7 @@ async function refreshExecutionScene(force = false) {
   try {
     const [freshTasks, freshActivities] = await Promise.all([
       api.tasks("all"),
-      api.itemActivities(rootId),
+      api.itemActivities(rootId, selected.parent_id === null ? undefined : selected.id),
     ])
     if (path.value !== routeAtStart || taskDetailId.value !== taskId) return
     const previousTask = tasks.value.find((task) => task.id === taskId)
@@ -733,7 +733,7 @@ async function loadRoute() {
       itemActivityDraft.value = ""
       itemActivityAddToFacts.value = false
       const rootId = selected.parent_id ?? selected.id
-      itemActivities.value = await api.itemActivities(rootId)
+      itemActivities.value = await api.itemActivities(rootId, selected.parent_id === null ? undefined : selected.id)
     } else if (path.value === "/tasks") {
       taskView.value = readTaskView()
       if (isManager.value) {

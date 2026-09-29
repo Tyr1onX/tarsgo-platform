@@ -116,11 +116,22 @@ def main():
             assert "来访团队从东门进入。" not in tasks_router.get_task(task_b, current=claimant, db=db).context_facts
             assert "来访团队从东门进入。" in tasks_router.get_task(root_id, current=manager, db=db).context_facts
             assert "来访团队从东门进入。" not in tasks_router.get_task(root_id, current=unrelated, db=db).context_facts
+            assert all(row.id != activity_b.id for row in tasks_router.list_item_activities(
+                root_id, task_id=task_b, current=claimant, db=db,
+            ))
 
             claimed = tasks_router.claim_task_owner(task_b, current=claimant, db=db)
             assert "来访团队从东门进入。" in claimed.context_facts
             assert any(item.id == route_fact.id for item in claimed.item_facts)
             assert any(row.id == activity_b.id for row in tasks_router.list_item_activities(root_id, current=claimant, db=db))
+            assert any(row.id == activity_b.id for row in tasks_router.list_item_activities(
+                root_id, task_id=task_b, current=claimant, db=db,
+            ))
+            # Task D is a different execution context even when a member can
+            # still read its structure; B's history must stay scoped to B.
+            assert all(row.id != activity_b.id for row in tasks_router.list_item_activities(
+                root_id, task_id=task_d, current=claimant, db=db,
+            ))
             assert any(row.id == activity_b.id for row in tasks_router.list_item_activities(root_id, current=manager, db=db))
             assert all(row.id != activity_b.id for row in tasks_router.list_item_activities(root_id, current=unrelated, db=db))
 
@@ -128,6 +139,9 @@ def main():
             tasks_router.unclaim_task_owner(task_b, current=claimant, db=db)
             assert "来访团队从东门进入。" not in tasks_router.get_task(task_b, current=claimant, db=db).context_facts
             assert all(row.id != activity_b.id for row in tasks_router.list_item_activities(root_id, current=claimant, db=db))
+            assert all(row.id != activity_b.id for row in tasks_router.list_item_activities(
+                root_id, task_id=task_b, current=claimant, db=db,
+            ))
             tasks_router.claim_task_owner(task_b, current=claimant, db=db)
 
             # Collaborators receive the task's scoped fact while a different task owner does not.

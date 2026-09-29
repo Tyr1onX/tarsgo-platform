@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import delete, or_, select, update
+from sqlalchemy import and_, delete, or_, select, update
 from sqlalchemy.orm import Session, selectinload
 
 from ..auth import get_current_member, require_manager
@@ -446,27 +446,55 @@ def get_task(
 @router.get("/{root_task_id}/activities", response_model=list[ItemActivityOut])
 def list_item_activities(
     root_task_id: int,
+    task_id: int | None = Query(default=None, gt=0),
     current: Member = Depends(get_current_member),
     db: Session = Depends(get_db),
 ) -> list[ItemActivityOut]:
     root = _get_root_task(db, root_task_id)
     query = _activity_query().where(ItemActivity.root_task_id == root.id)
     if not _is_manager(current) and root.owner_id != current.id:
-        task_ids = list(db.scalars(select(Task.id).where(
-            Task.parent_id == root.id,
-            or_(Task.owner_id == current.id, Task.collaborators.any(Member.id == current.id)),
-        )).all())
-        fact_query = select(ItemFact.source_activity_id).where(ItemFact.root_task_id == root.id)
-        if task_ids:
-            fact_query = fact_query.where(
-                or_(ItemFact.scope == "global", ItemFact.related_tasks.any(Task.id.in_(task_ids)))
+        related_source_ids = [value for value in db.scalars(
+            select(ItemFact.source_activity_id).where(
+                ItemFact.root_task_id == root.id,
+                ItemFact.scope == "related",
+                ItemFact.source_activity_id.is_not(None),
             )
+        ).all() if value is not None]
+
+        if task_id is not None:
+            task = db.get(Task, task_id)
+            if task is None or task.parent_id != root.id:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="执行任务不存在")
+            is_participant = db.scalar(select(Task.id).where(
+                Task.id == task.id,
+                or_(Task.owner_id == current.id, Task.collaborators.any(Member.id == current.id)),
+            )) is not None
+            participant_task_ids = [task.id] if is_participant else []
+        else:
+            participant_task_ids = list(db.scalars(select(Task.id).where(
+                Task.parent_id == root.id,
+                or_(Task.owner_id == current.id, Task.collaborators.any(Member.id == current.id)),
+            )).all())
+
+        fact_query = select(ItemFact.source_activity_id).where(ItemFact.root_task_id == root.id)
+        if participant_task_ids:
+            fact_query = fact_query.where(or_(
+                ItemFact.scope == "global",
+                ItemFact.related_tasks.any(Task.id.in_(participant_task_ids)),
+            ))
         else:
             fact_query = fact_query.where(ItemFact.scope == "global")
         source_ids = [value for value in db.scalars(fact_query).all() if value is not None]
-        visible = [ItemActivity.task_id.is_(None)]
-        if task_ids:
-            visible.append(ItemActivity.task_id.in_(task_ids))
+
+        visible = []
+        if participant_task_ids:
+            visible.append(ItemActivity.task_id.in_(participant_task_ids))
+        # Unlinked item activities are global unless they are the source for
+        # task-scoped facts. Those appear only through the visible fact sources.
+        root_activity = ItemActivity.task_id.is_(None)
+        if related_source_ids:
+            root_activity = and_(root_activity, ItemActivity.id.not_in(related_source_ids))
+        visible.append(root_activity)
         if source_ids:
             visible.append(ItemActivity.id.in_(source_ids))
         query = query.where(or_(*visible))

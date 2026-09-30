@@ -45,11 +45,12 @@ assert.match(rootList, /v-if="isManager" type="button" @click="editTask\(task\)"
 assert.match(rootList, /v-if="isAdmin" class="danger-text" type="button" @click\.stop="openDeleteRootItemModal\(task, 'list'\)">删除<\/button>/)
 assert.match(rootList, /v-if="childTasks\(task\.id\)\.length && isRootExpanded\(task\.id\)"[\s\S]*?class="work-breakdown"/)
 assert.match(rootList, /root-progress-summary[\s\S]*?executionSummary\(childTasks\(task\.id\)\)\.blocked/)
-assert.match(rootList, /<div v-if="isManager" class="status-actions root-status-actions">/)
+assert.match(rootList, /<TaskStatusIndicator :status="task\.status"[\s\S]*?:editable="isManager && childTasks\(task\.id\)\.length === 0"/)
+assert.doesNotMatch(rootList, /status-actions/)
 assert.equal((rootList.match(/class="danger-text"/g) ?? []).length, 1)
 assert.ok(rootList.indexOf('class="danger-text"') < rootList.indexOf('<article v-for="child'))
 const orphanList = app.slice(orphanStart)
-assert.doesNotMatch(orphanList.slice(0, orphanList.indexOf("<div v-else class=\"empty empty-action")), /class="status-actions"/)
+assert.doesNotMatch(orphanList.slice(0, orphanList.indexOf("<div v-else class=\"empty empty-action")), /status-actions/)
 assert.match(css, /@media \(max-width: 860px\)[\s\S]*?\.operation-card-top\s*\{\s*grid-template-columns: minmax\(0, 1fr\)/)
 
 const tasks = [

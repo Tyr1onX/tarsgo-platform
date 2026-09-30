@@ -6,6 +6,7 @@ import { revealInvalidField } from "./formFeedback.js"
 import { filterIgnoredPlannerSuggestions, ignorePlannerSuggestion, plannerSuggestionJoinInstruction } from "./plannerSuggestions.js"
 import { itemReviewChanges, removeItemReviewSuggestion } from "./itemReview.js"
 import { isExpandedRoot, removeRootAndChildren, toggleExpandedRoot } from "./rootItemList.js"
+import TaskStatusIndicator from "./TaskStatusIndicator.vue"
 import LocalPageLoading from "./pages/LocalPageLoading.vue"
 import {
   claimableTask,
@@ -2255,7 +2256,7 @@ onBeforeUnmount(() => {
               <span v-else class="state">事项</span>
               <strong>{{ task.title }}</strong>
               <span v-if="task.parent_id !== null && task.deliverable" class="home-task-deliverable">{{ task.deliverable }}</span>
-              <span class="home-task-meta">{{ formatDate(task.deadline) }} · {{ statusLabels[task.status] }}</span>
+              <span class="home-task-meta"><TaskStatusIndicator :status="task.status" :task-id="task.id" /> · {{ formatDate(task.deadline) }}</span>
               <span class="home-task-arrow" aria-hidden="true">›</span>
             </button>
           </div>
@@ -2604,7 +2605,14 @@ onBeforeUnmount(() => {
         <template v-if="detailTask.parent_id === null">
           <section class="execution-section">
             <div class="execution-meta">
-              <span>{{ statusLabels[detailTask.status] }}</span>
+              <TaskStatusIndicator
+                :status="detailTask.status"
+                :task-id="detailTask.id"
+                :editable="isManager && detailChildren.length === 0"
+                :pending="Boolean(pendingTaskAction(detailTask.id)?.startsWith('status:'))"
+                :blocked="detailTask.blocked"
+                @update-status="updateOwnTaskStatus(detailTask, $event)"
+              />
               <span>截止 {{ formatDate(detailTask.deadline) }}</span>
               <span>{{ detailTask.owner ? "总负责人 " + detailTask.owner.name : "总负责人待认领" }}</span>
             </div>
@@ -2688,7 +2696,7 @@ onBeforeUnmount(() => {
             </div>
             <div v-if="detailChildren.length" class="detail-task-list">
               <button v-for="task in detailChildren" :key="task.id" class="detail-task-card" type="button" @click="openTaskDetail(task)">
-                <span class="state">{{ statusLabels[task.status] }}</span>
+                <TaskStatusIndicator :status="task.status" :task-id="task.id" :blocked="task.blocked" />
                 <strong>{{ task.title }}</strong>
                 <span v-if="task.deliverable">{{ task.deliverable }}</span>
                 <small v-if="task.blocked" class="blocked-inline">等待：{{ task.blocked_by.map((dependency) => dependency.title).join("、") }}</small>
@@ -2793,7 +2801,14 @@ onBeforeUnmount(() => {
         <template v-else>
           <section class="execution-section">
             <div class="execution-meta">
-              <span>{{ statusLabels[detailTask.status] }}</span>
+              <TaskStatusIndicator
+                :status="detailTask.status"
+                :task-id="detailTask.id"
+                :editable="isManager"
+                :pending="Boolean(pendingTaskAction(detailTask.id)?.startsWith('status:'))"
+                :blocked="detailTask.blocked"
+                @update-status="updateOwnTaskStatus(detailTask, $event)"
+              />
               <span>{{ detailTask.owner ? detailTask.owner.name + " 负责" : "待认领" }}</span>
               <span v-if="detailTask.collaborators.length">协作 {{ detailTask.collaborators.map((member) => member.name).join("、") }}</span>
               <span>截止 {{ formatDate(detailTask.deadline) }}</span>
@@ -2951,7 +2966,7 @@ onBeforeUnmount(() => {
                 type="button"
                 :disabled="Boolean(pendingTaskAction(detailTask.id))"
                 @click="claimTask(detailTask)"
-              >{{ pendingTaskAction(detailTask.id) === 'claim' ? '认领中…' : '认领负责人' }}</button>
+              >{{ pendingTaskAction(detailTask.id) === 'claim' ? '认领中…' : '认领任务' }}</button>
               <button
                 v-if="detailTask.owner?.id === user?.id && detailTask.owner_claimable && detailTask.status !== 'done'"
                 type="button"
@@ -2970,17 +2985,6 @@ onBeforeUnmount(() => {
                 :disabled="Boolean(pendingTaskAction(detailTask.id))"
                 @click="leaveTask(detailTask)"
               >{{ pendingTaskAction(detailTask.id) === 'leave' ? '退出中…' : '退出协作' }}</button>
-            </div>
-            <div v-if="isManager" class="status-actions">
-              <button
-                v-for="value in (['todo', 'doing', 'done'] as TaskStatus[])"
-                :key="value"
-                type="button"
-                :disabled="Boolean(pendingTaskAction(detailTask.id))"
-                :aria-busy="pendingTaskAction(detailTask.id) === `status:${value}`"
-                :class="{ active: detailTask.status === value }"
-                @click="updateOwnTaskStatus(detailTask, value)"
-              >{{ pendingTaskAction(detailTask.id) === `status:${value}` ? '更新中…' : statusLabels[value] }}</button>
             </div>
           </section>
         </template>
@@ -3164,7 +3168,7 @@ onBeforeUnmount(() => {
             <article v-for="task in rootTasks" :key="task.id" class="operation-card">
               <div class="operation-card-top">
                 <div class="operation-main">
-                  <span class="state">事项 · {{ statusLabels[task.status] }}</span>
+                  <div class="root-status-line"><span class="state">事项</span><TaskStatusIndicator :status="task.status" :task-id="task.id" :editable="isManager && childTasks(task.id).length === 0" :pending="Boolean(pendingTaskAction(task.id)?.startsWith('status:'))" @update-status="updateOwnTaskStatus(task, $event)" /></div>
                   <button class="task-title-link" type="button" @click="openTaskDetail(task)"><h3>{{ task.title }}</h3></button>
                   <small>
                     {{ task.owner ? "总负责人 " + task.owner.name : "总负责人待认领" }}
@@ -3186,7 +3190,7 @@ onBeforeUnmount(() => {
                     type="button"
                     :disabled="Boolean(pendingTaskAction(task.id))"
                     @click="claimTask(task)"
-                  >{{ pendingTaskAction(task.id) === 'claim' ? '认领中…' : '认领负责人' }}</button>
+                  >{{ pendingTaskAction(task.id) === 'claim' ? '认领中…' : '认领任务' }}</button>
                   <button
                     v-if="task.owner?.id === user?.id && task.owner_claimable && task.status !== 'done'"
                     type="button"
@@ -3229,21 +3233,9 @@ onBeforeUnmount(() => {
                   <button v-if="isManager" type="button" @click="startNewTask(task)">＋ 添加分工</button>
                 </div>
 
-                <div v-if="isManager" class="status-actions root-status-actions">
-                  <button
-                    v-for="value in (['todo', 'doing', 'done'] as TaskStatus[])"
-                    :key="value"
-                    type="button"
-                    :disabled="Boolean(pendingTaskAction(task.id))"
-                    :aria-busy="pendingTaskAction(task.id) === `status:${value}`"
-                    :class="{ active: task.status === value }"
-                    @click="updateOwnTaskStatus(task, value)"
-                  >{{ pendingTaskAction(task.id) === `status:${value}` ? '更新中…' : statusLabels[value] }}</button>
-                </div>
-
                 <article v-for="child in childTasks(task.id)" :key="child.id" class="child-task">
                   <div>
-                    <span class="state">{{ statusLabels[child.status] }}</span>
+                    <TaskStatusIndicator :status="child.status" :task-id="child.id" :editable="isManager" :pending="Boolean(pendingTaskAction(child.id)?.startsWith('status:'))" :blocked="child.blocked" @update-status="updateOwnTaskStatus(child, $event)" />
                     <button class="task-title-link" type="button" @click="openTaskDetail(child)"><h4>{{ child.title }}</h4></button>
                     <p v-if="child.deliverable">{{ child.deliverable }}</p>
                     <small>
@@ -3263,7 +3255,7 @@ onBeforeUnmount(() => {
                       :disabled="Boolean(pendingTaskAction(child.id))"
                       @click="claimTask(child)"
                     >
-                      {{ pendingTaskAction(child.id) === 'claim' ? '认领中…' : '认领' }}
+                      {{ pendingTaskAction(child.id) === 'claim' ? '认领中…' : '认领任务' }}
                     </button>
                     <button
                       v-if="child.owner?.id === user?.id && child.owner_claimable && child.status !== 'done'"
@@ -3292,26 +3284,13 @@ onBeforeUnmount(() => {
                     <button v-if="isManager" type="button" @click="editTask(child)">编辑</button>
                   </div>
 
-                  <div v-if="isManager" class="status-actions">
-                    <button
-                      v-for="value in (['todo', 'doing', 'done'] as TaskStatus[])"
-                      :key="value"
-                      type="button"
-                      :disabled="Boolean(pendingTaskAction(child.id))"
-                      :aria-busy="pendingTaskAction(child.id) === `status:${value}`"
-                      :class="{ active: child.status === value }"
-                      @click="updateOwnTaskStatus(child, value)"
-                    >
-                      {{ pendingTaskAction(child.id) === `status:${value}` ? '更新中…' : statusLabels[value] }}
-                    </button>
-                  </div>
                 </article>
               </div>
             </article>
 
             <article v-for="task in orphanTasks" :key="task.id" class="operation-card orphan-task">
               <div class="operation-main">
-                <span class="state">分工 · {{ statusLabels[task.status] }}</span>
+                <span class="state">分工</span><TaskStatusIndicator :status="task.status" :task-id="task.id" :editable="isManager" :pending="Boolean(pendingTaskAction(task.id)?.startsWith('status:'))" :blocked="task.blocked" @update-status="updateOwnTaskStatus(task, $event)" />
                 <button class="task-title-link" type="button" @click="openTaskDetail(task)"><h3>{{ task.title }}</h3></button>
                 <p v-if="task.deliverable">{{ task.deliverable }}</p>
                 <small>
@@ -3327,7 +3306,7 @@ onBeforeUnmount(() => {
                   :disabled="Boolean(pendingTaskAction(task.id))"
                   @click="claimTask(task)"
                 >
-                  {{ pendingTaskAction(task.id) === 'claim' ? '认领中…' : '认领负责人' }}
+                  {{ pendingTaskAction(task.id) === 'claim' ? '认领中…' : '认领任务' }}
                 </button>
                 <button
                   v-if="task.owner?.id === user?.id && task.owner_claimable && task.status !== 'done'"

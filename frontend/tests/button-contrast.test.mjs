@@ -38,6 +38,12 @@ const darkTheme = {
 }
 
 for (const [name, theme] of [["light", lightTheme], ["dark", darkTheme]]) {
+  const mutedStatusContrast = contrast(resolve(theme["--muted"], theme), resolve(theme["--surface"], theme))
+  assert.ok(mutedStatusContrast >= 4.5, `${name} theme status text contrast was ${mutedStatusContrast.toFixed(2)}`)
+  for (const color of ["--accent", "--success"]) {
+    const iconContrast = contrast(resolve(theme[color], theme), resolve(theme["--surface"], theme))
+    assert.ok(iconContrast >= 3, `${name} theme status icon ${color} contrast was ${iconContrast.toFixed(2)}`)
+  }
   for (const [background, foreground] of [
     ["--primary-bg", "--primary-fg"],
     ["--primary-hover-bg", "--primary-fg"],

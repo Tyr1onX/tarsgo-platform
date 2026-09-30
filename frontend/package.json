@@ -10,7 +10,7 @@
     "dev": "vite",
     "build": "npm test && vite build",
     "preview": "vite preview",
-    "test": "node tests/planner-suggestions.test.mjs && node tests/execution.test.mjs && node tests/form-feedback.test.mjs && node tests/root-task-deletion.test.mjs && node tests/button-contrast.test.mjs && node tests/interaction-performance.test.mjs"
+    "test": "node tests/planner-suggestions.test.mjs && node tests/execution.test.mjs && node tests/form-feedback.test.mjs && node tests/root-task-deletion.test.mjs && node tests/task-status-indicator.test.mjs && node tests/button-contrast.test.mjs && node tests/interaction-performance.test.mjs"
   },
   "dependencies": {
     "vue": "3.5.43"

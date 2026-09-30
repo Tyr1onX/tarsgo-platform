@@ -32,6 +32,7 @@ const rootCards = app.slice(app.indexOf('<article v-for="task in rootTasks"'), a
 assert.match(rootCards, /:editable="isManager && childTasks\(task\.id\)\.length === 0"/)
 assert.match(rootCards, /@update-status="updateOwnTaskStatus\(task, \$event\)"/)
 assert.match(rootCards, /<TaskStatusIndicator :status="child\.status"[\s\S]*?:editable="isManager"/)
+assert.match(rootCards, /class="child-task-heading"[\s\S]*?class="child-task-owner"[\s\S]*?class="task-title-link"/)
 assert.match(app, /:editable="isManager && detailChildren\.length === 0"/)
 assert.match(app, /:editable="isManager"[\s\S]*?@update-status="updateOwnTaskStatus\(detailTask, \$event\)"/)
 assert.match(app, /async function updateOwnTaskStatus\(task: Task, status: TaskStatus\)[\s\S]*?runTaskAction\(task, `status:\$\{status\}`,[\s\S]*?api\.updateTask\(task\.id, \{ status \}\)/)

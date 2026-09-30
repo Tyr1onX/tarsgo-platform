@@ -3234,13 +3234,15 @@ onBeforeUnmount(() => {
                 </div>
 
                 <article v-for="child in childTasks(task.id)" :key="child.id" class="child-task">
-                  <div>
+                  <div class="child-task-main">
+                    <div class="child-task-heading">
                     <TaskStatusIndicator :status="child.status" :task-id="child.id" :editable="isManager" :pending="Boolean(pendingTaskAction(child.id)?.startsWith('status:'))" :blocked="child.blocked" @update-status="updateOwnTaskStatus(child, $event)" />
+                      <small class="child-task-owner">{{ child.owner ? child.owner.name + " 负责" : "待认领" }}</small>
+                    </div>
                     <button class="task-title-link" type="button" @click="openTaskDetail(child)"><h4>{{ child.title }}</h4></button>
                     <p v-if="child.deliverable">{{ child.deliverable }}</p>
-                    <small>
-                      {{ child.owner ? child.owner.name + " 负责" : "待认领" }}
-                      · 截止 {{ formatDate(child.deadline) }}
+                    <small class="child-task-meta">
+                      截止 {{ formatDate(child.deadline) }}
                       <template v-if="child.collaborators.length">
                         · 协作 {{ child.collaborators.map((member) => member.name).join("、") }}
                       </template>

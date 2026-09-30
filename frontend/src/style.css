@@ -1442,8 +1442,35 @@ textarea[aria-invalid="true"] {
   border-bottom: 0;
 }
 
+.child-task-main {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.child-task-heading {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.child-task .child-task-owner {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.child-task-meta {
+  min-width: 0;
+}
+
 .child-task h4 {
-  margin: 4px 0 5px;
+  margin: 0;
   font-size: 15px;
   font-weight: 560;
 }

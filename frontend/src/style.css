@@ -12,6 +12,11 @@
   --danger: #9a3f31;
   --success: #49684d;
   --accent: #c96b2c;
+  --primary-bg: var(--text);
+  --primary-fg: var(--bg);
+  --primary-hover-bg: #302d29;
+  --primary-disabled-bg: #57534d;
+  --primary-disabled-fg: #fff;
   --sidebar-width: 232px;
   --content-width: 960px;
   --ribbon-height: 3px;
@@ -39,6 +44,11 @@
     --danger: #ffb4a9;
     --success: #b7d3b3;
     --accent: #e99559;
+    --primary-bg: var(--text);
+    --primary-fg: var(--bg);
+    --primary-hover-bg: #d1cdc5;
+    --primary-disabled-bg: #b6b0a6;
+    --primary-disabled-fg: var(--bg);
   }
 }
 
@@ -344,19 +354,33 @@ h3 {
 }
 
 .primary {
-  border: 1px solid var(--text);
-  background: var(--text);
-  color: #fff;
+  border: 1px solid var(--primary-bg);
+  background: var(--primary-bg);
+  color: var(--primary-fg);
 }
 
-.primary:hover {
-  background: #302d29;
+.primary:hover:not(:disabled) {
+  border-color: var(--primary-hover-bg);
+  background: var(--primary-hover-bg);
+  color: var(--primary-fg);
+}
+
+.primary:disabled {
+  border-color: var(--primary-disabled-bg);
+  background: var(--primary-disabled-bg);
+  color: var(--primary-disabled-fg);
 }
 
 .secondary {
   border: 1px solid var(--line-strong);
   background: var(--surface);
   color: var(--text);
+}
+
+.secondary:disabled {
+  border-color: var(--line-strong);
+  background: var(--surface);
+  color: var(--muted);
 }
 
 .primary:active,
@@ -684,9 +708,9 @@ h3 {
 }
 
 .status-actions button.active {
-  border-color: #222;
-  background: #222;
-  color: #fff;
+  border-color: var(--primary-bg);
+  background: var(--primary-bg);
+  color: var(--primary-fg);
 }
 
 .compact-list > button,
@@ -1151,7 +1175,7 @@ textarea[aria-invalid="true"] {
   color: var(--danger);
 }
 
-.task-actions button,
+.task-actions button:not(.primary):not(.danger-action),
 .breakdown-heading button {
   border: 0;
   background: transparent;
@@ -1160,16 +1184,32 @@ textarea[aria-invalid="true"] {
   font-size: 12.5px;
 }
 
-.task-actions button:hover,
-.breakdown-heading button:hover {
+.task-actions button:not(.primary):not(.danger-action):hover:not(:disabled),
+.breakdown-heading button:hover:not(:disabled) {
   color: var(--text);
 }
 
-.task-actions .small-action {
-  border: 1px solid #171717;
+.task-actions .primary {
+  border: 1px solid var(--primary-bg);
+  background: var(--primary-bg);
+  color: var(--primary-fg);
+}
+
+.task-actions .primary:hover:not(:disabled) {
+  border-color: var(--primary-hover-bg);
+  background: var(--primary-hover-bg);
+  color: var(--primary-fg);
+}
+
+.task-actions .primary:disabled {
+  border-color: var(--primary-disabled-bg);
+  background: var(--primary-disabled-bg);
+  color: var(--primary-disabled-fg);
+}
+
+.task-actions .primary.small-action {
   border-radius: 5px;
   padding: 6px 10px;
-  color: #fff;
 }
 
 .work-breakdown {
@@ -1894,12 +1934,6 @@ textarea[aria-invalid="true"] {
 .danger-action:hover:not(:disabled) {
   background: var(--danger);
   color: var(--surface);
-}
-
-.danger-action:disabled,
-.danger-modal-actions button:disabled {
-  cursor: wait;
-  opacity: 0.58;
 }
 
 .danger-modal-backdrop {
@@ -2679,7 +2713,7 @@ textarea[aria-invalid="true"] {
   padding: 7px 10px;
   font-size: 12px;
 }
-button:disabled { cursor: not-allowed; opacity: 0.55; }
+button:disabled { cursor: not-allowed; }
 
 @media (min-width: 720px) {
   .planner-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }

@@ -43,9 +43,9 @@ class FakeProvider:
             draft=self.draft or AIPlannerDraft(
                 item=AIPlannerItemDraft(title="小学科技展", deliverable="完成现场展示并收齐活动素材。", deadline=None),
                 tasks=[
-                    AIPlannerTaskDraft(title="机器人与展示设备准备", deliverable="设备可正常展示并完成装车。", execution_points=["核对展示清单", "检查设备状态"], cautions=["配件一并清点"], prerequisites=["参展项目清单已确认"], owner_claimable=True, collaboration_open=False),
-                    AIPlannerTaskDraft(title="现场摄影", deliverable="原图完整上传。", execution_points=["拍摄主要展示环节"], cautions=[], prerequisites=[], owner_claimable=True, collaboration_open=True),
-                    AIPlannerTaskDraft(title="活动资料归档", deliverable="素材按活动归档。", execution_points=[], cautions=[], prerequisites=[], owner_claimable=True, collaboration_open=False),
+                    AIPlannerTaskDraft(title="机器人与展示设备准备", deliverable="设备可正常展示并完成装车。", deadline=None, execution_points=["核对展示清单", "检查设备状态"], cautions=["配件一并清点"], prerequisites=["参展项目清单已确认"], owner_claimable=True, collaboration_open=False),
+                    AIPlannerTaskDraft(title="现场摄影", deliverable="原图完整上传。", deadline=None, execution_points=["拍摄主要展示环节"], cautions=[], prerequisites=[], owner_claimable=True, collaboration_open=True),
+                    AIPlannerTaskDraft(title="活动资料归档", deliverable="素材按活动归档。", deadline=None, execution_points=[], cautions=[], prerequisites=[], owner_claimable=True, collaboration_open=False),
                 ],
                 questions=["活动当天的最终结束时间是什么？"],
                 suggestions=[
@@ -105,6 +105,11 @@ def main() -> None:
         assert "即使负责人现在直接回答会更方便" in SYSTEM_PROMPT
         assert "不得因为直播通常需要网络而生成或询问网络条件" in SYSTEM_PROMPT
         assert "这条排除规则也覆盖 deliverable、execution_points、cautions、prerequisites、questions 和 suggestions" in SYSTEM_PROMPT
+        assert "deadline 是有时间约束时才设置的可选建议" in SYSTEM_PROMPT
+        assert "事项 deadline 只作为分工推荐的上下文，不能自动复制给 child task" in SYSTEM_PROMPT
+        assert "没有可靠时间依据时返回 null" in SYSTEM_PROMPT
+        assert "10 月 10 / 11 日" in SYSTEM_PROMPT
+        assert "没有日期背景的通用工作（例如“统一平台头像”）应保持 null" in SYSTEM_PROMPT
 
         anonymous_upload = TestClient(app).post(
             "/api/ai/planner/extract",
@@ -192,6 +197,7 @@ def main() -> None:
                 AIPlannerTaskDraft(
                     title="现场展示",
                     deliverable="展示设备可运行，直播画面稳定。",
+                    deadline=None,
                     execution_points=["核对展示清单", "确认网络条件并测试在线演示"],
                     cautions=["网络不可用时准备直播方案"],
                     prerequisites=["直播网络已确认"],
@@ -201,6 +207,7 @@ def main() -> None:
                 AIPlannerTaskDraft(
                     title="确认直播与网络条件",
                     deliverable="直播网络可用。",
+                    deadline=None,
                     execution_points=[],
                     cautions=[],
                     prerequisites=[],
@@ -244,12 +251,14 @@ def main() -> None:
         assert rejected_live_result.draft.item.deliverable == ""
         empty_root_batch = tasks_router.create_task_batch(
             TaskBatchCreate(
-                item=TaskBatchItemIn(title="空 root 完成标准兼容测试", deliverable="", deadline=datetime(2026, 10, 12, 18, 0)),
+                item=TaskBatchItemIn(title="空 root 完成标准兼容测试", deliverable=""),
                 tasks=[TaskBatchChildIn(title="兼容 child", deliverable="", owner_claimable=True, collaboration_open=False)],
             ),
             current=admin,
             db=db,
         )
+        assert empty_root_batch.item.deadline is None
+        assert empty_root_batch.tasks[0].deadline is None
         for task_id in [task.id for task in empty_root_batch.tasks] + [empty_root_batch.item.id]:
             db.delete(db.get(Task, task_id))
         db.commit()
@@ -288,6 +297,7 @@ def main() -> None:
             tasks=[AIPlannerTaskDraft(
                 title="更适合新人执行的摄影任务",
                 deliverable="活动关键环节影像均已采集并上传。",
+                deadline=None,
                 execution_points=["提前确认设备可用", "按活动流程补齐关键环节"],
                 cautions=["保留设备电量余量"],
                 prerequisites=["获取活动流程"],
@@ -330,6 +340,7 @@ def main() -> None:
             tasks=[AIPlannerTaskDraft(
                 title="整合后的展示执行",
                 deliverable="展示环节已完成。",
+                deadline=None,
                 execution_points=["准备并检查展示设备"],
                 cautions=[], prerequisites=[], owner_claimable=True, collaboration_open=False,
             )],
@@ -379,6 +390,7 @@ def main() -> None:
                 AIPlannerTaskDraft(
                     title="机器人与展示设备准备",
                     deliverable="设备和用于展台展示的战队周边准备完成，可按清单出发。",
+                    deadline=None,
                     execution_points=["核对展示设备", "准备少量战队周边用于展台展示"],
                     cautions=["周边仅用于展示，不扩展到其他用途"],
                     prerequisites=[],
@@ -420,9 +432,10 @@ def main() -> None:
         draft.item.title = "小学科技展（人工确认）"
         draft.item.deliverable = "完成展示，并在当天收齐现场素材。"
         draft.item.deadline = datetime(2026, 10, 12, 18, 0)
+        draft.tasks[0].deadline = datetime(2026, 10, 11, 18, 0)
         draft.tasks.pop(1)
         draft.tasks[0].title = "展示设备准备（人工修改）"
-        draft.tasks.append(AIPlannerTaskDraft(title="现场直播", deliverable="直播稳定完成并保存回放。", execution_points=["确认直播链路"], cautions=[], prerequisites=[], owner_claimable=False, collaboration_open=True))
+        draft.tasks.append(AIPlannerTaskDraft(title="现场直播", deliverable="直播稳定完成并保存回放。", deadline=None, execution_points=["确认直播链路"], cautions=[], prerequisites=[], owner_claimable=False, collaboration_open=True))
 
         assert [suggestion.title for suggestion in draft.suggestions] == ["战队周边展示"]
         try:
@@ -452,12 +465,15 @@ def main() -> None:
             current=admin, db=db,
         )
         assert result.item.owner is not None and result.item.owner.id == admin.id
+        assert result.item.deadline == datetime(2026, 10, 12, 18, 0)
         assert len(result.tasks) == 3 and all(t.parent_id == result.item.id for t in result.tasks)
         assert all(task.title != "战队周边展示" for task in result.tasks)
         claimable = next(t for t in result.tasks if t.title == "展示设备准备（人工修改）")
         assert claimable.owner is None and claimable.owner_claimable
+        assert claimable.deadline == datetime(2026, 10, 11, 18, 0)
         owned = next(t for t in result.tasks if t.title == "现场直播")
         assert owned.owner is not None and owned.owner.id == admin.id and not owned.owner_claimable
+        assert owned.deadline is None
         assert claimable.execution_points == ["核对展示清单", "检查设备状态"]
         assert claimable.cautions == ["配件一并清点"]
         assert claimable.prerequisites == ["参展项目清单已确认"]

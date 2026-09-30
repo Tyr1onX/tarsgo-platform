@@ -116,6 +116,44 @@ def main() -> None:
         with SessionLocal() as db:
             manager = db.scalar(select(Member).where(Member.email == "manager@example.com"))
             assert manager is not None and manager.status == "active"
+            optional_root = tasks_router.create_task(
+                TaskCreate(
+                    title=f"Smoke optional deadline root {token}",
+                    owner_id=manager.id,
+                    owner_claimable=False,
+                    deadline=None,
+                ),
+                current=manager,
+                db=db,
+            )
+            root_ids.add(optional_root.id)
+            assert optional_root.deadline is None
+            optional_child = tasks_router.create_task(
+                TaskCreate(
+                    title=f"Smoke optional deadline child {token}",
+                    parent_id=optional_root.id,
+                    owner_claimable=True,
+                    deadline=None,
+                ),
+                current=manager,
+                db=db,
+            )
+            child_ids.add(optional_child.id)
+            assert optional_child.deadline is None
+            tasks_router.update_task(
+                optional_root.id,
+                TaskUpdate(deadline=datetime.now() + timedelta(days=2)),
+                current=manager,
+                db=db,
+            )
+            cleared_root = tasks_router.update_task(
+                optional_root.id,
+                TaskUpdate(deadline=None),
+                current=manager,
+                db=db,
+            )
+            assert cleared_root.deadline is None and db.get(Task, optional_root.id).deadline is None
+
             owner = Member(name="Smoke Owner", email=f"scene-owner-{token}@example.invalid", role="member", status="active")
             collaborator = Member(name="Smoke Collaborator", email=f"scene-collab-{token}@example.invalid", role="member", status="active")
             unrelated = Member(name="Smoke Outsider", email=f"scene-outsider-{token}@example.invalid", role="member", status="active")

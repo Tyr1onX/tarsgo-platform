@@ -110,7 +110,7 @@ class TaskCreate(BaseModel):
     collaborator_ids: list[int] = Field(default_factory=list)
     collaboration_open: bool = False
     parent_id: int | None = None
-    deadline: datetime
+    deadline: datetime | None = None
     status: TaskStatus = "todo"
     depends_on_task_ids: list[int] = Field(default_factory=list, max_length=20)
 
@@ -240,7 +240,7 @@ class TaskOut(BaseModel):
     owner_claimable: bool
     collaborators: list[MemberSummary]
     collaboration_open: bool
-    deadline: datetime
+    deadline: datetime | None
     status: TaskStatus
     created_by: int
     created_at: datetime
@@ -449,6 +449,7 @@ class AIPlannerTaskDraft(BaseModel):
     model_config = ConfigDict(extra="forbid")
     title: str = Field(min_length=1, max_length=200)
     deliverable: str = Field(max_length=1000)
+    deadline: datetime | None
     execution_points: list[TaskDetailText] = Field(max_length=6)
     cautions: list[TaskDetailText] = Field(max_length=5)
     prerequisites: list[TaskDetailText] = Field(max_length=4)
@@ -680,7 +681,7 @@ class TaskBatchItemIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     title: str = Field(min_length=1, max_length=200)
     deliverable: str = Field(default="", max_length=5000)
-    deadline: datetime
+    deadline: datetime | None = None
 
     @field_validator("title")
     @classmethod
@@ -700,6 +701,7 @@ class TaskBatchChildIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     title: str = Field(min_length=1, max_length=200)
     deliverable: str = Field(default="", max_length=5000)
+    deadline: datetime | None = None
     execution_points: list[TaskDetailText] = Field(default_factory=list, max_length=6)
     cautions: list[TaskDetailText] = Field(default_factory=list, max_length=5)
     prerequisites: list[TaskDetailText] = Field(default_factory=list, max_length=4)

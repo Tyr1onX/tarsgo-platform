@@ -91,7 +91,7 @@ Current task structure:
 - owner_claimable
 - collaborators through task_collaborators
 - collaboration_open
-- explicit deadline
+- nullable deadline, set only when a reliable time constraint exists
 - todo | doing | done
 
 A published task must satisfy:
@@ -104,7 +104,7 @@ owner_claimable = true
 
 Do not store child tasks or collaborator IDs in JSON.
 
-Child creation may prefill the parent's deadline in the frontend, but the child must save its own explicit deadline. Do not add hidden inheritance.
+Deadlines are nullable and should be set only when a reliable time constraint exists. Child tasks never inherit a root deadline, either in the UI or in storage; a root deadline is context only when AI proposes an independent child deadline.
 
 Historical tasks may retain references to disabled members. Do not revalidate unchanged historical assignments during unrelated edits. Newly submitted owners and collaborators must be active.
 
@@ -203,6 +203,7 @@ Current migration chain:
 -> 0006_dynamic_item_execution
 -> 0007_shared_execution_scene
 -> 0008_scoped_item_information
+-> 0009_optional_task_deadlines
 ~~~
 
 Migrations must preserve current production rows. Never clear or silently rewrite production data to simplify a schema change.
@@ -294,7 +295,7 @@ Generation must remain one model request per explicit Generate / Regenerate acti
 
 The persistent ai_planner_daily_usage table stores daily request counts, aggregate provider token counts and knowledge-context character counts. Never store full planner prompts or generated drafts there.
 
-The AI schema may contain titles, completion standards, a tentative item deadline, owner_claimable, collaboration_open and confirmation questions. It must never contain owner_id or choose real members.
+The AI schema may contain titles, completion standards, independently optional item/task deadline suggestions, owner_claimable, collaboration_open and confirmation questions. Without reliable time context, deadlines must be null. A root deadline is context only and is never copied to child tasks. The schema must never contain owner_id or choose real members.
 
 Draft generation never writes Task rows. Only explicit confirmation calls the normal task batch endpoint. The confirming user owns the root item; a child with owner_claimable=true is published ownerless, while a child with owner_claimable=false is temporarily owned by the confirming manager/admin. Database state, permissions and constraints remain deterministic backend logic.
 

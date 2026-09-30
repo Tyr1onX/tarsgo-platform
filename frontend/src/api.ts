@@ -67,7 +67,7 @@ export interface TaskPayload {
   collaborator_ids: number[]
   collaboration_open: boolean
   parent_id?: number | null
-  deadline: string
+  deadline?: string | null
   status: TaskStatus
   depends_on_task_ids?: number[]
 }

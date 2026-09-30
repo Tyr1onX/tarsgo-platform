@@ -39,6 +39,7 @@ def draft() -> AIPlannerDraft:
             AIPlannerTaskDraft(
                 title="现场摄影",
                 deliverable="活动原图完整上传。",
+                deadline=None,
                 execution_points=["按活动流程采集关键环节"],
                 cautions=["确认设备电量充足"],
                 prerequisites=["获取已确认的活动流程"],
@@ -264,6 +265,9 @@ def run_with_fake(provider_name: str, *, output_text: str | None = None, base_ur
 
 
 def main() -> None:
+    task_deadline_schema = AIPlannerTaskDraft.model_json_schema()
+    assert "deadline" in task_deadline_schema["required"]
+    assert task_deadline_schema["properties"]["deadline"]["anyOf"][-1] == {"type": "null"}
     assert_generation_prompt_contract()
     assert_review_prompt_contract()
     assert "不得补充、推断或预测" in ITEM_FACT_EXTRACTION_SYSTEM_PROMPT

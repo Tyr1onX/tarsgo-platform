@@ -33,7 +33,7 @@ export interface Task {
   owner_claimable: boolean
   collaborators: MemberSummary[]
   collaboration_open: boolean
-  deadline: string
+  deadline: string | null
   status: TaskStatus
   created_by: number
   created_at: string
@@ -135,6 +135,7 @@ export interface AIPlannerItemDraft {
 export interface AIPlannerTaskDraft {
   title: string
   deliverable: string
+  deadline: string | null
   execution_points: string[]
   cautions: string[]
   prerequisites: string[]
@@ -157,7 +158,7 @@ export interface AIPlannerRefineInput extends AIPlannerInput {
   scope_task_index?: number
 }
 export interface TaskBatchPayload {
-  item: { title: string; deliverable: string; deadline: string }
+  item: { title: string; deliverable: string; deadline: string | null }
   tasks: AIPlannerTaskDraft[]
 }
 export interface TaskBatchResult {

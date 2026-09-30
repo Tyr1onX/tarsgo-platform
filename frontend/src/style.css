@@ -2717,6 +2717,11 @@ textarea[aria-invalid="true"] {
   color: var(--faint);
   font-size: 11px;
 }
+.planner-summary-deadline {
+  color: var(--muted);
+  font-size: 11px;
+}
+.planner-deadline-field { display: grid; align-content: start; gap: 5px; }
 .planner-summary-chevron {
   align-self: center;
   color: var(--faint);
@@ -2786,6 +2791,7 @@ textarea[aria-invalid="true"] {
 }
 .planner-detail-title-field { gap: 5px; }
 .planner-detail-title-field input { background: #fff; font-size: 16px; font-weight: 610; }
+.planner-detail-deadline { display: grid; gap: 5px; }
 .planner-detail-deliverable textarea,
 .planner-detail-section textarea { background: #fff; font-size: 13px; line-height: 1.55; }
 .planner-detail-section { display: grid; gap: 6px; }

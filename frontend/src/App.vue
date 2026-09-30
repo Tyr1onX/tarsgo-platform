@@ -10,6 +10,7 @@ import TaskStatusIndicator from "./TaskStatusIndicator.vue"
 import LocalPageLoading from "./pages/LocalPageLoading.vue"
 import {
   claimableTask,
+  compareTaskDeadlines,
   mergeRecentActivities,
   patchTaskCollection,
   prependUniqueActivity,
@@ -269,9 +270,7 @@ const homeTaskCards = computed(() => {
   const standaloneRoots = homeOpenTasks.value.filter(
     (task) => task.parent_id === null && !allChildren.has(task.id),
   )
-  return [...children, ...standaloneRoots].sort(
-    (left, right) => new Date(left.deadline).getTime() - new Date(right.deadline).getTime(),
-  )
+  return [...children, ...standaloneRoots].sort(compareTaskDeadlines)
 })
 const rootTasks = computed(() => tasks.value.filter((task) => task.parent_id === null))
 const deleteTargetRoot = computed(() =>
@@ -706,7 +705,8 @@ async function confirmDeleteRootItem() {
   }
 }
 
-function formatDate(value: string) {
+function formatDate(value: string | null) {
+  if (!value) return ""
   return new Date(value).toLocaleString("zh-CN", {
     month: "numeric",
     day: "numeric",
@@ -715,8 +715,8 @@ function formatDate(value: string) {
   })
 }
 
-function toLocalInput(value: string) {
-  return value.slice(0, 16)
+function toLocalInput(value: string | null) {
+  return value ? value.slice(0, 16) : ""
 }
 
 function childTasks(parentId: number) {
@@ -816,7 +816,6 @@ async function startNewTask(parent?: Task) {
   resetTaskForm()
   if (parent) {
     parentTaskId.value = parent.id
-    taskDeadline.value = toLocalInput(parent.deadline)
   }
   taskFormOpen.value = true
   if (path.value !== "/tasks" || taskView.value !== "all") {
@@ -1109,10 +1108,6 @@ async function submitTask() {
     await showFieldError("task-title", "请填写任务标题", "需要填写任务标题")
     return
   }
-  if (!taskDeadline.value) {
-    await showFieldError("task-deadline", "请补充截止时间", "需要设置截止时间")
-    return
-  }
   if (taskOwnerMode.value === "assigned" && !desiredOwnerId) {
     await showFieldError("task-owner", "请选择负责人", "需要选择负责人")
     return
@@ -1148,7 +1143,7 @@ async function submitTask() {
         payload.collaboration_open = taskCollaborationOpen.value
       }
       if (taskDeadline.value !== toLocalInput(original.deadline)) {
-        payload.deadline = taskDeadline.value
+        payload.deadline = taskDeadline.value || null
       }
       if (taskStatus.value !== original.status) payload.status = taskStatus.value
       if (!sameIds(taskDependencyIds.value, original.depends_on_tasks.map((dependency) => dependency.id))) {
@@ -1177,7 +1172,7 @@ async function submitTask() {
         owner_claimable: desiredOwnerClaimable,
         collaborator_ids: taskCollaboratorIds.value,
         collaboration_open: taskCollaborationOpen.value,
-        deadline: taskDeadline.value,
+        deadline: taskDeadline.value || null,
         status: taskStatus.value,
         depends_on_task_ids: taskDependencyIds.value,
       })
@@ -1598,6 +1593,7 @@ function newPlannerTask(): AIPlannerTaskDraft {
   return {
     title: "",
     deliverable: "",
+    deadline: null,
     execution_points: [],
     cautions: [],
     prerequisites: [],
@@ -1744,7 +1740,10 @@ function plannerTaskLineLimitMessage() {
 
 function setPlannerDraft(draft: AIPlannerDraft, preserveSelectedTask = false) {
   const selectedIndex = plannerSelectedTaskIndex.value
-  if (draft.item.deadline) draft.item.deadline = toLocalInput(draft.item.deadline)
+  draft.item.deadline = toLocalInput(draft.item.deadline)
+  draft.tasks.forEach((task) => {
+    task.deadline = toLocalInput(task.deadline)
+  })
   filterIgnoredPlannerSuggestions(draft, plannerIgnoredSuggestionKeys)
   plannerDraft.value = draft
   resetPlannerTaskDetails(draft)
@@ -1799,10 +1798,6 @@ async function publishAIPlan() {
     await showFieldError("planner-item-title", "请填写事项标题", "需要填写事项标题")
     return
   }
-  if (!draft.item.deadline) {
-    await showFieldError("planner-item-deadline", "请确认事项截止时间", "需要设置事项截止时间")
-    return
-  }
   const emptyTaskIndex = draft.tasks.findIndex((task) => !task.title.trim())
   if (emptyTaskIndex >= 0) {
     await showFieldError(`planner-task-title-${emptyTaskIndex}`, `请填写第 ${emptyTaskIndex + 1} 项分工标题`, "需要填写标题")
@@ -1822,11 +1817,12 @@ async function publishAIPlan() {
       item: {
         title: draft.item.title.trim(),
         deliverable: draft.item.deliverable.trim(),
-        deadline: draft.item.deadline,
+        deadline: draft.item.deadline || null,
       },
       tasks: draft.tasks.map((task) => ({
         title: task.title.trim(),
         deliverable: task.deliverable.trim(),
+        deadline: task.deadline || null,
         execution_points: task.execution_points,
         cautions: task.cautions,
         prerequisites: task.prerequisites,
@@ -2256,7 +2252,10 @@ onBeforeUnmount(() => {
               <span v-else class="state">事项</span>
               <strong>{{ task.title }}</strong>
               <span v-if="task.parent_id !== null && task.deliverable" class="home-task-deliverable">{{ task.deliverable }}</span>
-              <span class="home-task-meta"><TaskStatusIndicator :status="task.status" :task-id="task.id" /> · {{ formatDate(task.deadline) }}</span>
+              <span class="home-task-meta">
+                <TaskStatusIndicator :status="task.status" :task-id="task.id" />
+                <template v-if="task.deadline"> · {{ formatDate(task.deadline) }}</template>
+              </span>
               <span class="home-task-arrow" aria-hidden="true">›</span>
             </button>
           </div>
@@ -2350,7 +2349,7 @@ onBeforeUnmount(() => {
                 <div>
                   <p>事项总览</p>
                   <h1 id="planner-item-title">{{ plannerDraft.item.title || "未命名事项" }}</h1>
-                  <span>{{ plannerDraft.tasks.length }} 个执行任务</span>
+                  <span>{{ plannerDraft.tasks.length }} 个执行任务<template v-if="plannerDraft.item.deadline"> · 事项时间建议 {{ formatDate(plannerDraft.item.deadline) }}</template></span>
                 </div>
                 <button
                   ref="plannerAddTaskButton"
@@ -2379,6 +2378,7 @@ onBeforeUnmount(() => {
                     <span class="planner-summary-content">
                       <strong>{{ task.title || "未命名分工" }}</strong>
                       <span v-if="task.deliverable" class="planner-summary-deliverable">{{ task.deliverable }}</span>
+                      <small v-if="task.deadline" class="planner-summary-deadline">建议截止 {{ formatDate(task.deadline) }}</small>
                       <span v-if="plannerTaskStatus(task)" class="planner-summary-status">{{ plannerTaskStatus(task) }}</span>
                     </span>
                     <span class="planner-summary-chevron" aria-hidden="true">›</span>
@@ -2401,17 +2401,14 @@ onBeforeUnmount(() => {
                     />
                     <small v-if="fieldErrors['planner-item-title']" class="field-error">{{ fieldErrors['planner-item-title'] }}</small>
                   </label>
-                  <label>
-                    截止时间
-                    <input
-                      v-model="plannerDraft.item.deadline"
-                      data-validation-field="planner-item-deadline"
-                      :aria-invalid="Boolean(fieldErrors['planner-item-deadline'])"
-                      type="datetime-local"
-                      @input="clearFieldError('planner-item-deadline')"
-                    />
-                    <small v-if="fieldErrors['planner-item-deadline']" class="field-error">{{ fieldErrors['planner-item-deadline'] }}</small>
-                  </label>
+                  <div class="planner-deadline-field">
+                    <label>
+                      建议截止时间（可选）
+                      <input v-model="plannerDraft.item.deadline" type="datetime-local" />
+                      <small>可保留、修改或清除；没有可靠时间依据时留空。</small>
+                    </label>
+                    <button v-if="plannerDraft.item.deadline" class="text-action" type="button" @click="plannerDraft.item.deadline = ''">清除建议</button>
+                  </div>
                 </div>
               </details>
 
@@ -2499,6 +2496,14 @@ onBeforeUnmount(() => {
                   做到什么算完成
                   <textarea v-model="plannerSelectedTask.deliverable" maxlength="5000" rows="3" placeholder="写清楚看到什么结果即可判定完成" />
                 </label>
+                <div class="planner-detail-deadline">
+                  <label>
+                    建议截止时间（可选）
+                    <input v-model="plannerSelectedTask.deadline" type="datetime-local" />
+                    <small>可保留、修改或清除；没有可靠时间依据时留空。</small>
+                  </label>
+                  <button v-if="plannerSelectedTask.deadline" class="text-action" type="button" @click="plannerSelectedTask.deadline = ''">清除建议</button>
+                </div>
 
                 <section
                   v-if="plannerTaskDetailsText[plannerSelectedTaskIndex] && (parseTaskLines(plannerTaskDetailsText[plannerSelectedTaskIndex].execution_points).length || parseTaskLines(plannerTaskDetailsText[plannerSelectedTaskIndex].cautions).length || plannerEmptyDetailSection === 'execution_points' || plannerEmptyDetailSection === 'cautions')"
@@ -2613,7 +2618,7 @@ onBeforeUnmount(() => {
                 :blocked="detailTask.blocked"
                 @update-status="updateOwnTaskStatus(detailTask, $event)"
               />
-              <span>截止 {{ formatDate(detailTask.deadline) }}</span>
+              <span v-if="detailTask.deadline">截止 {{ formatDate(detailTask.deadline) }}</span>
               <span>{{ detailTask.owner ? "总负责人 " + detailTask.owner.name : "总负责人待认领" }}</span>
             </div>
           </section>
@@ -2700,7 +2705,7 @@ onBeforeUnmount(() => {
                 <strong>{{ task.title }}</strong>
                 <span v-if="task.deliverable">{{ task.deliverable }}</span>
                 <small v-if="task.blocked" class="blocked-inline">等待：{{ task.blocked_by.map((dependency) => dependency.title).join("、") }}</small>
-                <small>{{ task.owner ? task.owner.name + " 负责" : "待认领" }} · {{ formatDate(task.deadline) }}</small>
+                <small>{{ task.owner ? task.owner.name + " 负责" : "待认领" }}<template v-if="task.deadline"> · 截止 {{ formatDate(task.deadline) }}</template></small>
                 <span class="home-task-arrow" aria-hidden="true">›</span>
               </button>
             </div>
@@ -2811,7 +2816,7 @@ onBeforeUnmount(() => {
               />
               <span>{{ detailTask.owner ? detailTask.owner.name + " 负责" : "待认领" }}</span>
               <span v-if="detailTask.collaborators.length">协作 {{ detailTask.collaborators.map((member) => member.name).join("、") }}</span>
-              <span>截止 {{ formatDate(detailTask.deadline) }}</span>
+              <span v-if="detailTask.deadline">截止 {{ formatDate(detailTask.deadline) }}</span>
             </div>
           </section>
 
@@ -3060,15 +3065,12 @@ onBeforeUnmount(() => {
           </fieldset>
 
           <label>
-            截止时间
+            截止时间（可选）
             <input
               v-model="taskDeadline"
-              data-validation-field="task-deadline"
-              :aria-invalid="Boolean(fieldErrors['task-deadline'])"
               type="datetime-local"
-              @input="clearFieldError('task-deadline')"
             />
-            <small v-if="fieldErrors['task-deadline']" class="field-error">{{ fieldErrors['task-deadline'] }}</small>
+            <small>没有明确时间可以留空。</small>
           </label>
 
           <details class="advanced-fields">
@@ -3170,10 +3172,8 @@ onBeforeUnmount(() => {
                 <div class="operation-main">
                   <div class="root-status-line"><span class="state">事项</span><TaskStatusIndicator :status="task.status" :task-id="task.id" :editable="isManager && childTasks(task.id).length === 0" :pending="Boolean(pendingTaskAction(task.id)?.startsWith('status:'))" @update-status="updateOwnTaskStatus(task, $event)" /></div>
                   <button class="task-title-link" type="button" @click="openTaskDetail(task)"><h3>{{ task.title }}</h3></button>
-                  <small>
-                    {{ task.owner ? "总负责人 " + task.owner.name : "总负责人待认领" }}
-                    · 截止 {{ formatDate(task.deadline) }}
-                  </small>
+                  <small>{{ task.owner ? "总负责人 " + task.owner.name : "总负责人待认领" }}</small>
+                  <small v-if="task.deadline">截止 {{ formatDate(task.deadline) }}</small>
                   <small v-if="task.collaborators.length">
                     协作：{{ task.collaborators.map((member) => member.name).join("、") }}
                   </small>
@@ -3241,10 +3241,10 @@ onBeforeUnmount(() => {
                     </div>
                     <button class="task-title-link" type="button" @click="openTaskDetail(child)"><h4>{{ child.title }}</h4></button>
                     <p v-if="child.deliverable">{{ child.deliverable }}</p>
-                    <small class="child-task-meta">
-                      截止 {{ formatDate(child.deadline) }}
+                    <small v-if="child.deadline || child.collaborators.length" class="child-task-meta">
+                      <template v-if="child.deadline">截止 {{ formatDate(child.deadline) }}</template>
                       <template v-if="child.collaborators.length">
-                        · 协作 {{ child.collaborators.map((member) => member.name).join("、") }}
+                        <template v-if="child.deadline"> · </template>协作 {{ child.collaborators.map((member) => member.name).join("、") }}
                       </template>
                     </small>
                   </div>
@@ -3295,10 +3295,7 @@ onBeforeUnmount(() => {
                 <span class="state">分工</span><TaskStatusIndicator :status="task.status" :task-id="task.id" :editable="isManager" :pending="Boolean(pendingTaskAction(task.id)?.startsWith('status:'))" :blocked="task.blocked" @update-status="updateOwnTaskStatus(task, $event)" />
                 <button class="task-title-link" type="button" @click="openTaskDetail(task)"><h3>{{ task.title }}</h3></button>
                 <p v-if="task.deliverable">{{ task.deliverable }}</p>
-                <small>
-                  {{ task.owner ? task.owner.name + " 负责" : "待认领" }}
-                  · 截止 {{ formatDate(task.deadline) }}
-                </small>
+                <small>{{ task.owner ? task.owner.name + " 负责" : "待认领" }}<template v-if="task.deadline"> · 截止 {{ formatDate(task.deadline) }}</template></small>
               </div>
               <div class="task-actions">
                 <button

@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs"
 
 import {
   claimableTask,
+  compareTaskDeadlines,
   deriveRootStatus,
   mergeRecentActivities,
   patchTaskCollection,
@@ -61,6 +62,15 @@ assert.equal(pending.get(2), "join")
 assert.equal(pending.has(3), false)
 assert.equal(setPendingTaskAction(pending, 2, null).has(2), false)
 
+const deadlineOrdered = [
+  { id: 8, deadline: null },
+  { id: 3, deadline: "2026-10-11T12:00:00" },
+  { id: 2, deadline: "2026-10-10T12:00:00" },
+  { id: 7, deadline: null },
+  { id: 4, deadline: "2026-10-11T12:00:00" },
+]
+assert.deepEqual(deadlineOrdered.sort(compareTaskDeadlines).map((task) => task.id), [2, 3, 4, 7, 8])
+
 const older = { id: 4, content: "older" }
 const latest = { id: 5, content: "latest" }
 assert.deepEqual(prependUniqueActivity([older], latest).map((activity) => activity.id), [5, 4])
@@ -73,6 +83,11 @@ for (const action of ["updateOwnTaskStatus", "claimTask", "unclaimTask", "joinTa
   assert.match(body, /runTaskAction/, `${action} has task-local pending state`)
 }
 assert.match(app, /function replaceTaskInState\(updated: Task\)/)
+assert.doesNotMatch(app.match(/async function startNewTask\([\s\S]*?\n}/)?.[0] ?? "", /parent\.deadline/)
+assert.match(app, /deadline: task\.deadline \|\| null/)
+assert.match(app, /截止时间（可选）[\s\S]*?没有明确时间可以留空。/)
+assert.match(app, /v-if="task\.deadline" class="planner-summary-deadline"/)
+assert.match(app, /v-if="detailTask\.deadline"/)
 const assigneeLoader = app.match(/async function ensureTaskAssignees\([\s\S]*?\n}/)?.[0]
 assert.ok(assigneeLoader)
 assert.match(assigneeLoader, /api\.taskAssignees\(\)/)

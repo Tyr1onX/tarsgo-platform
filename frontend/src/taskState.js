@@ -28,9 +28,7 @@ export function patchTaskCollection(current, updated, view, memberId, hasComplet
     }
   }
 
-  return next.sort((left, right) =>
-    new Date(left.deadline).getTime() - new Date(right.deadline).getTime() || left.id - right.id,
-  )
+  return next.sort(compareTaskDeadlines)
 }
 
 export function setPendingTaskAction(current, taskId, action) {
@@ -47,4 +45,12 @@ export function prependUniqueActivity(current, activity) {
 export function mergeRecentActivities(current, recent) {
   const byId = new Map([...recent, ...current].map((activity) => [activity.id, activity]))
   return [...byId.values()].sort((left, right) => right.id - left.id)
+}
+
+export function compareTaskDeadlines(left, right) {
+  const leftHasDeadline = Boolean(left.deadline)
+  const rightHasDeadline = Boolean(right.deadline)
+  if (leftHasDeadline !== rightHasDeadline) return leftHasDeadline ? -1 : 1
+  if (!leftHasDeadline) return left.id - right.id
+  return new Date(left.deadline).getTime() - new Date(right.deadline).getTime() || left.id - right.id
 }

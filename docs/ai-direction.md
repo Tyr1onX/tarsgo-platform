@@ -31,7 +31,7 @@ Planner 采用两个状态：
 
 Planner 自动检索团队历史知识，但规划页面不展示关联资料清单、来源路径或检索设置。历史知识继续只作为后台参考。
 
-事项草案可修改标题和截止时间。root 事项不生成重复分工的总完成标准。
+事项草案可修改标题和可选时间建议。每个分工也有独立的可选建议截止时间；没有可靠时间依据时留空，可以保留、修改或清除。root 事项时间只作为 AI 推荐分工时间的上下文，不自动继承给 child task。root 事项不生成重复分工的总完成标准。
 
 分工草案可修改标题、“做到什么算完成”、删除 / 新增、是否开放负责人认领、是否开放自主协作。
 
@@ -47,9 +47,10 @@ AI 通过后端 Pydantic schema 返回严格结构化数据，不先生成 Markd
 
 - item.title
 - item.deliverable
-- item.deadline（不确定时为 null）
+- item.deadline（可选；没有可靠时间依据时为 null）
 - tasks[].title
 - tasks[].deliverable
+- tasks[].deadline（可选；没有可靠时间依据时为 null，事项截止时间不会自动继承给分工）
 - tasks[].execution_points（最多 6 条，每条最多 240 字）
 - tasks[].cautions（最多 5 条，每条最多 240 字）
 - tasks[].prerequisites（最多 4 条，每条最多 240 字；不构成系统依赖）

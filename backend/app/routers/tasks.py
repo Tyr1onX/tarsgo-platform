@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import and_, delete, or_, select, update
+from sqlalchemy import and_, case, delete, or_, select, update
 from sqlalchemy.orm import Session, selectinload
 
 from ..auth import get_current_member, require_admin, require_manager
@@ -428,7 +428,9 @@ def list_tasks(
     elif scope == "claimable":
         query = query.where(Task.owner_id.is_(None), Task.owner_claimable.is_(True), Task.status != "done")
 
-    tasks = db.scalars(query.order_by(Task.deadline.asc(), Task.id.asc())).unique().all()
+    tasks = db.scalars(
+        query.order_by(case((Task.deadline.is_(None), 1), else_=0), Task.deadline.asc(), Task.id.asc())
+    ).unique().all()
     return [_task_out(task, db, current) for task in tasks]
 
 
@@ -509,7 +511,9 @@ def get_task_context(
     selected = _get_task(db, task_id)
     root = selected if selected.parent_id is None else _get_task(db, selected.parent_id)
     query = _task_query().where(or_(Task.id == root.id, Task.parent_id == root.id))
-    related_tasks = db.scalars(query.order_by(Task.deadline.asc(), Task.id.asc())).unique().all()
+    related_tasks = db.scalars(
+        query.order_by(case((Task.deadline.is_(None), 1), else_=0), Task.deadline.asc(), Task.id.asc())
+    ).unique().all()
     activity_query = _visible_activity_query(
         db,
         root,
@@ -946,7 +950,7 @@ def create_task_batch(
                         collaborator_ids=[],
                         collaboration_open=child.collaboration_open,
                         parent_id=root.id,
-                        deadline=payload.item.deadline,
+                        deadline=child.deadline,
                         status="todo",
                     ),
                     current,
@@ -1000,7 +1004,7 @@ def update_task(
 
     required_non_null = {
         "title", "deliverable", "execution_points", "cautions", "prerequisites", "result",
-        "collaborator_ids", "owner_claimable", "collaboration_open", "deadline", "status",
+        "collaborator_ids", "owner_claimable", "collaboration_open", "status",
     }
     if any(field in fields and getattr(payload, field) is None for field in required_non_null):
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="任务字段不能设为空")

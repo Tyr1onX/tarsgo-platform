@@ -88,7 +88,7 @@ class CapturingProvider:
         return PlannerGeneration(
             draft=AIPlannerDraft(
                 item=AIPlannerItemDraft(title="校园科技展", deliverable="完成现场展示", deadline=None),
-                tasks=[AIPlannerTaskDraft(title="现场布置", deliverable="布置完成", execution_points=[], cautions=[], prerequisites=[], owner_claimable=True, collaboration_open=False)],
+                tasks=[AIPlannerTaskDraft(title="现场布置", deliverable="布置完成", deadline=None, execution_points=[], cautions=[], prerequisites=[], owner_claimable=True, collaboration_open=False)],
                 questions=["请确认结束时间。"],
             ),
             input_tokens=10,

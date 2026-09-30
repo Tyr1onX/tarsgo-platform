@@ -90,7 +90,7 @@ V0.2 继续使用现有 tasks 表，不新增 Activity 模型。
 - collaborators
 - collaboration_open
 - parent id
-- 明确截止时间
+- 可选截止时间（仅在有明确时间约束时设置）
 - 状态：todo | doing | done
 
 已发布任务必须满足：已有负责人，或允许负责人认领。
@@ -234,6 +234,7 @@ OpenAI 和 DeepSeek 适配器都使用官方 OpenAI Python SDK。OpenAI 继续�
 -> 0006_dynamic_item_execution
 -> 0007_shared_execution_scene
 -> 0008_scoped_item_information
+-> 0009_optional_task_deadlines
 ~~~
 
 它会在不删除数据的前提下升级现有 V0.1 tasks 表：
@@ -248,6 +249,7 @@ OpenAI 和 DeepSeek 适配器都使用官方 OpenAI Python SDK。OpenAI 继续�
 CI 使用预置的旧版数据，包含真实的 0001_v0_1 -> 0002_operations_claiming 兼容性检查。
 
 迁移会为执行要点、注意事项和前置条件新增 JSON 数组，并为现有任务回填空数组。`0007_shared_execution_scene` 为 `item_activities.task_id` 新增可空字段（旧 activity 记录保持未关联），并新增同一事项内的 `task_dependencies` 关联表。`0008_scoped_item_information` 将旧版根事项 `context_facts` 迁移为全局 `ItemFact` 记录，然后移除该 JSON 列；相关事实会关联到同一事项的子任务。
+`0009_optional_task_deadlines` 只将 `tasks.deadline` 改为可空，保留所有已有截止时间；事项与分工独立保存日期，无可靠时间约束时使用 `null`，分工不会继承事项截止时间。
 
 ## Knowledge Source V0.1
 

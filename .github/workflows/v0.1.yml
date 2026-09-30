@@ -80,6 +80,10 @@ jobs:
             VALUES (100, 100, 'legacy activity stays unlinked');
           "
           docker compose exec -T -e DB_NAME="$MIGRATION_DB" api alembic upgrade head
+          DEADLINE_NULLABLE="$(docker compose exec -T db mysql -uroot -p"$CI_MYSQL_ROOT_PASSWORD" -N -B -e "SELECT IS_NULLABLE FROM information_schema.columns WHERE table_schema = 'tarsgo_migration' AND table_name = 'tasks' AND column_name = 'deadline'")"
+          test "$DEADLINE_NULLABLE" = "YES"
+          LEGACY_DEADLINE="$(docker compose exec -T db mysql -uroot -p"$CI_MYSQL_ROOT_PASSWORD" -N -B tarsgo_migration -e "SELECT DATE_FORMAT(deadline, '%Y-%m-%d %H:%i:%s') FROM tasks WHERE id = 100")"
+          test "$LEGACY_DEADLINE" = "2026-09-20 18:00:00"
           RESULT="$(docker compose exec -T db mysql -uroot -p"$CI_MYSQL_ROOT_PASSWORD" -N -B tarsgo_migration -e "
             SELECT CONCAT(
               owner_id, '|',

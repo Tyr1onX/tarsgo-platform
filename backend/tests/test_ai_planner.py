@@ -108,7 +108,7 @@ def main() -> None:
         assert "deadline 是有时间约束时才设置的可选建议" in SYSTEM_PROMPT
         assert "事项 deadline 只作为分工推荐的上下文，不能自动复制给 child task" in SYSTEM_PROMPT
         assert "没有可靠时间依据时返回 null" in SYSTEM_PROMPT
-        assert "10 月 10 / 11 日" in SYSTEM_PROMPT
+        assert "10 月 10 日 / 11 日" in SYSTEM_PROMPT
         assert "没有日期背景的通用工作（例如“统一平台头像”）应保持 null" in SYSTEM_PROMPT
 
         anonymous_upload = TestClient(app).post(

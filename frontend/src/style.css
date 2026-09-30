@@ -1108,6 +1108,15 @@ textarea[aria-invalid="true"] {
   margin-top: 6px;
 }
 
+.local-route-loading {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 72px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
 .operation-list {
   display: grid;
   gap: 16px;

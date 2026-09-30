@@ -16,6 +16,7 @@ from ..schemas import (
     TaskProgressOut,
     ItemActivityCreate,
     ItemActivityOut,
+    ItemActivityPageOut,
     ItemFactCreate,
     ItemFactOut,
     ItemFactScopeUpdate,
@@ -25,6 +26,7 @@ from ..schemas import (
     TaskBatchOut,
     TaskCreate,
     TaskOut,
+    TaskDetailContextOut,
     TaskUpdate,
 )
 
@@ -444,38 +446,12 @@ def get_task(
     return _task_out(_get_task(db, task_id), db, current)
 
 
-@router.delete("/{root_task_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_root_task(
-    root_task_id: int,
-    current: Member = Depends(require_admin),
-    db: Session = Depends(get_db),
-) -> None:
-    root = db.scalar(select(Task).where(Task.id == root_task_id).with_for_update())
-    if root is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="事项不存在")
-    if root.parent_id is not None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="只能删除事项，不能单独删除分工")
-
-    try:
-        # The self-referencing tasks.parent_id FK intentionally has no cascade.
-        # Delete children first; the existing FKs then cascade their associations,
-        # while root-owned activities and facts cascade with the root row.
-        db.execute(delete(Task).where(Task.parent_id == root.id))
-        db.delete(root)
-        db.commit()
-    except Exception:
-        db.rollback()
-        raise
-
-
-@router.get("/{root_task_id}/activities", response_model=list[ItemActivityOut])
-def list_item_activities(
-    root_task_id: int,
-    task_id: Annotated[int | None, Query(gt=0)] = None,
-    current: Member = Depends(get_current_member),
-    db: Session = Depends(get_db),
-) -> list[ItemActivityOut]:
-    root = _get_root_task(db, root_task_id)
+def _visible_activity_query(
+    db: Session,
+    root: Task,
+    current: Member,
+    task_id: int | None,
+):
     query = _activity_query().where(ItemActivity.root_task_id == root.id)
     if not _is_manager(current) and root.owner_id != current.id:
         related_source_ids = [value for value in db.scalars(
@@ -514,8 +490,6 @@ def list_item_activities(
         visible = []
         if participant_task_ids:
             visible.append(ItemActivity.task_id.in_(participant_task_ids))
-        # Unlinked item activities are global unless they are the source for
-        # task-scoped facts. Those appear only through the visible fact sources.
         root_activity = ItemActivity.task_id.is_(None)
         if related_source_ids:
             root_activity = and_(root_activity, ItemActivity.id.not_in(related_source_ids))
@@ -523,8 +497,101 @@ def list_item_activities(
         if source_ids:
             visible.append(ItemActivity.id.in_(source_ids))
         query = query.where(or_(*visible))
+    return query
+
+
+@router.get("/{task_id}/context", response_model=TaskDetailContextOut)
+def get_task_context(
+    task_id: int,
+    current: Member = Depends(get_current_member),
+    db: Session = Depends(get_db),
+) -> TaskDetailContextOut:
+    selected = _get_task(db, task_id)
+    root = selected if selected.parent_id is None else _get_task(db, selected.parent_id)
+    query = _task_query().where(or_(Task.id == root.id, Task.parent_id == root.id))
+    related_tasks = db.scalars(query.order_by(Task.deadline.asc(), Task.id.asc())).unique().all()
+    activity_query = _visible_activity_query(
+        db,
+        root,
+        current,
+        None if selected.parent_id is None else selected.id,
+    )
+    activities = db.scalars(
+        activity_query.order_by(ItemActivity.created_at.desc(), ItemActivity.id.desc()).limit(6)
+    ).all()
+    has_more = len(activities) > 5
+    page_items = activities[:5]
+    return TaskDetailContextOut(
+        root=_task_out(root, db, current),
+        tasks=[_task_out(task, db, current) for task in related_tasks if task.id != root.id],
+        activity_page=ItemActivityPageOut(
+            items=[_activity_out(activity) for activity in page_items],
+            has_more=has_more,
+            next_before_id=page_items[-1].id if has_more and page_items else None,
+        ),
+    )
+
+
+@router.delete("/{root_task_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_root_task(
+    root_task_id: int,
+    current: Member = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> None:
+    root = db.scalar(select(Task).where(Task.id == root_task_id).with_for_update())
+    if root is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="事项不存在")
+    if root.parent_id is not None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="只能删除事项，不能单独删除分工")
+
+    try:
+        # The self-referencing tasks.parent_id FK intentionally has no cascade.
+        # Delete children first; the existing FKs then cascade their associations,
+        # while root-owned activities and facts cascade with the root row.
+        db.execute(delete(Task).where(Task.parent_id == root.id))
+        db.delete(root)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+
+@router.get("/{root_task_id}/activities", response_model=list[ItemActivityOut])
+def list_item_activities(
+    root_task_id: int,
+    task_id: Annotated[int | None, Query(gt=0)] = None,
+    current: Member = Depends(get_current_member),
+    db: Session = Depends(get_db),
+) -> list[ItemActivityOut]:
+    root = _get_root_task(db, root_task_id)
+    query = _visible_activity_query(db, root, current, task_id)
     activities = db.scalars(query.order_by(ItemActivity.created_at.desc(), ItemActivity.id.desc())).all()
     return [_activity_out(activity) for activity in activities]
+
+
+@router.get("/{root_task_id}/activities/page", response_model=ItemActivityPageOut)
+def list_item_activities_page(
+    root_task_id: int,
+    task_id: Annotated[int | None, Query(gt=0)] = None,
+    limit: Annotated[int, Query(ge=1, le=20)] = 5,
+    before_id: Annotated[int | None, Query(gt=0)] = None,
+    current: Member = Depends(get_current_member),
+    db: Session = Depends(get_db),
+) -> ItemActivityPageOut:
+    root = _get_root_task(db, root_task_id)
+    query = _visible_activity_query(db, root, current, task_id)
+    if before_id is not None:
+        query = query.where(ItemActivity.id < before_id)
+    activities = db.scalars(
+        query.order_by(ItemActivity.created_at.desc(), ItemActivity.id.desc()).limit(limit + 1)
+    ).all()
+    has_more = len(activities) > limit
+    items = activities[:limit]
+    return ItemActivityPageOut(
+        items=[_activity_out(activity) for activity in items],
+        has_more=has_more,
+        next_before_id=items[-1].id if has_more and items else None,
+    )
 
 
 @router.post("/{root_task_id}/activities", response_model=ItemActivityOut, status_code=status.HTTP_201_CREATED)

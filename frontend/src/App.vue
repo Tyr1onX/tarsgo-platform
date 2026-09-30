@@ -1,11 +1,19 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 
 import { ApiError, api } from "./api"
 import { revealInvalidField } from "./formFeedback.js"
 import { filterIgnoredPlannerSuggestions, ignorePlannerSuggestion, plannerSuggestionJoinInstruction } from "./plannerSuggestions.js"
 import { itemReviewChanges, removeItemReviewSuggestion } from "./itemReview.js"
 import { isExpandedRoot, removeRootAndChildren, toggleExpandedRoot } from "./rootItemList.js"
+import LocalPageLoading from "./pages/LocalPageLoading.vue"
+import {
+  claimableTask,
+  mergeRecentActivities,
+  patchTaskCollection,
+  prependUniqueActivity,
+  setPendingTaskAction,
+} from "./taskState.js"
 import {
   defaultFactSelection,
   executionSummary,
@@ -37,8 +45,19 @@ import type {
 } from "./types"
 
 const path = ref(window.location.pathname)
+const TeamPage = defineAsyncComponent({
+  loader: () => import("./pages/TeamPage.vue"),
+  loadingComponent: LocalPageLoading,
+  delay: 120,
+})
+const KnowledgePage = defineAsyncComponent({
+  loader: () => import("./pages/KnowledgePage.vue"),
+  loadingComponent: LocalPageLoading,
+  delay: 120,
+})
 const user = ref<Member | null>(null)
 const loading = ref(true)
+const initialRouteResolved = ref(false)
 const routeNotFound = ref(false)
 const error = ref("")
 const notice = ref("")
@@ -57,10 +76,19 @@ const tasks = ref<Task[]>([])
 const homeMineTasks = ref<Task[]>([])
 const homeAllTasks = ref<Task[]>([])
 const itemActivities = ref<ItemActivity[]>([])
+const detailActivitiesHasMore = ref(false)
+const detailActivitiesNextBeforeId = ref<number | null>(null)
+const loadingEarlierActivities = ref(false)
+const detailContextLoading = ref(false)
 const members = ref<Member[]>([])
 const taskMembers = ref<MemberSummary[]>([])
+const taskMembersLoaded = ref(false)
+const pendingTaskActions = ref<Map<number, string>>(new Map())
 const latestInvite = ref<InviteResult | null>(null)
 const taskView = ref<TaskView>("mine")
+const tasksLoadedScope = ref<TaskView | null>(null)
+const taskListLoading = ref(false)
+const taskListLoadError = ref(false)
 const deleteRootItemModalOpen = ref(false)
 const deletingRootItem = ref(false)
 const deleteTargetRootId = ref<number | null>(null)
@@ -97,7 +125,6 @@ const knowledgeDocuments = ref<KnowledgeDocument[]>([])
 const knowledgeUploading = ref(false)
 const knowledgeSyncing = ref(false)
 const knowledgeSyncSummary = ref<KnowledgeSyncSummary | null>(null)
-const knowledgeUploadRef = ref<HTMLInputElement | null>(null)
 
 const itemActivityDraft = ref("")
 const itemActivityAddToFacts = ref(false)
@@ -109,6 +136,7 @@ const itemFactRelatedTaskIds = ref<number[]>([])
 const editingFactScopeId = ref<number | null>(null)
 const editingFactScope = ref<ItemFactScope>("global")
 const editingFactTaskIds = ref<number[]>([])
+const savingFactScopeId = ref<number | null>(null)
 const taskResultDraft = ref("")
 const taskProgressDraft = ref("")
 const taskCompletionDraft = ref("")
@@ -129,10 +157,8 @@ let factExtractionEpoch = 0
 let collaborationRefreshTimer: number | undefined
 let collaborationRefreshInFlight = false
 let lastCollaborationRefreshAt = 0
-
-const memberName = ref("")
-const memberEmail = ref("")
-const memberRole = ref<Role>("member")
+let routeLoadSequence = 0
+let taskMembersRequest: Promise<MemberSummary[]> | null = null
 
 const taskFormOpen = ref(false)
 const editingTaskId = ref<number | null>(null)
@@ -313,7 +339,6 @@ watch(path, (nextPath, previousPath) => {
   if (nextPath === previousPath) return
   fieldErrors.value = {}
   error.value = ""
-  showAllDetailActivities.value = false
   if (feedback.value?.kind === "error") clearFeedback()
 })
 
@@ -374,10 +399,7 @@ function toggleNewFactScope(scope: ItemFactScope) {
   itemFactRelatedTaskIds.value = ensureFactRelatedSelection(scope, itemFactRelatedTaskIds.value)
 }
 
-const showAllDetailActivities = ref(false)
-const visibleDetailActivities = computed(() =>
-  showAllDetailActivities.value ? detailTaskActivities.value : detailTaskActivities.value.slice(0, 5),
-)
+const visibleDetailActivities = computed(() => detailTaskActivities.value)
 
 function navigate(nextPath: string) {
   const nextRoute = nextPath.split("?")[0]
@@ -396,7 +418,6 @@ function navigate(nextPath: string) {
   path.value = window.location.pathname
   syncCollaborationRefreshTimer()
   error.value = ""
-  showAllDetailActivities.value = false
   fieldErrors.value = {}
   if (feedback.value?.kind === "error") clearFeedback()
   void loadRoute()
@@ -427,17 +448,13 @@ async function refreshExecutionScene(force = false) {
   lastCollaborationRefreshAt = now
   collaborationRefreshInFlight = true
   const routeAtStart = path.value
-  const rootId = selected.parent_id ?? selected.id
   try {
-    const [freshTasks, freshActivities] = await Promise.all([
-      api.tasks("all"),
-      api.itemActivities(rootId, selected.parent_id === null ? undefined : selected.id),
-    ])
+    const context = await api.taskContext(taskId)
     if (path.value !== routeAtStart || taskDetailId.value !== taskId) return
     const previousTask = tasks.value.find((task) => task.id === taskId)
     const resultDraftDirty = Boolean(previousTask && taskResultDraft.value !== (previousTask.result ?? ""))
-    tasks.value = freshTasks
-    const refreshedTask = freshTasks.find((task) => task.id === taskId)
+    tasks.value = [context.root, ...context.tasks]
+    const refreshedTask = tasks.value.find((task) => task.id === taskId)
     if (refreshedTask) {
       taskResultDraft.value = preserveEditableDraft(
         taskResultDraft.value,
@@ -445,11 +462,88 @@ async function refreshExecutionScene(force = false) {
         resultDraftDirty,
       )
     }
-    itemActivities.value = freshActivities
+    itemActivities.value = mergeRecentActivities(itemActivities.value, context.activity_page.items)
+    detailActivitiesHasMore.value = detailActivitiesHasMore.value || context.activity_page.has_more
+    if (detailActivitiesNextBeforeId.value === null) {
+      detailActivitiesNextBeforeId.value = context.activity_page.next_before_id
+    }
   } catch {
     // Background refresh is best effort; preserve the current view and draft text.
   } finally {
     collaborationRefreshInFlight = false
+  }
+}
+
+function replaceTaskInState(updated: Task) {
+  const previous = homeAllTasks.value.find((task) => task.id === updated.id)
+    ?? tasks.value.find((task) => task.id === updated.id)
+  const wasClaimable = Boolean(previous && claimableTask(previous))
+  const fullCurrentTaskSet = taskDetailId.value !== null || (path.value === "/tasks" && taskView.value === "all")
+  const currentView = taskDetailId.value !== null ? "all" : taskView.value
+  tasks.value = patchTaskCollection(tasks.value, updated, currentView, user.value?.id ?? 0, fullCurrentTaskSet)
+  homeMineTasks.value = patchTaskCollection(homeMineTasks.value, updated, "mine", user.value?.id ?? 0)
+  homeAllTasks.value = patchTaskCollection(homeAllTasks.value, updated, "all", user.value?.id ?? 0, true)
+  const isClaimable = claimableTask(updated)
+  if (previous && wasClaimable !== isClaimable) {
+    claimableCount.value = Math.max(0, claimableCount.value + (isClaimable ? 1 : -1))
+  } else if (!previous && isClaimable && path.value === "/") {
+    claimableCount.value += 1
+  }
+}
+
+function patchRootFactsInCollection(collection: Task[], updatedRoot: Task) {
+  return collection.map((task) => {
+    if (task.id === updatedRoot.id) return updatedRoot
+    if (task.parent_id !== updatedRoot.id) return task
+    const visibleFacts = updatedRoot.item_facts.filter((fact) =>
+      fact.scope === "global" || fact.related_tasks.some((related) => related.id === task.id),
+    )
+    return { ...task, item_facts: visibleFacts, context_facts: visibleFacts.map((fact) => fact.content) }
+  })
+}
+
+function replaceRootFactsInState(updatedRoot: Task) {
+  tasks.value = patchRootFactsInCollection(tasks.value, updatedRoot)
+  homeMineTasks.value = patchRootFactsInCollection(homeMineTasks.value, updatedRoot)
+  homeAllTasks.value = patchRootFactsInCollection(homeAllTasks.value, updatedRoot)
+}
+
+function pendingTaskAction(taskId: number) {
+  return pendingTaskActions.value.get(taskId) ?? ""
+}
+
+async function runTaskAction(task: Task, action: string, request: () => Promise<Task>) {
+  if (pendingTaskAction(task.id)) return
+  error.value = ""
+  pendingTaskActions.value = setPendingTaskAction(pendingTaskActions.value, task.id, action)
+  try {
+    const updated = await request()
+    replaceTaskInState(updated)
+    clearItemReview()
+  } catch (reason) {
+    error.value = messageOf(reason)
+  } finally {
+    pendingTaskActions.value = setPendingTaskAction(pendingTaskActions.value, task.id, null)
+  }
+}
+
+async function loadEarlierDetailActivities() {
+  const selected = detailTask.value
+  const root = detailRoot.value
+  const beforeId = detailActivitiesNextBeforeId.value
+  if (!selected || !root || !detailActivitiesHasMore.value || beforeId === null || loadingEarlierActivities.value) return
+  loadingEarlierActivities.value = true
+  const routeAtStart = path.value
+  try {
+    const page = await api.itemActivityPage(root.id, selected.parent_id === null ? undefined : selected.id, 20, beforeId)
+    if (path.value !== routeAtStart) return
+    itemActivities.value = mergeRecentActivities(itemActivities.value, page.items)
+    detailActivitiesHasMore.value = page.has_more
+    detailActivitiesNextBeforeId.value = page.next_before_id
+  } catch (reason) {
+    error.value = messageOf(reason)
+  } finally {
+    loadingEarlierActivities.value = false
   }
 }
 
@@ -507,10 +601,8 @@ async function applyItemReviewSuggestion(entry: { key: string; suggestion: AIIte
   itemReviewApplyingKey.value = entry.key
   try {
     const applied = await api.applyItemReview(root.id, entry.suggestion)
-    const existingIndex = tasks.value.findIndex((task) => task.id === applied.task.id)
-    if (existingIndex >= 0) tasks.value.splice(existingIndex, 1, applied.task)
-    else tasks.value.push(applied.task)
-    itemActivities.value = [applied.activity, ...itemActivities.value]
+    replaceTaskInState(applied.task)
+    itemActivities.value = prependUniqueActivity(itemActivities.value, applied.activity)
     itemReviewSuggestions.value = removeItemReviewSuggestion(itemReviewSuggestions.value, entry.key)
     notice.value = "已应用这条方案调整"
   } catch (reason) {
@@ -543,12 +635,14 @@ function openDeleteRootItemModal(root = detailRoot.value, origin: "detail" | "li
   if (!isAdmin.value || !root || root.parent_id !== null) return
   deleteTargetRootId.value = root.id
   deleteRootOrigin.value = origin
-  deleteTargetActivityCount.value = origin === "detail" && detailTask.value?.parent_id === null
+  const detailHasCompleteRootActivityList = origin === "detail" && detailTask.value?.parent_id === null && !detailActivitiesHasMore.value
+  const activityCountNeedsFetch = origin === "list" || (origin === "detail" && !detailHasCompleteRootActivityList)
+  deleteTargetActivityCount.value = detailHasCompleteRootActivityList
     ? itemActivities.value.length
     : null
-  deleteTargetActivityLoading.value = origin === "list"
+  deleteTargetActivityLoading.value = activityCountNeedsFetch
   deleteRootItemModalOpen.value = true
-  if (origin === "list") {
+  if (activityCountNeedsFetch) {
     void api.itemActivities(root.id).then((activities) => {
       if (deleteRootItemModalOpen.value && deleteTargetRootId.value === root.id) {
         deleteTargetActivityCount.value = activities.length
@@ -696,7 +790,28 @@ function closeTaskForm() {
   resetTaskForm()
 }
 
-function startNewTask(parent?: Task) {
+async function ensureTaskAssignees() {
+  if (!isManager.value || taskMembersLoaded.value) return
+  if (taskMembersRequest) {
+    await taskMembersRequest
+    return
+  }
+  taskMembersRequest = api.taskAssignees()
+  try {
+    taskMembers.value = await taskMembersRequest
+    taskMembersLoaded.value = true
+  } finally {
+    taskMembersRequest = null
+  }
+}
+
+async function startNewTask(parent?: Task) {
+  try {
+    await ensureTaskAssignees()
+  } catch (reason) {
+    error.value = messageOf(reason)
+    return
+  }
   resetTaskForm()
   if (parent) {
     parentTaskId.value = parent.id
@@ -710,7 +825,13 @@ function startNewTask(parent?: Task) {
   }
 }
 
-function editTask(task: Task) {
+async function editTask(task: Task) {
+  try {
+    await ensureTaskAssignees()
+  } catch (reason) {
+    error.value = messageOf(reason)
+    return
+  }
   taskFormOpen.value = true
   editingTaskId.value = task.id
   parentTaskId.value = task.parent_id
@@ -772,52 +893,54 @@ async function loadCurrentUser() {
 }
 
 async function loadRoute() {
-  loading.value = true
+  const loadId = ++routeLoadSequence
+  const routePath = path.value
+  const routeSearch = window.location.search
+  const isCurrentLoad = () => loadId === routeLoadSequence && routePath === path.value && routeSearch === window.location.search
+  loading.value = !initialRouteResolved.value
   routeNotFound.value = false
   error.value = ""
+  detailContextLoading.value = taskDetailId.value !== null
 
   try {
-    const publicPage = path.value === "/login" || path.value.startsWith("/invite/")
+    const publicPage = routePath === "/login" || routePath.startsWith("/invite/")
     if (!publicPage && !user.value) {
       await loadCurrentUser()
+      if (!isCurrentLoad()) return
       if (!user.value) {
         navigate("/login")
         return
       }
     }
 
-    if (path.value === "/login") {
+    if (routePath === "/login") {
       if (user.value) {
         navigate("/")
         return
       }
-    } else if (path.value.startsWith("/invite/")) {
+    } else if (routePath.startsWith("/invite/")) {
       invitation.value = await api.invitation(inviteToken.value)
-    } else if (path.value === "/admin/tasks") {
+      if (!isCurrentLoad()) return
+    } else if (routePath === "/admin/tasks") {
       navigate("/tasks")
       return
-    } else if (path.value === "/admin/members") {
+    } else if (routePath === "/admin/members") {
       navigate("/team")
       return
-    } else if (path.value === "/") {
-      const [mine, claimable, all] = await Promise.all([
-        api.tasks("mine"),
-        api.tasks("claimable"),
-        api.tasks("all"),
-      ])
-      homeMineTasks.value = mine
+    } else if (routePath === "/") {
+      const all = await api.tasks("all")
+      if (!isCurrentLoad()) return
       homeAllTasks.value = all
-      claimableCount.value = claimable.length
+      homeMineTasks.value = all.filter((task) =>
+        task.owner?.id === user.value?.id || task.collaborators.some((member) => member.id === user.value?.id),
+      )
+      claimableCount.value = all.filter(claimableTask).length
     } else if (taskDetailId.value !== null) {
-      if (isManager.value) {
-        ;[taskMembers.value, tasks.value] = await Promise.all([
-          api.taskAssignees(),
-          api.tasks("all"),
-        ])
-      } else {
-        tasks.value = await api.tasks("all")
-      }
-      const selected = tasks.value.find((task) => task.id === taskDetailId.value)
+      const selectedId = taskDetailId.value
+      const context = await api.taskContext(selectedId)
+      if (!isCurrentLoad()) return
+      tasks.value = [context.root, ...context.tasks]
+      const selected = tasks.value.find((task) => task.id === selectedId)
       if (!selected) {
         routeNotFound.value = true
         return
@@ -826,50 +949,63 @@ async function loadRoute() {
       itemFactDraft.value = ""
       itemActivityDraft.value = ""
       itemActivityAddToFacts.value = false
-      const rootId = selected.parent_id ?? selected.id
-      itemActivities.value = await api.itemActivities(rootId, selected.parent_id === null ? undefined : selected.id)
-    } else if (path.value === "/tasks") {
+      itemActivities.value = context.activity_page.items
+      detailActivitiesHasMore.value = context.activity_page.has_more
+      detailActivitiesNextBeforeId.value = context.activity_page.next_before_id
+    } else if (routePath === "/tasks") {
       taskView.value = readTaskView()
-      if (isManager.value) {
-        ;[taskMembers.value, tasks.value] = await Promise.all([
-          api.taskAssignees(),
-          api.tasks(taskView.value),
-        ])
-        if (!taskOwnerId.value) taskOwnerId.value = activeMembers.value[0]?.id ?? null
-      } else {
-        tasks.value = await api.tasks(taskView.value)
-      }
-    } else if (path.value === "/ai-planner") {
+      taskListLoading.value = tasksLoadedScope.value !== taskView.value
+      taskListLoadError.value = false
+      const taskList = await api.tasks(taskView.value)
+      if (!isCurrentLoad()) return
+      tasks.value = taskList
+      tasksLoadedScope.value = taskView.value
+    } else if (routePath === "/ai-planner") {
       if (!isAdmin.value || !aiPlannerAvailable.value) {
         navigate("/")
         return
       }
-    } else if (path.value === "/knowledge") {
+    } else if (routePath === "/knowledge") {
       if (!isAdmin.value) {
         navigate("/")
         return
       }
       await loadKnowledgeDocuments()
-    } else if (path.value === "/team") {
+      if (!isCurrentLoad()) return
+    } else if (routePath === "/team") {
       if (!isAdmin.value) {
         navigate("/")
         return
       }
       members.value = await api.members()
-    } else if (path.value === "/me") {
+      if (!isCurrentLoad()) return
+    } else if (routePath === "/me") {
       // Current user data is already sufficient.
     } else {
       routeNotFound.value = true
     }
   } catch (reason) {
-    if (reason instanceof ApiError && reason.status === 401 && !path.value.startsWith("/invite/")) {
+    if (!isCurrentLoad()) return
+    if (routePath === "/tasks" && tasksLoadedScope.value !== taskView.value) {
+      taskListLoadError.value = true
+    }
+    if (reason instanceof ApiError && reason.status === 401 && !routePath.startsWith("/invite/")) {
       user.value = null
       navigate("/login")
       return
     }
+    if (reason instanceof ApiError && reason.status === 404 && taskDetailId.value !== null) {
+      routeNotFound.value = true
+      return
+    }
     error.value = messageOf(reason)
   } finally {
-    loading.value = false
+    if (isCurrentLoad()) {
+      loading.value = false
+      initialRouteResolved.value = true
+      detailContextLoading.value = false
+      if (routePath === "/tasks") taskListLoading.value = false
+    }
   }
 }
 
@@ -905,18 +1041,22 @@ async function submitInvitation() {
   }
 }
 
-async function submitMemberInvite() {
+function replaceMemberInState(updated: Member) {
+  const exists = members.value.some((member) => member.id === updated.id)
+  members.value = exists
+    ? members.value.map((member) => member.id === updated.id ? updated : member)
+    : [...members.value, updated].sort((left, right) => left.name.localeCompare(right.name))
+}
+
+async function submitMemberInvite(payload: { name: string; email: string; role: Role }) {
   error.value = ""
   try {
     latestInvite.value = await api.inviteMember(
-      memberName.value,
-      memberEmail.value,
-      memberRole.value,
+      payload.name,
+      payload.email,
+      payload.role,
     )
-    memberName.value = ""
-    memberEmail.value = ""
-    memberRole.value = "member"
-    members.value = await api.members()
+    replaceMemberInState(latestInvite.value.member)
   } catch (reason) {
     error.value = messageOf(reason)
   }
@@ -926,6 +1066,7 @@ async function regenerateInvite(memberId: number) {
   error.value = ""
   try {
     latestInvite.value = await api.regenerateInvite(memberId)
+    replaceMemberInState(latestInvite.value.member)
   } catch (reason) {
     error.value = messageOf(reason)
   }
@@ -941,8 +1082,7 @@ async function disableMember(memberId: number) {
   if (!window.confirm("停用后该成员会立即退出登录，确定停用？")) return
   error.value = ""
   try {
-    await api.disableMember(memberId)
-    members.value = await api.members()
+    replaceMemberInState(await api.disableMember(memberId))
   } catch (reason) {
     error.value = messageOf(reason)
   }
@@ -951,8 +1091,7 @@ async function disableMember(memberId: number) {
 async function enableMember(memberId: number) {
   error.value = ""
   try {
-    await api.enableMember(memberId)
-    members.value = await api.members()
+    replaceMemberInState(await api.enableMember(memberId))
   } catch (reason) {
     error.value = messageOf(reason)
   }
@@ -989,6 +1128,7 @@ async function submitTask() {
   const prerequisites = parseTaskLines(taskPrerequisitesText.value)
 
   try {
+    let updatedTask: Task
     if (editingTaskId.value) {
       const original = editingTask.value
       if (!original) return
@@ -1021,11 +1161,11 @@ async function submitTask() {
         payload.collaborator_ids = taskCollaboratorIds.value
       }
 
-      if (Object.keys(payload).length) {
-        await api.updateTask(editingTaskId.value, payload)
-      }
+      updatedTask = Object.keys(payload).length
+        ? await api.updateTask(editingTaskId.value, payload)
+        : original
     } else {
-      await api.createTask({
+      updatedTask = await api.createTask({
         parent_id: parentTaskId.value,
         title: taskTitle.value,
         deliverable: taskDeliverable.value,
@@ -1042,72 +1182,52 @@ async function submitTask() {
       })
     }
 
+    replaceTaskInState(updatedTask)
     clearItemReview()
     closeTaskForm()
     taskView.value = "all"
     if (window.location.search !== "?view=all") {
       window.history.replaceState({}, "", "/tasks?view=all")
     }
-    await loadRoute()
+    tasksLoadedScope.value = null
+    void refreshTaskList("all")
   } catch (reason) {
     error.value = messageOf(reason)
+  }
+}
+
+async function refreshTaskList(scope: TaskView) {
+  const requestedUrl = window.location.pathname + window.location.search
+  try {
+    const freshTasks = await api.tasks(scope)
+    if (window.location.pathname + window.location.search === requestedUrl && path.value === "/tasks") {
+      tasks.value = freshTasks
+      tasksLoadedScope.value = scope
+    }
+  } catch {
+    // Keep the successful local patch visible if the follow-up list refresh fails.
   }
 }
 
 async function updateOwnTaskStatus(task: Task, status: TaskStatus) {
-  error.value = ""
-  try {
-    await api.updateTask(task.id, { status })
-    clearItemReview()
-    await loadRoute()
-  } catch (reason) {
-    error.value = messageOf(reason)
-  }
+  await runTaskAction(task, `status:${status}`, () => api.updateTask(task.id, { status }))
 }
 
 async function claimTask(task: Task) {
-  error.value = ""
-  try {
-    await api.claimTask(task.id)
-    clearItemReview()
-    await loadRoute()
-  } catch (reason) {
-    error.value = messageOf(reason)
-  }
+  await runTaskAction(task, "claim", () => api.claimTask(task.id))
 }
 
 async function unclaimTask(task: Task) {
   if (!window.confirm("取消负责人认领后，该任务会重新进入待认领列表。确定继续？")) return
-  error.value = ""
-  try {
-    await api.unclaimTask(task.id)
-    clearItemReview()
-    await loadRoute()
-  } catch (reason) {
-    error.value = messageOf(reason)
-  }
+  await runTaskAction(task, "unclaim", () => api.unclaimTask(task.id))
 }
 
 async function joinTask(task: Task) {
-  error.value = ""
-  try {
-    await api.joinTask(task.id)
-    clearItemReview()
-    await loadRoute()
-  } catch (reason) {
-    error.value = messageOf(reason)
-  }
+  await runTaskAction(task, "join", () => api.joinTask(task.id))
 }
 
 async function leaveTask(task: Task) {
-  error.value = ""
-  try {
-    await api.leaveTask(task.id)
-    clearItemReview()
-    await loadRoute()
-  } catch (reason) {
-    error.value = messageOf(reason)
-  }
+  await runTaskAction(task, "leave", () => api.leaveTask(task.id))
 }
 
 
@@ -1128,10 +1248,10 @@ async function saveTaskResult() {
   if (!task || !canEditDetailResult.value) return
   error.value = ""
   try {
-    await api.updateTask(task.id, { result: taskResultDraft.value })
+    const updated = await api.updateTask(task.id, { result: taskResultDraft.value })
+    replaceTaskInState(updated)
     clearItemReview()
     notice.value = "执行结果已保存"
-    await loadRoute()
   } catch (reason) {
     error.value = messageOf(reason)
   }
@@ -1147,37 +1267,41 @@ async function publishTaskProgress() {
   const epoch = factExtractionEpoch
   try {
     const published = await api.publishTaskProgress(task.id, content)
+    replaceTaskInState(published.task)
+    itemActivities.value = prependUniqueActivity(itemActivities.value, published.activity)
     taskProgressDraft.value = ""
     clearItemReview()
     notice.value = "进展已发布"
-    await refreshExecutionScene(true)
-
     if (isCurrentFactSuggestionRequest(task.id, taskDetailId.value, epoch, factExtractionEpoch)) {
       factExtractionLoading.value = true
-    }
-    try {
-      const extracted = await api.extractActivityFacts(published.task.parent_id as number, published.activity.id)
-      if (isCurrentFactSuggestionRequest(task.id, taskDetailId.value, epoch, factExtractionEpoch)) {
-        factSuggestions.value = extracted.suggestions
-        selectedFactSuggestions.value = defaultFactSelection(extracted.suggestions)
-        factSuggestionActivityId.value = published.activity.id
-        if (extracted.suggestions.length) {
-          notice.value = `进展已发布，有 ${extracted.suggestions.length} 条信息可能需要同步给团队`
-        }
-      }
-    } catch {
-      if (isCurrentFactSuggestionRequest(task.id, taskDetailId.value, epoch, factExtractionEpoch)) {
-        notice.value = "进展已发布，暂时无法提取可同步信息"
-      }
-    } finally {
-      if (isCurrentFactSuggestionRequest(task.id, taskDetailId.value, epoch, factExtractionEpoch)) {
-        factExtractionLoading.value = false
-      }
+      void extractProgressFacts(task.id, published.task.parent_id as number, published.activity, epoch)
     }
   } catch (reason) {
     error.value = messageOf(reason)
   } finally {
     taskProgressSaving.value = false
+  }
+}
+
+async function extractProgressFacts(taskId: number, rootTaskId: number, activity: ItemActivity, epoch: number) {
+  try {
+    const extracted = await api.extractActivityFacts(rootTaskId, activity.id)
+    if (isCurrentFactSuggestionRequest(taskId, taskDetailId.value, epoch, factExtractionEpoch)) {
+      factSuggestions.value = extracted.suggestions
+      selectedFactSuggestions.value = defaultFactSelection(extracted.suggestions)
+      factSuggestionActivityId.value = activity.id
+      if (extracted.suggestions.length) {
+        notice.value = `进展已发布，有 ${extracted.suggestions.length} 条信息可能需要同步给团队`
+      }
+    }
+  } catch {
+    if (isCurrentFactSuggestionRequest(taskId, taskDetailId.value, epoch, factExtractionEpoch)) {
+      notice.value = "进展已发布，暂时无法提取可同步信息"
+    }
+  } finally {
+    if (isCurrentFactSuggestionRequest(taskId, taskDetailId.value, epoch, factExtractionEpoch)) {
+      factExtractionLoading.value = false
+    }
   }
 }
 
@@ -1196,11 +1320,11 @@ async function addSuggestedFactsToItem() {
         ? suggestion.supersedes_fact_id
         : null,
     }))
-    await api.addScopedFactsBatch(root.id, facts)
+    const updatedRoot = await api.addScopedFactsBatch(root.id, facts)
+    replaceRootFactsInState(updatedRoot)
     clearFactSuggestions()
     clearItemReview()
     notice.value = "已按确认范围同步信息"
-    await refreshExecutionScene(true)
   } catch (reason) {
     error.value = messageOf(reason)
   }
@@ -1221,13 +1345,17 @@ async function completeDetailTask() {
   error.value = ""
   taskCompletionSaving.value = true
   try {
-    await api.completeTask(task.id, result, taskCompletionSync.value)
+    const completed = await api.completeTask(task.id, result, taskCompletionSync.value)
+    replaceTaskInState(completed.task)
+    itemActivities.value = prependUniqueActivity(itemActivities.value, completed.activity)
+    if (taskCompletionSync.value && detailRoot.value) {
+      void refreshExecutionScene(true)
+    }
     taskCompletionDraft.value = ""
     taskCompletionSync.value = false
     clearFactSuggestions()
     clearItemReview()
     notice.value = "任务已完成"
-    await refreshExecutionScene(true)
   } catch (reason) {
     error.value = messageOf(reason)
   } finally {
@@ -1241,16 +1369,16 @@ async function addCurrentFact() {
   if (!root || !content || !canWriteDetailItem.value) return
   error.value = ""
   try {
-    await api.addScopedFactsBatch(root.id, [{
+    const updatedRoot = await api.addScopedFactsBatch(root.id, [{
       content,
       scope: itemFactScope.value,
       related_task_ids: itemFactScope.value === "related" ? itemFactRelatedTaskIds.value : [],
     }])
+    replaceRootFactsInState(updatedRoot)
     clearItemReview()
     itemFactDraft.value = ""
     itemFactScope.value = "global"
     itemFactRelatedTaskIds.value = []
-    await loadRoute()
   } catch (reason) {
     error.value = messageOf(reason)
   }
@@ -1262,9 +1390,9 @@ async function removeCurrentFact(factId: number) {
   if (!window.confirm("移除这条当前信息？已有的历史动态会保留。")) return
   error.value = ""
   try {
-    await api.deleteItemFact(root.id, factId)
+    const updatedRoot = await api.deleteItemFact(root.id, factId)
+    replaceRootFactsInState(updatedRoot)
     clearItemReview()
-    await loadRoute()
   } catch (reason) {
     error.value = messageOf(reason)
   }
@@ -1283,19 +1411,22 @@ function cancelFactScopeEdit() {
 
 async function saveFactScope(factId: number) {
   const root = detailRoot.value
-  if (!root || !canManageFactScope.value) return
+  if (!root || !canManageFactScope.value || savingFactScopeId.value !== null) return
   error.value = ""
+  savingFactScopeId.value = factId
   try {
-    await api.updateFactScope(
+    const updatedRoot = await api.updateFactScope(
       root.id,
       factId,
       editingFactScope.value,
       editingFactScope.value === "related" ? editingFactTaskIds.value : [],
     )
+    replaceRootFactsInState(updatedRoot)
     cancelFactScopeEdit()
-    await loadRoute()
   } catch (reason) {
     error.value = messageOf(reason)
+  } finally {
+    savingFactScopeId.value = null
   }
 }
 
@@ -1312,20 +1443,22 @@ async function recordItemActivity() {
     return
   }
   error.value = ""
+  const addToContext = itemActivityAddToFacts.value
   try {
-    await api.addItemActivity(
+    const activity = await api.addItemActivity(
       root.id,
       content,
       itemActivityAddToFacts.value,
       itemActivityFactScope.value,
       itemActivityFactScope.value === "related" ? itemActivityRelatedTaskIds.value : [],
     )
+    itemActivities.value = prependUniqueActivity(itemActivities.value, activity)
     clearItemReview()
     itemActivityDraft.value = ""
     itemActivityAddToFacts.value = false
     itemActivityFactScope.value = "global"
     itemActivityRelatedTaskIds.value = []
-    await loadRoute()
+    if (addToContext) void refreshExecutionScene(true)
   } catch (reason) {
     error.value = messageOf(reason)
   }
@@ -1336,10 +1469,10 @@ async function addResultToContext() {
   if (!task || !task.result || !canWriteDetailItem.value) return
   error.value = ""
   try {
-    await api.taskResultToContext(task.id)
+    const updatedRoot = await api.taskResultToContext(task.id)
+    replaceRootFactsInState(updatedRoot)
     clearItemReview()
     notice.value = "执行结果已加入事项信息"
-    await loadRoute()
   } catch (reason) {
     error.value = messageOf(reason)
   }
@@ -1764,10 +1897,7 @@ async function syncGitHubKnowledge() {
   }
 }
 
-async function uploadKnowledgeFile(event: Event) {
-  const input = event.target as HTMLInputElement
-  const file = input.files?.[0]
-  if (!file) return
+async function uploadKnowledgeFile(file: File) {
   knowledgeUploading.value = true
   error.value = ""
   try {
@@ -1777,7 +1907,6 @@ async function uploadKnowledgeFile(event: Event) {
   } catch (reason) {
     error.value = messageOf(reason)
   } finally {
-    input.value = ""
     knowledgeUploading.value = false
   }
 }
@@ -1807,10 +1936,6 @@ function knowledgeStatusLabel(document: KnowledgeDocument) {
   return document.parse_error ? `${label} · ${document.parse_error}` : label
 }
 
-function chooseKnowledgeFile() {
-  knowledgeUploadRef.value?.click()
-}
-
 async function logout() {
   await api.logout()
   user.value = null
@@ -1835,7 +1960,6 @@ function handlePopState() {
   path.value = window.location.pathname
   fieldErrors.value = {}
   error.value = ""
-  showAllDetailActivities.value = false
   if (feedback.value?.kind === "error") clearFeedback()
   syncCollaborationRefreshTimer()
   void loadRoute()
@@ -2042,6 +2166,12 @@ onBeforeUnmount(() => {
           <button class="primary" type="button" @click="navigate('/')">返回 Base</button>
         </section>
       </template>
+
+      <section v-else-if="taskDetailId !== null && detailContextLoading" class="system-state" role="status" aria-live="polite">
+        <span class="system-code">BASE / ITEM</span>
+        <h1>正在加载事项</h1>
+        <p>正在读取事项分工和最近进展…</p>
+      </section>
 
       <template v-else-if="path === '/'">
         <section class="base-entry">
@@ -2518,7 +2648,7 @@ onBeforeUnmount(() => {
                   </fieldset>
                   <div class="fact-scope-actions">
                     <button type="button" @click="cancelFactScopeEdit">取消</button>
-                    <button class="primary small-action" type="button" :disabled="editingFactScope === 'related' && !editingFactTaskIds.length" @click="saveFactScope(fact.id)">保存范围</button>
+                    <button class="primary small-action" type="button" :disabled="savingFactScopeId !== null || (editingFactScope === 'related' && !editingFactTaskIds.length)" @click="saveFactScope(fact.id)">{{ savingFactScopeId === fact.id ? '保存中…' : '保存范围' }}</button>
                   </div>
                 </div>
                 <div v-else-if="canManageFactScope" class="fact-row-actions">
@@ -2581,8 +2711,8 @@ onBeforeUnmount(() => {
                 <p>{{ activity.content }}</p>
               </article>
             </div>
-            <button v-if="detailTaskActivities.length > 5" type="button" class="text-action activity-more" @click="showAllDetailActivities = !showAllDetailActivities">
-              {{ showAllDetailActivities ? '收起进展' : `查看全部 ${detailTaskActivities.length} 条进展` }}
+            <button v-if="detailActivitiesHasMore" type="button" class="text-action activity-more" :disabled="loadingEarlierActivities" @click="loadEarlierDetailActivities">
+              {{ loadingEarlierActivities ? '正在加载…' : '查看更早进展' }}
             </button>
             <form v-if="canWriteDetailItem" class="activity-entry" @submit.prevent="recordItemActivity">
               <textarea
@@ -2781,8 +2911,8 @@ onBeforeUnmount(() => {
                 <p>{{ activity.content }}</p>
               </article>
             </div>
-            <button v-if="detailTaskActivities.length > 5" type="button" class="text-action activity-more" @click="showAllDetailActivities = !showAllDetailActivities">
-              {{ showAllDetailActivities ? '收起进展' : `查看全部 ${detailTaskActivities.length} 条进展` }}
+            <button v-if="detailActivitiesHasMore" type="button" class="text-action activity-more" :disabled="loadingEarlierActivities" @click="loadEarlierDetailActivities">
+              {{ loadingEarlierActivities ? '正在加载…' : '查看更早进展' }}
             </button>
           </section>
 
@@ -2819,32 +2949,38 @@ onBeforeUnmount(() => {
                 v-if="!detailTask.owner && detailTask.owner_claimable && detailTask.status !== 'done'"
                 class="primary small-action"
                 type="button"
+                :disabled="Boolean(pendingTaskAction(detailTask.id))"
                 @click="claimTask(detailTask)"
-              >认领负责人</button>
+              >{{ pendingTaskAction(detailTask.id) === 'claim' ? '认领中…' : '认领负责人' }}</button>
               <button
                 v-if="detailTask.owner?.id === user?.id && detailTask.owner_claimable && detailTask.status !== 'done'"
                 type="button"
+                :disabled="Boolean(pendingTaskAction(detailTask.id))"
                 @click="unclaimTask(detailTask)"
-              >取消认领</button>
+              >{{ pendingTaskAction(detailTask.id) === 'unclaim' ? '取消中…' : '取消认领' }}</button>
               <button
                 v-if="detailTask.collaboration_open && detailTask.owner?.id !== user?.id && !isCollaborator(detailTask) && detailTask.status !== 'done'"
                 type="button"
+                :disabled="Boolean(pendingTaskAction(detailTask.id))"
                 @click="joinTask(detailTask)"
-              >加入协作</button>
+              >{{ pendingTaskAction(detailTask.id) === 'join' ? '加入中…' : '加入协作' }}</button>
               <button
                 v-if="detailTask.collaboration_open && isCollaborator(detailTask) && detailTask.status !== 'done'"
                 type="button"
+                :disabled="Boolean(pendingTaskAction(detailTask.id))"
                 @click="leaveTask(detailTask)"
-              >退出协作</button>
+              >{{ pendingTaskAction(detailTask.id) === 'leave' ? '退出中…' : '退出协作' }}</button>
             </div>
             <div v-if="isManager" class="status-actions">
               <button
                 v-for="value in (['todo', 'doing', 'done'] as TaskStatus[])"
                 :key="value"
                 type="button"
+                :disabled="Boolean(pendingTaskAction(detailTask.id))"
+                :aria-busy="pendingTaskAction(detailTask.id) === `status:${value}`"
                 :class="{ active: detailTask.status === value }"
                 @click="updateOwnTaskStatus(detailTask, value)"
-              >{{ statusLabels[value] }}</button>
+              >{{ pendingTaskAction(detailTask.id) === `status:${value}` ? '更新中…' : statusLabels[value] }}</button>
             </div>
           </section>
         </template>
@@ -3017,7 +3153,14 @@ onBeforeUnmount(() => {
         </form>
 
         <section class="task-board">
-          <div v-if="rootTasks.length || orphanTasks.length" class="operation-list">
+          <div v-if="taskListLoading" class="local-route-loading" role="status" aria-live="polite">
+            <span class="loading-dot" aria-hidden="true"></span>
+            正在加载任务列表…
+          </div>
+          <div v-else-if="taskListLoadError" class="local-route-loading" role="alert">
+            暂时无法加载任务列表。<button class="text-action" type="button" @click="loadRoute">重试</button>
+          </div>
+          <div v-else-if="rootTasks.length || orphanTasks.length" class="operation-list">
             <article v-for="task in rootTasks" :key="task.id" class="operation-card">
               <div class="operation-card-top">
                 <div class="operation-main">
@@ -3041,23 +3184,27 @@ onBeforeUnmount(() => {
                     v-if="!task.owner && task.owner_claimable && task.status !== 'done'"
                     class="primary small-action"
                     type="button"
+                    :disabled="Boolean(pendingTaskAction(task.id))"
                     @click="claimTask(task)"
-                  >认领负责人</button>
+                  >{{ pendingTaskAction(task.id) === 'claim' ? '认领中…' : '认领负责人' }}</button>
                   <button
                     v-if="task.owner?.id === user?.id && task.owner_claimable && task.status !== 'done'"
                     type="button"
+                    :disabled="Boolean(pendingTaskAction(task.id))"
                     @click="unclaimTask(task)"
-                  >取消认领</button>
+                  >{{ pendingTaskAction(task.id) === 'unclaim' ? '取消中…' : '取消认领' }}</button>
                   <button
                     v-if="task.collaboration_open && task.owner?.id !== user?.id && !isCollaborator(task) && task.status !== 'done'"
                     type="button"
+                    :disabled="Boolean(pendingTaskAction(task.id))"
                     @click="joinTask(task)"
-                  >加入协作</button>
+                  >{{ pendingTaskAction(task.id) === 'join' ? '加入中…' : '加入协作' }}</button>
                   <button
                     v-if="task.collaboration_open && isCollaborator(task) && task.status !== 'done'"
                     type="button"
+                    :disabled="Boolean(pendingTaskAction(task.id))"
                     @click="leaveTask(task)"
-                  >退出协作</button>
+                  >{{ pendingTaskAction(task.id) === 'leave' ? '退出中…' : '退出协作' }}</button>
                   <button v-if="isManager" type="button" @click="editTask(task)">编辑</button>
                   <button v-if="isAdmin" class="danger-text" type="button" @click.stop="openDeleteRootItemModal(task, 'list')">删除</button>
                 </div>
@@ -3087,9 +3234,11 @@ onBeforeUnmount(() => {
                     v-for="value in (['todo', 'doing', 'done'] as TaskStatus[])"
                     :key="value"
                     type="button"
+                    :disabled="Boolean(pendingTaskAction(task.id))"
+                    :aria-busy="pendingTaskAction(task.id) === `status:${value}`"
                     :class="{ active: task.status === value }"
                     @click="updateOwnTaskStatus(task, value)"
-                  >{{ statusLabels[value] }}</button>
+                  >{{ pendingTaskAction(task.id) === `status:${value}` ? '更新中…' : statusLabels[value] }}</button>
                 </div>
 
                 <article v-for="child in childTasks(task.id)" :key="child.id" class="child-task">
@@ -3111,30 +3260,34 @@ onBeforeUnmount(() => {
                       v-if="!child.owner && child.owner_claimable && child.status !== 'done'"
                       class="primary small-action"
                       type="button"
+                      :disabled="Boolean(pendingTaskAction(child.id))"
                       @click="claimTask(child)"
                     >
-                      认领
+                      {{ pendingTaskAction(child.id) === 'claim' ? '认领中…' : '认领' }}
                     </button>
                     <button
                       v-if="child.owner?.id === user?.id && child.owner_claimable && child.status !== 'done'"
                       type="button"
+                      :disabled="Boolean(pendingTaskAction(child.id))"
                       @click="unclaimTask(child)"
                     >
-                      取消认领
+                      {{ pendingTaskAction(child.id) === 'unclaim' ? '取消中…' : '取消认领' }}
                     </button>
                     <button
                       v-if="child.collaboration_open && child.owner?.id !== user?.id && !isCollaborator(child) && child.status !== 'done'"
                       type="button"
+                      :disabled="Boolean(pendingTaskAction(child.id))"
                       @click="joinTask(child)"
                     >
-                      加入协作
+                      {{ pendingTaskAction(child.id) === 'join' ? '加入中…' : '加入协作' }}
                     </button>
                     <button
                       v-if="child.collaboration_open && isCollaborator(child) && child.status !== 'done'"
                       type="button"
+                      :disabled="Boolean(pendingTaskAction(child.id))"
                       @click="leaveTask(child)"
                     >
-                      退出协作
+                      {{ pendingTaskAction(child.id) === 'leave' ? '退出中…' : '退出协作' }}
                     </button>
                     <button v-if="isManager" type="button" @click="editTask(child)">编辑</button>
                   </div>
@@ -3144,10 +3297,12 @@ onBeforeUnmount(() => {
                       v-for="value in (['todo', 'doing', 'done'] as TaskStatus[])"
                       :key="value"
                       type="button"
+                      :disabled="Boolean(pendingTaskAction(child.id))"
+                      :aria-busy="pendingTaskAction(child.id) === `status:${value}`"
                       :class="{ active: child.status === value }"
                       @click="updateOwnTaskStatus(child, value)"
                     >
-                      {{ statusLabels[value] }}
+                      {{ pendingTaskAction(child.id) === `status:${value}` ? '更新中…' : statusLabels[value] }}
                     </button>
                   </div>
                 </article>
@@ -3169,30 +3324,34 @@ onBeforeUnmount(() => {
                   v-if="!task.owner && task.owner_claimable && task.status !== 'done'"
                   class="primary small-action"
                   type="button"
+                  :disabled="Boolean(pendingTaskAction(task.id))"
                   @click="claimTask(task)"
                 >
-                  认领负责人
+                  {{ pendingTaskAction(task.id) === 'claim' ? '认领中…' : '认领负责人' }}
                 </button>
                 <button
                   v-if="task.owner?.id === user?.id && task.owner_claimable && task.status !== 'done'"
                   type="button"
+                  :disabled="Boolean(pendingTaskAction(task.id))"
                   @click="unclaimTask(task)"
                 >
-                  取消认领
+                  {{ pendingTaskAction(task.id) === 'unclaim' ? '取消中…' : '取消认领' }}
                 </button>
                 <button
                   v-if="task.collaboration_open && task.owner?.id !== user?.id && !isCollaborator(task) && task.status !== 'done'"
                   type="button"
+                  :disabled="Boolean(pendingTaskAction(task.id))"
                   @click="joinTask(task)"
                 >
-                  加入协作
+                  {{ pendingTaskAction(task.id) === 'join' ? '加入中…' : '加入协作' }}
                 </button>
                 <button
                   v-if="task.collaboration_open && isCollaborator(task) && task.status !== 'done'"
                   type="button"
+                  :disabled="Boolean(pendingTaskAction(task.id))"
                   @click="leaveTask(task)"
                 >
-                  退出协作
+                  {{ pendingTaskAction(task.id) === 'leave' ? '退出中…' : '退出协作' }}
                 </button>
                 <button v-if="isManager" type="button" @click="editTask(task)">编辑</button>
               </div>
@@ -3226,120 +3385,34 @@ onBeforeUnmount(() => {
       </template>
 
       <template v-else-if="path === '/team'">
-        <div class="page-title">
-          <h1>团队</h1>
-          <button type="button" @click="navigate('/knowledge')">团队资料</button>
-        </div>
-        <form class="management-form" @submit.prevent="submitMemberInvite">
-          <h2>邀请成员</h2>
-          <label>
-            姓名
-            <input v-model="memberName" maxlength="100" required />
-          </label>
-          <label>
-            邮箱
-            <input v-model="memberEmail" type="email" maxlength="255" required />
-          </label>
-          <label>
-            系统权限
-            <select v-model="memberRole">
-              <option value="member">成员</option>
-              <option value="manager">任务管理员</option>
-              <option value="admin">管理员</option>
-            </select>
-          </label>
-          <button class="primary" type="submit">创建邀请</button>
-        </form>
-
-        <section v-if="latestInvite" class="invite-result">
-          <div>
-            <strong>{{ latestInvite.member.name }}</strong>
-            <span>邀请有效至 {{ formatDate(latestInvite.expires_at) }}</span>
-          </div>
-          <button class="primary" type="button" @click="copyInvite">复制邀请链接</button>
-        </section>
-
-        <section>
-          <div class="section-heading"><h2>成员</h2></div>
-          <div class="member-list">
-            <div v-for="member in members" :key="member.id" class="member-row">
-              <div>
-                <strong>{{ member.name }}</strong>
-                <span>{{ member.email }}</span>
-                <small>{{ roleLabels[member.role] }} · {{ member.status }}</small>
-              </div>
-              <div class="row-actions">
-                <button
-                  v-if="member.status === 'invited'"
-                  type="button"
-                  @click="regenerateInvite(member.id)"
-                >
-                  生成邀请
-                </button>
-                <button
-                  v-if="member.status === 'active' && member.id !== user?.id"
-                  class="danger-text"
-                  type="button"
-                  @click="disableMember(member.id)"
-                >
-                  停用
-                </button>
-                <button
-                  v-if="member.status === 'disabled'"
-                  type="button"
-                  @click="enableMember(member.id)"
-                >
-                  恢复
-                </button>
-              </div>
-            </div>
-          </div>
-        </section>
+        <TeamPage
+          :members="members"
+          :latest-invite="latestInvite"
+          :current-user-id="user?.id ?? null"
+          :role-labels="roleLabels"
+          :format-date="formatDate"
+          @invite="submitMemberInvite"
+          @regenerate-invite="regenerateInvite"
+          @disable-member="disableMember"
+          @enable-member="enableMember"
+          @copy-invite="copyInvite"
+          @navigate="navigate"
+        />
       </template>
 
       <template v-else-if="path === '/knowledge'">
-        <div class="page-title">
-          <div>
-            <h1>团队资料</h1>
-            <p>维护 AI 规划会使用的长期资料。</p>
-          </div>
-          <button type="button" @click="navigate('/team')">返回团队</button>
-        </div>
-        <section class="knowledge-actions">
-          <button class="primary" type="button" :disabled="knowledgeUploading" @click="chooseKnowledgeFile">
-            {{ knowledgeUploading ? "正在上传…" : "上传资料" }}
-          </button>
-          <input ref="knowledgeUploadRef" class="visually-hidden" type="file" accept=".md,.txt,.docx,.pdf" @change="uploadKnowledgeFile" />
-          <small>支持 Markdown、TXT、DOCX 和可提取文字的 PDF，单个文件最大 10 MB。</small>
-        </section>
-        <details class="knowledge-maintenance">
-          <summary>高级维护</summary>
-          <button type="button" :disabled="knowledgeSyncing" @click="syncGitHubKnowledge">
-            {{ knowledgeSyncing ? "正在同步…" : "同步 GitHub 资料" }}
-          </button>
-        </details>
-        <p v-if="knowledgeSyncSummary" class="message success" role="status">
-          同步完成：新增 {{ knowledgeSyncSummary.added }}，更新 {{ knowledgeSyncSummary.updated }}，未变化 {{ knowledgeSyncSummary.unchanged }}，失败 {{ knowledgeSyncSummary.failed }}，已移除 {{ knowledgeSyncSummary.removed }}。
-        </p>
-        <section>
-          <div class="section-heading"><h2>来源文件</h2><span>{{ knowledgeDocuments.length }} 条</span></div>
-          <div v-if="knowledgeDocuments.length" class="knowledge-list">
-            <article v-for="document in knowledgeDocuments" :key="document.id" class="knowledge-row">
-              <div>
-                <span class="state">{{ document.source_type === 'github' ? 'GitHub' : '上传' }} · {{ knowledgeStatusLabel(document) }}</span>
-                <h3>{{ document.display_name }}</h3>
-                <small>{{ document.source_type === 'github' ? document.source_name : document.title }}</small>
-                <small>更新于 {{ formatDate(document.synced_at) }}</small>
-              </div>
-              <button class="danger-text" type="button" @click="removeKnowledgeDocument(document)">删除</button>
-            </article>
-          </div>
-          <div v-else class="empty empty-state">
-            <span class="empty-code">KNOWLEDGE / EMPTY</span>
-            <h3>还没有团队资料</h3>
-            <p>可以从 GitHub 同步，或上传一份文档作为知识来源。</p>
-          </div>
-        </section>
+        <KnowledgePage
+          :documents="knowledgeDocuments"
+          :uploading="knowledgeUploading"
+          :syncing="knowledgeSyncing"
+          :summary="knowledgeSyncSummary"
+          :format-date="formatDate"
+          :status-label="knowledgeStatusLabel"
+          @upload="uploadKnowledgeFile"
+          @sync="syncGitHubKnowledge"
+          @remove="removeKnowledgeDocument"
+          @navigate="navigate"
+        />
       </template>
     </div>
 

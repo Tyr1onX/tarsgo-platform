@@ -58,6 +58,18 @@ export interface ItemActivity {
   created_at: string
 }
 
+export interface ItemActivityPage {
+  items: ItemActivity[]
+  has_more: boolean
+  next_before_id: number | null
+}
+
+export interface TaskDetailContext {
+  root: Task
+  tasks: Task[]
+  activity_page: ItemActivityPage
+}
+
 export interface ItemFact {
   id: number
   root_task_id: number

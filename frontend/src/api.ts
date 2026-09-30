@@ -10,6 +10,7 @@ import type {
   InvitationInfo,
   InviteResult,
   ItemActivity,
+  ItemActivityPage,
   ItemFactInput,
   Member,
   MemberSummary,
@@ -17,6 +18,7 @@ import type {
   KnowledgeSyncSummary,
   Role,
   Task,
+  TaskDetailContext,
   TaskProgressResult,
   TaskBatchPayload,
   TaskBatchResult,
@@ -133,11 +135,18 @@ export const api = {
 
   taskAssignees: () => request<MemberSummary[]>("/api/tasks/assignees"),
   tasks: (scope: TaskView = "mine") => request<Task[]>(`/api/tasks?scope=${scope}`),
+  taskContext: (taskId: number) => request<TaskDetailContext>(`/api/tasks/${taskId}/context`),
   deleteRootTask: (rootTaskId: number) =>
     request<void>(`/api/tasks/${rootTaskId}`, { method: "DELETE" }),
   itemActivities: (rootTaskId: number, taskId?: number) => request<ItemActivity[]>(
     `/api/tasks/${rootTaskId}/activities${taskId === undefined ? "" : `?task_id=${taskId}`}`,
   ),
+  itemActivityPage: (rootTaskId: number, taskId?: number, limit = 20, beforeId?: number) => {
+    const query = new URLSearchParams({ limit: String(limit) })
+    if (taskId !== undefined) query.set("task_id", String(taskId))
+    if (beforeId !== undefined) query.set("before_id", String(beforeId))
+    return request<ItemActivityPage>(`/api/tasks/${rootTaskId}/activities/page?${query}`)
+  },
   addItemActivity: (
     rootTaskId: number,
     content: string,

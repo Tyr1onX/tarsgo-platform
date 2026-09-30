@@ -310,6 +310,18 @@ class ItemActivityOut(BaseModel):
     created_at: datetime
 
 
+class ItemActivityPageOut(BaseModel):
+    items: list[ItemActivityOut]
+    has_more: bool
+    next_before_id: int | None = None
+
+
+class TaskDetailContextOut(BaseModel):
+    root: TaskOut
+    tasks: list[TaskOut]
+    activity_page: ItemActivityPageOut
+
+
 class TaskProgressCreate(BaseModel):
     content: ItemActivityText
 

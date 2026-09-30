@@ -154,6 +154,12 @@ def main() -> None:
             )
             child_ids.add(third_id)
 
+            detail_context = tasks_router.get_task_context(first_id, current=manager, db=db)
+            assert detail_context.root.id == root_id
+            assert {task.id for task in detail_context.tasks} == {first_id, second_id, third_id}
+            assert detail_context.activity_page.items == []
+            assert not detail_context.activity_page.has_more
+
             first = tasks_router._get_task(db, first_id)
             first_wire = tasks_router._task_out(first)
             assert first_wire.status == "todo" and not first_wire.blocked
@@ -293,6 +299,28 @@ def main() -> None:
                 )
                 assert second_progress.task.status == "doing"
                 assert second_progress.activity.task_id == first_id
+
+                for index in range(6):
+                    db.add(ItemActivity(
+                        root_task_id=root_id,
+                        author_id=manager.id,
+                        content=f"分页测试动态 {index}",
+                    ))
+                db.commit()
+                paged_context = tasks_router.get_task_context(first_id, current=manager, db=db)
+                assert len(paged_context.activity_page.items) == 5
+                assert paged_context.activity_page.has_more
+                assert paged_context.activity_page.next_before_id == paged_context.activity_page.items[-1].id
+                first_page = tasks_router.list_item_activities_page(
+                    root_id, limit=3, current=manager, db=db,
+                )
+                assert len(first_page.items) == 3 and first_page.has_more
+                second_page = tasks_router.list_item_activities_page(
+                    root_id, limit=3, before_id=first_page.next_before_id, current=manager, db=db,
+                )
+                assert len(second_page.items) == 3
+                assert not ({activity.id for activity in first_page.items} & {activity.id for activity in second_page.items})
+
                 suggestions = [
                     AIItemFactSuggestion(text="来访时间为周三 14:00。", reason="更新明确写明到达时间。", scope="global", related_task_ids=[], supersedes_fact_id=None),
                     AIItemFactSuggestion(text="来访地点为一教 109。", reason="更新明确写明地点。", scope="global", related_task_ids=[], supersedes_fact_id=None),

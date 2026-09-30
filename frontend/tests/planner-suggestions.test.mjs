@@ -99,11 +99,11 @@ for (const mutation of [
   "removeCurrentFact",
   "recordItemActivity",
   "addResultToContext",
-  "updateOwnTaskStatus",
   "submitTask",
 ]) {
   assert.match(functionSource(mutation), /clearItemReview\(\)/, `${mutation} should clear stale review results`)
 }
+assert.match(functionSource("runTaskAction"), /clearItemReview\(\)/, "task actions should clear stale review results after successful patch")
 assert.doesNotMatch(functionSource("dismissItemReviewSuggestion"), /api\./)
 assert.match(functionSource("applyItemReviewSuggestion"), /api\.applyItemReview/)
 assert.doesNotMatch(functionSource("applyItemReviewSuggestion"), /generateAIPlan|reviewItemPlan/)

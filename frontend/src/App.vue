@@ -5,6 +5,7 @@ import { ApiError, api } from "./api"
 import { revealInvalidField } from "./formFeedback.js"
 import { filterIgnoredPlannerSuggestions, ignorePlannerSuggestion, plannerSuggestionJoinInstruction } from "./plannerSuggestions.js"
 import { itemReviewChanges, removeItemReviewSuggestion } from "./itemReview.js"
+import { isExpandedRoot, removeRootAndChildren, toggleExpandedRoot } from "./rootItemList.js"
 import {
   defaultFactSelection,
   executionSummary,
@@ -62,6 +63,11 @@ const latestInvite = ref<InviteResult | null>(null)
 const taskView = ref<TaskView>("mine")
 const deleteRootItemModalOpen = ref(false)
 const deletingRootItem = ref(false)
+const deleteTargetRootId = ref<number | null>(null)
+const deleteRootOrigin = ref<"detail" | "list">("detail")
+const deleteTargetActivityCount = ref<number | null>(null)
+const deleteTargetActivityLoading = ref(false)
+const expandedRootIds = ref(new Set<number>())
 const claimableCount = ref(0)
 const aiPlannerAvailable = ref(false)
 const plannerDescription = ref("")
@@ -241,6 +247,12 @@ const homeTaskCards = computed(() => {
   )
 })
 const rootTasks = computed(() => tasks.value.filter((task) => task.parent_id === null))
+const deleteTargetRoot = computed(() =>
+  tasks.value.find((task) => task.id === deleteTargetRootId.value && task.parent_id === null) ?? null,
+)
+const deleteTargetChildren = computed(() =>
+  deleteTargetRoot.value ? tasks.value.filter((task) => task.parent_id === deleteTargetRoot.value?.id) : [],
+)
 const loadedTaskIds = computed(() => new Set(tasks.value.map((task) => task.id)))
 const orphanTasks = computed(() =>
   tasks.value.filter(
@@ -519,26 +531,57 @@ function navigateTasks(view: TaskView) {
   navigate(url)
 }
 
-function openDeleteRootItemModal() {
-  if (isAdmin.value && detailRoot.value && detailTask.value?.parent_id === null) {
-    deleteRootItemModalOpen.value = true
+function isRootExpanded(rootId: number) {
+  return isExpandedRoot(expandedRootIds.value, rootId)
+}
+
+function toggleRootBreakdown(rootId: number) {
+  expandedRootIds.value = toggleExpandedRoot(expandedRootIds.value, rootId)
+}
+
+function openDeleteRootItemModal(root = detailRoot.value, origin: "detail" | "list" = "detail") {
+  if (!isAdmin.value || !root || root.parent_id !== null) return
+  deleteTargetRootId.value = root.id
+  deleteRootOrigin.value = origin
+  deleteTargetActivityCount.value = origin === "detail" && detailTask.value?.parent_id === null
+    ? itemActivities.value.length
+    : null
+  deleteTargetActivityLoading.value = origin === "list"
+  deleteRootItemModalOpen.value = true
+  if (origin === "list") {
+    void api.itemActivities(root.id).then((activities) => {
+      if (deleteRootItemModalOpen.value && deleteTargetRootId.value === root.id) {
+        deleteTargetActivityCount.value = activities.length
+      }
+    }).catch(() => {
+      if (deleteTargetRootId.value === root.id) deleteTargetActivityCount.value = null
+    }).finally(() => {
+      if (deleteTargetRootId.value === root.id) deleteTargetActivityLoading.value = false
+    })
   }
 }
 
 function closeDeleteRootItemModal() {
-  if (!deletingRootItem.value) deleteRootItemModalOpen.value = false
+  if (deletingRootItem.value) return
+  deleteRootItemModalOpen.value = false
+  deleteTargetRootId.value = null
+  deleteTargetActivityCount.value = null
+  deleteTargetActivityLoading.value = false
 }
 
 async function confirmDeleteRootItem() {
-  const root = detailRoot.value
-  if (!isAdmin.value || !root || detailTask.value?.parent_id !== null || deletingRootItem.value) return
+  const root = deleteTargetRoot.value
+  if (!isAdmin.value || !root || deletingRootItem.value) return
+  const origin = deleteRootOrigin.value
   deletingRootItem.value = true
   try {
     await api.deleteRootTask(root.id)
-    const removedIds = new Set([root.id, ...tasks.value.filter((task) => task.parent_id === root.id).map((task) => task.id)])
-    tasks.value = tasks.value.filter((task) => !removedIds.has(task.id))
-    homeMineTasks.value = homeMineTasks.value.filter((task) => !removedIds.has(task.id))
-    homeAllTasks.value = homeAllTasks.value.filter((task) => !removedIds.has(task.id))
+    tasks.value = removeRootAndChildren(tasks.value, root.id)
+    homeMineTasks.value = removeRootAndChildren(homeMineTasks.value, root.id)
+    homeAllTasks.value = removeRootAndChildren(homeAllTasks.value, root.id)
+    const nextExpanded = new Set(expandedRootIds.value)
+    nextExpanded.delete(root.id)
+    expandedRootIds.value = nextExpanded
     itemActivities.value = []
     itemActivityDraft.value = ""
     itemFactDraft.value = ""
@@ -548,7 +591,18 @@ async function confirmDeleteRootItem() {
     clearFactSuggestions()
     clearItemReview()
     deleteRootItemModalOpen.value = false
-    navigateTasks("all")
+    deleteTargetRootId.value = null
+    deleteTargetActivityCount.value = null
+    deleteTargetActivityLoading.value = false
+    if (origin === "detail") {
+      navigateTasks("all")
+    } else {
+      try {
+        tasks.value = await api.tasks(taskView.value)
+      } catch {
+        // Keep the optimistically filtered list if refreshing fails.
+      }
+    }
     showFeedback("success", "事项已删除")
   } catch (reason) {
     error.value = messageOf(reason)
@@ -1820,7 +1874,7 @@ onBeforeUnmount(() => {
   </div>
 
   <div
-    v-if="deleteRootItemModalOpen && isAdmin && detailTask && detailTask.parent_id === null && detailRoot"
+    v-if="deleteRootItemModalOpen && isAdmin && deleteTargetRoot"
     class="danger-modal-backdrop"
     @click.self="closeDeleteRootItemModal"
     @keydown.esc="closeDeleteRootItemModal"
@@ -1830,9 +1884,9 @@ onBeforeUnmount(() => {
       <h2 id="delete-item-title">删除事项？</h2>
       <p id="delete-item-description">将同时删除此事项下的所有分工、进展记录和当前信息，此操作不可恢复。</p>
       <dl class="danger-modal-summary">
-        <div><dt>事项</dt><dd>{{ detailRoot.title }}</dd></div>
-        <div><dt>分工</dt><dd>{{ detailChildren.length }} 项</dd></div>
-        <div><dt>动态</dt><dd>{{ itemActivities.length }} 条</dd></div>
+        <div><dt>事项</dt><dd>{{ deleteTargetRoot.title }}</dd></div>
+        <div><dt>分工</dt><dd>{{ deleteTargetChildren.length }} 项</dd></div>
+        <div><dt>动态</dt><dd>{{ deleteTargetActivityLoading ? "读取中…" : deleteTargetActivityCount === null ? "暂不可用" : `${deleteTargetActivityCount} 条` }}</dd></div>
       </dl>
       <div class="danger-modal-actions">
         <button type="button" :disabled="deletingRootItem" @click="closeDeleteRootItemModal">取消</button>
@@ -2965,67 +3019,77 @@ onBeforeUnmount(() => {
         <section class="task-board">
           <div v-if="rootTasks.length || orphanTasks.length" class="operation-list">
             <article v-for="task in rootTasks" :key="task.id" class="operation-card">
-              <div class="operation-main">
-                <span class="state">事项 · {{ statusLabels[task.status] }}</span>
-                <button class="task-title-link" type="button" @click="openTaskDetail(task)"><h3>{{ task.title }}</h3></button>
-                <small>
-                  {{ task.owner ? "总负责人 " + task.owner.name : "总负责人待认领" }}
-                  · 截止 {{ formatDate(task.deadline) }}
-                </small>
-                <small v-if="task.collaborators.length">
-                  协作：{{ task.collaborators.map((member) => member.name).join("、") }}
-                </small>
+              <div class="operation-card-top">
+                <div class="operation-main">
+                  <span class="state">事项 · {{ statusLabels[task.status] }}</span>
+                  <button class="task-title-link" type="button" @click="openTaskDetail(task)"><h3>{{ task.title }}</h3></button>
+                  <small>
+                    {{ task.owner ? "总负责人 " + task.owner.name : "总负责人待认领" }}
+                    · 截止 {{ formatDate(task.deadline) }}
+                  </small>
+                  <small v-if="task.collaborators.length">
+                    协作：{{ task.collaborators.map((member) => member.name).join("、") }}
+                  </small>
+                  <div v-if="childTasks(task.id).length" class="root-progress-summary">
+                    <span>{{ executionSummary(childTasks(task.id)).label }}<template v-if="executionSummary(childTasks(task.id)).detail"> · {{ executionSummary(childTasks(task.id)).detail }}</template></span>
+                    <span v-if="executionSummary(childTasks(task.id)).blocked">{{ executionSummary(childTasks(task.id)).blocked }} 项等待前置任务</span>
+                  </div>
+                </div>
+
+                <div class="task-actions root-task-actions">
+                  <button
+                    v-if="!task.owner && task.owner_claimable && task.status !== 'done'"
+                    class="primary small-action"
+                    type="button"
+                    @click="claimTask(task)"
+                  >认领负责人</button>
+                  <button
+                    v-if="task.owner?.id === user?.id && task.owner_claimable && task.status !== 'done'"
+                    type="button"
+                    @click="unclaimTask(task)"
+                  >取消认领</button>
+                  <button
+                    v-if="task.collaboration_open && task.owner?.id !== user?.id && !isCollaborator(task) && task.status !== 'done'"
+                    type="button"
+                    @click="joinTask(task)"
+                  >加入协作</button>
+                  <button
+                    v-if="task.collaboration_open && isCollaborator(task) && task.status !== 'done'"
+                    type="button"
+                    @click="leaveTask(task)"
+                  >退出协作</button>
+                  <button v-if="isManager" type="button" @click="editTask(task)">编辑</button>
+                  <button v-if="isAdmin" class="danger-text" type="button" @click.stop="openDeleteRootItemModal(task, 'list')">删除</button>
+                </div>
               </div>
 
-              <div class="task-actions">
+              <div class="root-breakdown-control">
                 <button
-                  v-if="!task.owner && task.owner_claimable && task.status !== 'done'"
-                  class="primary small-action"
+                  v-if="childTasks(task.id).length"
+                  class="breakdown-toggle"
                   type="button"
-                  @click="claimTask(task)"
-                >
-                  认领负责人
-                </button>
-                <button
-                  v-if="task.owner?.id === user?.id && task.owner_claimable && task.status !== 'done'"
-                  type="button"
-                  @click="unclaimTask(task)"
-                >
-                  取消认领
-                </button>
-                <button
-                  v-if="task.collaboration_open && task.owner?.id !== user?.id && !isCollaborator(task) && task.status !== 'done'"
-                  type="button"
-                  @click="joinTask(task)"
-                >
-                  加入协作
-                </button>
-                <button
-                  v-if="task.collaboration_open && isCollaborator(task) && task.status !== 'done'"
-                  type="button"
-                  @click="leaveTask(task)"
-                >
-                  退出协作
-                </button>
-                <button v-if="isManager" type="button" @click="editTask(task)">编辑</button>
+                  :aria-expanded="isRootExpanded(task.id)"
+                  :aria-controls="`work-breakdown-${task.id}`"
+                  @click="toggleRootBreakdown(task.id)"
+                >{{ isRootExpanded(task.id) ? "收起分工 ▴" : "展开分工 ▾" }}</button>
+                <span v-else class="no-child-tasks">暂无分工</span>
+                <button v-if="isManager && !childTasks(task.id).length" type="button" class="add-first-child" @click="startNewTask(task)">＋ 添加分工</button>
               </div>
 
-              <div v-if="isManager" class="status-actions">
-                <button
-                  v-for="value in (['todo', 'doing', 'done'] as TaskStatus[])"
-                  :key="value"
-                  type="button"
-                  :class="{ active: task.status === value }"
-                  @click="updateOwnTaskStatus(task, value)"
-                >
-                  {{ statusLabels[value] }}
-                </button>
-              </div>
-
-              <div v-if="childTasks(task.id).length || (isManager && taskView === 'all')" class="work-breakdown">
+              <div v-if="childTasks(task.id).length && isRootExpanded(task.id)" :id="`work-breakdown-${task.id}`" class="work-breakdown">
                 <div class="breakdown-heading">
                   <strong>分工</strong>
                   <button v-if="isManager" type="button" @click="startNewTask(task)">＋ 添加分工</button>
+                </div>
+
+                <div v-if="isManager" class="status-actions root-status-actions">
+                  <button
+                    v-for="value in (['todo', 'doing', 'done'] as TaskStatus[])"
+                    :key="value"
+                    type="button"
+                    :class="{ active: task.status === value }"
+                    @click="updateOwnTaskStatus(task, value)"
+                  >{{ statusLabels[value] }}</button>
                 </div>
 
                 <article v-for="child in childTasks(task.id)" :key="child.id" class="child-task">
@@ -3131,17 +3195,6 @@ onBeforeUnmount(() => {
                   退出协作
                 </button>
                 <button v-if="isManager" type="button" @click="editTask(task)">编辑</button>
-              </div>
-              <div v-if="isManager" class="status-actions">
-                <button
-                  v-for="value in (['todo', 'doing', 'done'] as TaskStatus[])"
-                  :key="value"
-                  type="button"
-                  :class="{ active: task.status === value }"
-                  @click="updateOwnTaskStatus(task, value)"
-                >
-                  {{ statusLabels[value] }}
-                </button>
               </div>
             </article>
           </div>

@@ -60,6 +60,8 @@ const members = ref<Member[]>([])
 const taskMembers = ref<MemberSummary[]>([])
 const latestInvite = ref<InviteResult | null>(null)
 const taskView = ref<TaskView>("mine")
+const deleteRootItemModalOpen = ref(false)
+const deletingRootItem = ref(false)
 const claimableCount = ref(0)
 const aiPlannerAvailable = ref(false)
 const plannerDescription = ref("")
@@ -515,6 +517,44 @@ function navigateTasks(view: TaskView) {
   const url = view === "mine" ? "/tasks" : `/tasks?view=${view}`
   taskView.value = view
   navigate(url)
+}
+
+function openDeleteRootItemModal() {
+  if (isAdmin.value && detailRoot.value && detailTask.value?.parent_id === null) {
+    deleteRootItemModalOpen.value = true
+  }
+}
+
+function closeDeleteRootItemModal() {
+  if (!deletingRootItem.value) deleteRootItemModalOpen.value = false
+}
+
+async function confirmDeleteRootItem() {
+  const root = detailRoot.value
+  if (!isAdmin.value || !root || detailTask.value?.parent_id !== null || deletingRootItem.value) return
+  deletingRootItem.value = true
+  try {
+    await api.deleteRootTask(root.id)
+    const removedIds = new Set([root.id, ...tasks.value.filter((task) => task.parent_id === root.id).map((task) => task.id)])
+    tasks.value = tasks.value.filter((task) => !removedIds.has(task.id))
+    homeMineTasks.value = homeMineTasks.value.filter((task) => !removedIds.has(task.id))
+    homeAllTasks.value = homeAllTasks.value.filter((task) => !removedIds.has(task.id))
+    itemActivities.value = []
+    itemActivityDraft.value = ""
+    itemFactDraft.value = ""
+    itemFactRelatedTaskIds.value = []
+    itemActivityRelatedTaskIds.value = []
+    editingFactScopeId.value = null
+    clearFactSuggestions()
+    clearItemReview()
+    deleteRootItemModalOpen.value = false
+    navigateTasks("all")
+    showFeedback("success", "事项已删除")
+  } catch (reason) {
+    error.value = messageOf(reason)
+  } finally {
+    deletingRootItem.value = false
+  }
 }
 
 function formatDate(value: string) {
@@ -1779,6 +1819,30 @@ onBeforeUnmount(() => {
     </div>
   </div>
 
+  <div
+    v-if="deleteRootItemModalOpen && isAdmin && detailTask && detailTask.parent_id === null && detailRoot"
+    class="danger-modal-backdrop"
+    @click.self="closeDeleteRootItemModal"
+    @keydown.esc="closeDeleteRootItemModal"
+  >
+    <section class="danger-modal" role="dialog" aria-modal="true" aria-labelledby="delete-item-title" aria-describedby="delete-item-description">
+      <p class="eyebrow">不可恢复的操作</p>
+      <h2 id="delete-item-title">删除事项？</h2>
+      <p id="delete-item-description">将同时删除此事项下的所有分工、进展记录和当前信息，此操作不可恢复。</p>
+      <dl class="danger-modal-summary">
+        <div><dt>事项</dt><dd>{{ detailRoot.title }}</dd></div>
+        <div><dt>分工</dt><dd>{{ detailChildren.length }} 项</dd></div>
+        <div><dt>动态</dt><dd>{{ itemActivities.length }} 条</dd></div>
+      </dl>
+      <div class="danger-modal-actions">
+        <button type="button" :disabled="deletingRootItem" @click="closeDeleteRootItemModal">取消</button>
+        <button class="danger-action" type="button" :disabled="deletingRootItem" @click="confirmDeleteRootItem">
+          {{ deletingRootItem ? "正在删除…" : "删除事项" }}
+        </button>
+      </div>
+    </section>
+  </div>
+
   <main v-if="path === '/login'" class="auth-shell">
     <form class="auth-form" @submit.prevent="submitLogin">
       <p class="brand">TARS BASE</p>
@@ -2531,6 +2595,14 @@ onBeforeUnmount(() => {
                 </div>
               </article>
             </section>
+          </section>
+
+          <section v-if="isAdmin" class="execution-section danger-zone" aria-labelledby="item-danger-zone-title">
+            <div>
+              <h2 id="item-danger-zone-title">危险操作</h2>
+              <p>删除事项会同时移除其分工、进展记录和当前信息。</p>
+            </div>
+            <button class="danger-action" type="button" @click="openDeleteRootItemModal">删除事项</button>
           </section>
         </template>
 

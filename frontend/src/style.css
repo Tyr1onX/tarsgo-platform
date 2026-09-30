@@ -1777,6 +1777,119 @@ textarea[aria-invalid="true"] {
   margin-bottom: 30px;
 }
 
+.danger-zone {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  border-top: 1px solid var(--line);
+  padding-top: 22px;
+}
+
+.danger-zone h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 560;
+}
+
+.danger-zone p {
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.danger-action {
+  flex: 0 0 auto;
+  border: 1px solid var(--danger);
+  border-radius: 4px;
+  background: transparent;
+  padding: 9px 13px;
+  color: var(--danger);
+  font-weight: 570;
+}
+
+.danger-action:hover:not(:disabled) {
+  background: var(--danger);
+  color: var(--surface);
+}
+
+.danger-action:disabled,
+.danger-modal-actions button:disabled {
+  cursor: wait;
+  opacity: 0.58;
+}
+
+.danger-modal-backdrop {
+  position: fixed;
+  z-index: 2100;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  overflow-y: auto;
+  background: rgba(15, 15, 14, 0.52);
+  padding: 20px;
+}
+
+.danger-modal {
+  width: min(100%, 500px);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 25px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.2);
+}
+
+.danger-modal h2 {
+  margin: 2px 0 8px;
+  font-size: 22px;
+  line-height: 1.3;
+}
+
+.danger-modal > p:not(.eyebrow) {
+  margin: 0;
+  color: var(--secondary);
+}
+
+.danger-modal-summary {
+  display: grid;
+  gap: 8px;
+  margin: 20px 0 0;
+  border-top: 1px solid var(--line);
+  padding-top: 13px;
+}
+
+.danger-modal-summary div {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr);
+  gap: 12px;
+}
+
+.danger-modal-summary dt {
+  color: var(--muted);
+}
+
+.danger-modal-summary dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-weight: 540;
+}
+
+.danger-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 9px;
+  margin-top: 24px;
+}
+
+.danger-modal-actions > button:first-child {
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: transparent;
+  padding: 9px 13px;
+  color: var(--text);
+}
+
 .progress-summary {
   display: grid;
   gap: 9px;
@@ -2546,6 +2659,19 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
 
   .fact-row-scoped > .fact-scope-label {
     width: 100%;
+  }
+  .danger-zone {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .danger-zone .danger-action {
+    align-self: flex-start;
+  }
+  .danger-modal {
+    padding: 21px 18px;
+  }
+  .danger-modal-actions > button {
+    flex: 1;
   }
   .page-title-actions { align-items: flex-end; flex-direction: column; gap: 6px; }
   .planner-heading { align-items: flex-start; }

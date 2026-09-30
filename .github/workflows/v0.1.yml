@@ -135,6 +135,9 @@ jobs:
       - name: Verify scoped item information
         run: docker compose exec -T api python -m tests.test_scoped_item_information
 
+      - name: Verify root item deletion
+        run: docker compose exec -T api python -m tests.test_root_task_deletion
+
       - name: Verify AI planner
         run: docker compose exec -T api python -m tests.test_ai_planner
 

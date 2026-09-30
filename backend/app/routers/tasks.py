@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import and_, delete, or_, select, update
 from sqlalchemy.orm import Session, selectinload
 
-from ..auth import get_current_member, require_manager
+from ..auth import get_current_member, require_admin, require_manager
 from ..db import get_db
 from ..models import ItemActivity, ItemFact, Member, Task, item_fact_tasks, task_collaborators, task_dependencies
 from ..schemas import (
@@ -442,6 +442,30 @@ def get_task(
     db: Session = Depends(get_db),
 ) -> TaskOut:
     return _task_out(_get_task(db, task_id), db, current)
+
+
+@router.delete("/{root_task_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_root_task(
+    root_task_id: int,
+    current: Member = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> None:
+    root = db.scalar(select(Task).where(Task.id == root_task_id).with_for_update())
+    if root is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="事项不存在")
+    if root.parent_id is not None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="只能删除事项，不能单独删除分工")
+
+    try:
+        # The self-referencing tasks.parent_id FK intentionally has no cascade.
+        # Delete children first; the existing FKs then cascade their associations,
+        # while root-owned activities and facts cascade with the root row.
+        db.execute(delete(Task).where(Task.parent_id == root.id))
+        db.delete(root)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
 
 
 @router.get("/{root_task_id}/activities", response_model=list[ItemActivityOut])

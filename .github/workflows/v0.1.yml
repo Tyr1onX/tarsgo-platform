@@ -133,6 +133,9 @@ jobs:
       - name: Verify V0.2 workflow
         run: python scripts/smoke_test.py workflow http://127.0.0.1
 
+      - name: Verify scoped task view hierarchy
+        run: docker compose exec -T api python -m tests.test_task_view_hierarchy
+
       - name: Verify shared execution scene
         run: docker compose exec -T api python -m tests.test_shared_execution
 

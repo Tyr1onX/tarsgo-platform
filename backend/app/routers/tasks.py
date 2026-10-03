@@ -424,9 +424,32 @@ def list_tasks(
 ) -> list[TaskOut]:
     query = _task_query()
     if scope == "mine":
-        query = query.where(or_(Task.owner_id == current.id, Task.collaborators.any(Member.id == current.id)))
+        mine_filter = or_(Task.owner_id == current.id, Task.collaborators.any(Member.id == current.id))
+        parent_ids = set(
+            db.scalars(
+                select(Task.parent_id)
+                .where(Task.parent_id.is_not(None), mine_filter)
+                .distinct()
+            ).all()
+        )
+        query = query.where(or_(mine_filter, Task.id.in_(parent_ids)))
     elif scope == "claimable":
-        query = query.where(Task.owner_id.is_(None), Task.owner_claimable.is_(True), Task.status != "done")
+        claimable_filter = and_(
+            Task.owner_id.is_(None),
+            Task.owner_claimable.is_(True),
+            Task.status != "done",
+        )
+        parent_ids = set(
+            db.scalars(
+                select(Task.parent_id)
+                .where(Task.parent_id.is_not(None), claimable_filter)
+                .distinct()
+            ).all()
+        )
+        # Child assignments keep their owning item in the response as context.
+        # The root is not made claimable by being included here; only rows that
+        # satisfy claimable_filter are claim targets.
+        query = query.where(or_(claimable_filter, Task.id.in_(parent_ids)))
 
     tasks = db.scalars(
         query.order_by(case((Task.deadline.is_(None), 1), else_=0), Task.deadline.asc(), Task.id.asc())

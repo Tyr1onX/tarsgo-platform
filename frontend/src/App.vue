@@ -15,7 +15,9 @@ import {
   mergeRecentActivities,
   patchTaskCollection,
   prependUniqueActivity,
+  rootsForView,
   setPendingTaskAction,
+  tasksForRoot,
 } from "./taskState.js"
 import {
   defaultFactSelection,
@@ -273,18 +275,12 @@ const homeTaskCards = computed(() => {
   )
   return [...children, ...standaloneRoots].sort(compareTaskDeadlines)
 })
-const rootTasks = computed(() => tasks.value.filter((task) => task.parent_id === null))
+const rootTasks = computed(() => rootsForView(tasks.value, taskView.value, user.value?.id ?? 0))
 const deleteTargetRoot = computed(() =>
   tasks.value.find((task) => task.id === deleteTargetRootId.value && task.parent_id === null) ?? null,
 )
 const deleteTargetChildren = computed(() =>
   deleteTargetRoot.value ? tasks.value.filter((task) => task.parent_id === deleteTargetRoot.value?.id) : [],
-)
-const loadedTaskIds = computed(() => new Set(tasks.value.map((task) => task.id)))
-const orphanTasks = computed(() =>
-  tasks.value.filter(
-    (task) => task.parent_id !== null && !loadedTaskIds.value.has(task.parent_id),
-  ),
 )
 
 const statusLabels: Record<TaskStatus, string> = {
@@ -481,9 +477,14 @@ function replaceTaskInState(updated: Task) {
   const wasClaimable = Boolean(previous && claimableTask(previous))
   const fullCurrentTaskSet = taskDetailId.value !== null || (path.value === "/tasks" && taskView.value === "all")
   const currentView = taskDetailId.value !== null ? "all" : taskView.value
-  tasks.value = patchTaskCollection(tasks.value, updated, currentView, user.value?.id ?? 0, fullCurrentTaskSet)
-  homeMineTasks.value = patchTaskCollection(homeMineTasks.value, updated, "mine", user.value?.id ?? 0)
-  homeAllTasks.value = patchTaskCollection(homeAllTasks.value, updated, "all", user.value?.id ?? 0, true)
+  const knownParentContext = updated.parent_id === null
+    ? null
+    : [...tasks.value, ...homeAllTasks.value, ...homeMineTasks.value].find(
+        (task) => task.id === updated.parent_id && task.parent_id === null,
+      ) ?? null
+  tasks.value = patchTaskCollection(tasks.value, updated, currentView, user.value?.id ?? 0, fullCurrentTaskSet, knownParentContext)
+  homeMineTasks.value = patchTaskCollection(homeMineTasks.value, updated, "mine", user.value?.id ?? 0, false, knownParentContext)
+  homeAllTasks.value = patchTaskCollection(homeAllTasks.value, updated, "all", user.value?.id ?? 0, true, knownParentContext)
   const isClaimable = claimableTask(updated)
   if (previous && wasClaimable !== isClaimable) {
     claimableCount.value = Math.max(0, claimableCount.value + (isClaimable ? 1 : -1))
@@ -722,6 +723,14 @@ function toLocalInput(value: string | null) {
 
 function childTasks(parentId: number) {
   return tasks.value.filter((task) => task.parent_id === parentId)
+}
+
+function taskViewChildren(parentId: number) {
+  return tasksForRoot(tasks.value, parentId, taskView.value, user.value?.id ?? 0)
+}
+
+function claimableChildren(parentId: number) {
+  return tasks.value.filter((task) => task.parent_id === parentId && claimableTask(task))
 }
 
 function homeRoot(task: Task) {
@@ -3216,18 +3225,44 @@ onBeforeUnmount(() => {
           <div v-else-if="taskListLoadError" class="local-route-loading" role="alert">
             暂时无法加载任务列表。<button class="text-action" type="button" @click="loadRoute">重试</button>
           </div>
-          <div v-else-if="rootTasks.length || orphanTasks.length" class="operation-list">
-            <article v-for="task in rootTasks" :key="task.id" class="operation-card">
-              <div class="operation-card-top">
+          <div v-else-if="rootTasks.length" class="operation-list">
+            <article v-for="task in rootTasks" :key="task.id" class="operation-card" :class="{ 'claimable-root-card': taskView === 'claimable' }">
+              <template v-if="taskView === 'claimable'">
+                <div class="claimable-root-summary">
+                  <div class="claimable-root-heading">
+                    <div class="root-status-line"><span class="state">事项</span><TaskStatusIndicator :status="task.status" :task-id="task.id" :editable="false" /></div>
+                    <button class="task-title-link" type="button" @click="openTaskDetail(task)"><h3>{{ task.title }}</h3></button>
+                    <small>{{ task.owner ? "总负责人 " + task.owner.name : "总负责人待认领" }}</small>
+                    <strong v-if="claimableChildren(task.id).length" class="claimable-root-count">{{ claimableChildren(task.id).length }} 项待认领</strong>
+                  </div>
+                  <button
+                    v-if="claimableTask(task)"
+                    class="primary small-action claimable-root-claim"
+                    type="button"
+                    :disabled="Boolean(pendingTaskAction(task.id))"
+                    @click="claimTask(task)"
+                  >{{ pendingTaskAction(task.id) === 'claim' ? '认领中…' : '认领事项负责人' }}</button>
+                </div>
+                <div v-if="claimableChildren(task.id).length" class="root-breakdown-control">
+                  <button
+                    class="breakdown-toggle"
+                    type="button"
+                    :aria-expanded="isRootExpanded(task.id)"
+                    :aria-controls="`work-breakdown-${task.id}`"
+                    @click="toggleRootBreakdown(task.id)"
+                  >{{ isRootExpanded(task.id) ? "收起待认领分工 ▴" : "展开待认领分工 ▾" }}</button>
+                </div>
+              </template>
+              <div v-else class="operation-card-top">
                 <div class="operation-main">
-                  <div class="root-status-line"><span class="state">事项</span><TaskStatusIndicator :status="task.status" :task-id="task.id" :editable="isManager && childTasks(task.id).length === 0" :pending="Boolean(pendingTaskAction(task.id)?.startsWith('status:'))" @update-status="updateOwnTaskStatus(task, $event)" /></div>
+                  <div class="root-status-line"><span class="state">事项</span><TaskStatusIndicator :status="task.status" :task-id="task.id" :editable="isManager && taskView === 'all' && childTasks(task.id).length === 0" :pending="Boolean(pendingTaskAction(task.id)?.startsWith('status:'))" @update-status="updateOwnTaskStatus(task, $event)" /></div>
                   <button class="task-title-link" type="button" @click="openTaskDetail(task)"><h3>{{ task.title }}</h3></button>
                   <small>{{ task.owner ? "总负责人 " + task.owner.name : "总负责人待认领" }}</small>
                   <small v-if="task.deadline">截止 {{ formatDate(task.deadline) }}</small>
                   <small v-if="task.collaborators.length">
                     协作：{{ task.collaborators.map((member) => member.name).join("、") }}
                   </small>
-                  <div v-if="childTasks(task.id).length" class="root-progress-summary">
+                  <div v-if="taskView === 'all' && childTasks(task.id).length" class="root-progress-summary">
                     <span>{{ executionSummary(childTasks(task.id)).label }}<template v-if="executionSummary(childTasks(task.id)).detail"> · {{ executionSummary(childTasks(task.id)).detail }}</template></span>
                     <span v-if="executionSummary(childTasks(task.id)).blocked">{{ executionSummary(childTasks(task.id)).blocked }} 项等待前置任务</span>
                   </div>
@@ -3240,7 +3275,7 @@ onBeforeUnmount(() => {
                     type="button"
                     :disabled="Boolean(pendingTaskAction(task.id))"
                     @click="claimTask(task)"
-                  >{{ pendingTaskAction(task.id) === 'claim' ? '认领中…' : '认领任务' }}</button>
+                  >{{ pendingTaskAction(task.id) === 'claim' ? '认领中…' : '认领事项负责人' }}</button>
                   <button
                     v-if="task.owner?.id === user?.id && task.owner_claimable && task.status !== 'done'"
                     type="button"
@@ -3264,27 +3299,28 @@ onBeforeUnmount(() => {
                 </div>
               </div>
 
-              <div class="root-breakdown-control">
+              <div v-if="taskView !== 'claimable'" class="root-breakdown-control">
                 <button
-                  v-if="childTasks(task.id).length"
+                  v-if="taskViewChildren(task.id).length"
                   class="breakdown-toggle"
                   type="button"
                   :aria-expanded="isRootExpanded(task.id)"
                   :aria-controls="`work-breakdown-${task.id}`"
                   @click="toggleRootBreakdown(task.id)"
                 >{{ isRootExpanded(task.id) ? "收起分工 ▴" : "展开分工 ▾" }}</button>
-                <span v-else class="no-child-tasks">暂无分工</span>
-                <button v-if="isManager && !childTasks(task.id).length" type="button" class="add-first-child" @click="startNewTask(task)">＋ 添加分工</button>
+                <span v-else-if="taskView === 'all' && !childTasks(task.id).length" class="no-child-tasks">暂无分工</span>
+                <span v-else-if="!taskViewChildren(task.id).length" class="no-child-tasks">暂无与你相关的分工</span>
+                <button v-if="isManager && taskView === 'all' && !childTasks(task.id).length" type="button" class="add-first-child" @click="startNewTask(task)">＋ 添加分工</button>
               </div>
 
-              <div v-if="childTasks(task.id).length && isRootExpanded(task.id)" :id="`work-breakdown-${task.id}`" class="work-breakdown">
+              <div v-if="(taskView === 'claimable' ? claimableChildren(task.id).length : taskViewChildren(task.id).length) && isRootExpanded(task.id)" :id="`work-breakdown-${task.id}`" class="work-breakdown">
                 <div class="breakdown-heading">
-                  <strong>分工 <span class="task-count">· {{ childTasks(task.id).length }}</span></strong>
-                  <button v-if="isManager" type="button" @click="startNewTask(task)">＋ 添加分工</button>
+                  <strong>{{ taskView === 'claimable' ? '待认领分工' : '分工' }} <span class="task-count">· {{ (taskView === 'claimable' ? claimableChildren(task.id) : taskViewChildren(task.id)).length }}</span></strong>
+                  <button v-if="isManager && taskView === 'all'" type="button" @click="startNewTask(task)">＋ 添加分工</button>
                 </div>
 
                 <div class="child-task-list">
-                  <article v-for="child in childTasks(task.id)" :key="child.id" class="child-task-row">
+                  <article v-for="child in (taskView === 'claimable' ? claimableChildren(task.id) : taskViewChildren(task.id))" :key="child.id" class="child-task-row">
                     <div class="child-task-heading">
                       <TaskStatusIndicator :status="child.status" :task-id="child.id" :editable="isManager" :pending="Boolean(pendingTaskAction(child.id)?.startsWith('status:'))" @update-status="updateOwnTaskStatus(child, $event)" />
                       <small class="child-task-owner">{{ child.owner?.name ?? "待认领" }}</small>
@@ -3319,51 +3355,6 @@ onBeforeUnmount(() => {
                     </div>
                   </article>
                 </div>
-              </div>
-            </article>
-
-            <article v-for="task in orphanTasks" :key="task.id" class="operation-card orphan-task">
-              <div class="operation-main">
-                <span class="state">分工</span><TaskStatusIndicator :status="task.status" :task-id="task.id" :editable="isManager" :pending="Boolean(pendingTaskAction(task.id)?.startsWith('status:'))" :blocked="task.blocked" @update-status="updateOwnTaskStatus(task, $event)" />
-                <button class="task-title-link" type="button" @click="openTaskDetail(task)"><h3>{{ task.title }}</h3></button>
-                <p v-if="task.deliverable">{{ task.deliverable }}</p>
-                <small>{{ task.owner ? task.owner.name + " 负责" : "待认领" }}<template v-if="task.deadline"> · 截止 {{ formatDate(task.deadline) }}</template></small>
-              </div>
-              <div class="task-actions">
-                <button
-                  v-if="!task.owner && task.owner_claimable && task.status !== 'done'"
-                  class="primary small-action"
-                  type="button"
-                  :disabled="Boolean(pendingTaskAction(task.id))"
-                  @click="claimTask(task)"
-                >
-                  {{ pendingTaskAction(task.id) === 'claim' ? '认领中…' : '认领任务' }}
-                </button>
-                <button
-                  v-if="task.owner?.id === user?.id && task.owner_claimable && task.status !== 'done'"
-                  type="button"
-                  :disabled="Boolean(pendingTaskAction(task.id))"
-                  @click="unclaimTask(task)"
-                >
-                  {{ pendingTaskAction(task.id) === 'unclaim' ? '取消中…' : '取消认领' }}
-                </button>
-                <button
-                  v-if="task.collaboration_open && task.owner?.id !== user?.id && !isCollaborator(task) && task.status !== 'done'"
-                  type="button"
-                  :disabled="Boolean(pendingTaskAction(task.id))"
-                  @click="joinTask(task)"
-                >
-                  {{ pendingTaskAction(task.id) === 'join' ? '加入中…' : '加入协作' }}
-                </button>
-                <button
-                  v-if="task.collaboration_open && isCollaborator(task) && task.status !== 'done'"
-                  type="button"
-                  :disabled="Boolean(pendingTaskAction(task.id))"
-                  @click="leaveTask(task)"
-                >
-                  {{ pendingTaskAction(task.id) === 'leave' ? '退出中…' : '退出协作' }}
-                </button>
-                <button v-if="isManager" type="button" @click="editTask(task)">编辑</button>
               </div>
             </article>
           </div>

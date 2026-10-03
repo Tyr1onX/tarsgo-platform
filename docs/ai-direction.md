@@ -91,7 +91,7 @@ AI planner 必须同时满足：
 1. 已登录且账号 active
 2. 系统角色为 admin
 3. AI_PLANNER_ENABLED=true
-4. 服务器已配置 AI_API_KEY 和 AI_MODEL
+4. 服务器已按 AI_PROVIDER 配置对应密钥和模型：Gemini 使用 GEMINI_API_KEY、GEMINI_MODEL；OpenAI / DeepSeek 使用 AI_API_KEY、AI_MODEL
 
 所有 active admin 共享同一权限规则，不再按 member ID 配置 allowlist；manager 和 member 不能使用 Planner Generate、Refine 或 Execution Review。
 
@@ -101,12 +101,17 @@ API key 只存在 API 容器环境变量中，不进入 Git、前端 bundle、AP
 
 ## Provider
 
-当前使用 OpenAI 官方 Python SDK，并支持两个 provider adapter：
+后端复用同一 provider 接口，并支持三种配置：
 
+- `AI_PROVIDER=gemini`：Google Gemini
 - `AI_PROVIDER=openai`：OpenAI
 - `AI_PROVIDER=deepseek`：DeepSeek OpenAI-compatible API
 
-二者保持同一个 `AIPlannerDraft`、同一套权限、频控和上层业务接口。
+三者保持同一个 `AIPlannerDraft`、同一套权限、频控和上层业务接口；不引入第二套生成或写入流程。
+
+Gemini 使用 Google 官方 `google-genai` Python SDK 的 Interactions API。请求把现有 Pydantic 输出模型的 JSON Schema 放进 `response_format`，收到的 JSON 仍由服务端模型校验；Gemini 只获得本次请求拼好的 Planner 上下文，不获得 API key 或数据库访问能力。每次请求设置 `store=false` 并关闭 SDK 自动重试（attempts=1），避免保存交互记录或多发隐藏重试。
+
+Gemini 通过 API 容器环境变量 `GEMINI_API_KEY` 和 `GEMINI_MODEL` 配置，建议的当前 Free Tier Flash 示例为 `gemini-3.8-flash`。Google Free Tier 的额度和数据处理条款可能变化，当前条款说明 Free Tier 内容可能用于改进 Google 产品；对敏感资料应根据团队要求选择合适服务层级。
 
 DeepSeek 使用 `AI_BASE_URL=https://api.deepseek.com`，模型仍由 `AI_MODEL` 配置，例如 `deepseek-flash`。
 

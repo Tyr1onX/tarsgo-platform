@@ -163,6 +163,21 @@ def main() -> None:
         assert not planner_access_for(manager)
         assert not planner_access_for(member)
         assert not planner_access_for(inactive_admin)
+
+        with patch.dict(os.environ, {
+            "AI_PROVIDER": "gemini",
+            "GEMINI_API_KEY": "ci-placeholder",
+            "GEMINI_MODEL": "gemini-3.8-flash",
+        }):
+            assert planner_access_for(admin)
+            assert not planner_access_for(manager)
+            with patch.dict(os.environ, {"GEMINI_API_KEY": ""}):
+                assert not planner_access_for(admin)
+                expect_http(
+                    503,
+                    lambda: planner_router.generate_plan(request, current=admin, db=db, provider=FakeProvider()),
+                )
+
         expect_http(403, lambda: planner_router.generate_plan(request, current=manager, db=db, provider=FakeProvider()))
         expect_http(403, lambda: planner_router.generate_plan(request, current=member, db=db, provider=FakeProvider()))
         expect_http(403, lambda: planner_router.generate_plan(request, current=inactive_admin, db=db, provider=FakeProvider()))

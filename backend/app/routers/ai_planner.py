@@ -15,6 +15,7 @@ from ..ai_planner import (
     PlannerRateLimitError,
     PlannerTimeoutError,
     get_planner_provider,
+    provider_is_configured,
 )
 from ..auth import get_current_member
 from ..db import get_db
@@ -56,7 +57,7 @@ def _enabled() -> bool:
 
 
 def _server_configured() -> bool:
-    return bool(os.getenv("AI_API_KEY", "").strip() and os.getenv("AI_MODEL", "").strip())
+    return provider_is_configured()
 
 
 def _has_access(member: Member) -> bool:

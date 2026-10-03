@@ -8,12 +8,14 @@ from pydantic import ValidationError
 from app.ai_planner import (
     DEEPSEEK_DEFAULT_BASE_URL,
     DeepSeekPlannerProvider,
+    GeminiPlannerProvider,
     OpenAIPlannerProvider,
     PlannerInvalidResponse,
     SYSTEM_PROMPT,
     ITEM_REVIEW_SYSTEM_PROMPT,
     ITEM_FACT_EXTRACTION_SYSTEM_PROMPT,
     get_planner_provider,
+    provider_is_configured,
 )
 from app.schemas import (
     AIItemFactExtractionOut,
@@ -127,6 +129,35 @@ class FakeResponses:
 class FakeClient:
     def __init__(self, calls, *, output_text: str | None = None):
         self.responses = FakeResponses(calls, output_text=output_text)
+
+
+class FakeGeminiInteractions:
+    def __init__(self, calls, output_text, status="completed"):
+        self.calls = calls
+        self.output_text = output_text
+        self.status = status
+
+    def create(self, **kwargs):
+        self.calls["create_count"] = self.calls.get("create_count", 0) + 1
+        self.calls["create"] = kwargs
+        return SimpleNamespace(
+            status=self.status,
+            output_text=self.output_text,
+            usage=SimpleNamespace(
+                total_input_tokens=101,
+                total_output_tokens=79,
+                total_tokens=180,
+            ),
+        )
+
+
+class FakeGeminiClient:
+    def __init__(self, calls, output_text, status="completed"):
+        self.calls = calls
+        self.interactions = FakeGeminiInteractions(calls, output_text, status)
+
+    def close(self):
+        self.calls["closed"] = True
 
 
 def valid_json() -> str:
@@ -532,6 +563,97 @@ def main() -> None:
         )
     assert mismatch_calls.get("create_count") == 1
     assert mismatch_calls.get("parse_count", 0) == 0
+
+    configure("gemini")
+    os.environ["GEMINI_API_KEY"] = "ci-placeholder"
+    os.environ["GEMINI_MODEL"] = "gemini-3.8-flash"
+    assert provider_is_configured()
+    assert isinstance(get_planner_provider(), GeminiPlannerProvider)
+    gemini_calls = {}
+
+    def fake_gemini(**kwargs):
+        gemini_calls["client"] = kwargs
+        return FakeGeminiClient(gemini_calls, valid_json())
+
+    with patch("app.ai_planner.genai.Client", side_effect=fake_gemini):
+        gemini_generation = get_planner_provider().generate("准备一次校园科技展示，需要摄影和资料整理。")
+    assert gemini_calls["client"]["api_key"] == "ci-placeholder"
+    assert gemini_calls["client"]["http_options"].timeout == 30000
+    assert gemini_calls["client"]["http_options"].retry_options.attempts == 1
+    assert gemini_calls["create_count"] == 1
+    assert gemini_calls["closed"] is True
+    gemini_request = gemini_calls["create"]
+    assert gemini_request["model"] == "gemini-3.8-flash"
+    assert gemini_request["system_instruction"] == SYSTEM_PROMPT
+    assert gemini_request["store"] is False
+    assert gemini_request["generation_config"] == {"max_output_tokens": 4096}
+    assert gemini_request["response_format"] == {
+        "type": "text",
+        "mime_type": "application/json",
+        "schema": AIPlannerDraft.model_json_schema(),
+    }
+    assert "ci-placeholder" not in repr(gemini_request)
+    assert gemini_generation.draft == draft()
+    assert gemini_generation.input_tokens == 101
+    assert gemini_generation.output_tokens == 79
+    assert gemini_generation.total_tokens == 180
+
+    late_deadline_payload = draft().model_dump(mode="json")
+    late_deadline_payload["item"]["deadline"] = "2026-10-12T08:00:00+08:00"
+    late_deadline_payload["tasks"][0]["deadline"] = "2026-10-12T01:00:01Z"
+    invalid_deadline_calls = {}
+
+    def fake_late_deadline_gemini(**kwargs):
+        invalid_deadline_calls["client"] = kwargs
+        return FakeGeminiClient(
+            invalid_deadline_calls,
+            json.dumps(late_deadline_payload, ensure_ascii=False),
+        )
+
+    with patch("app.ai_planner.genai.Client", side_effect=fake_late_deadline_gemini):
+        expect_invalid(lambda: GeminiPlannerProvider().generate("事项截止时间为 10 月 12 日。"))
+    assert invalid_deadline_calls.get("create_count") == 1
+
+    gemini_review_calls = {}
+
+    def fake_gemini_review(**kwargs):
+        gemini_review_calls["client"] = kwargs
+        return FakeGeminiClient(gemini_review_calls, valid_review_json())
+
+    with patch("app.ai_planner.genai.Client", side_effect=fake_gemini_review):
+        gemini_review_generation = GeminiPlannerProvider().review(review_context)
+    assert gemini_review_calls["create"]["system_instruction"] == ITEM_REVIEW_SYSTEM_PROMPT
+    assert gemini_review_calls["create"]["input"] == review_context
+    assert gemini_review_calls["create"]["response_format"]["schema"] == AIItemReviewOut.model_json_schema()
+    assert gemini_review_calls["create"]["generation_config"] == {"max_output_tokens": 2200}
+    assert gemini_review_generation.review == review()
+    assert gemini_review_generation.total_tokens == 180
+
+    gemini_facts_calls = {}
+
+    def fake_gemini_facts(**kwargs):
+        gemini_facts_calls["client"] = kwargs
+        return FakeGeminiClient(gemini_facts_calls, valid_fact_extraction_json())
+
+    with patch("app.ai_planner.genai.Client", side_effect=fake_gemini_facts):
+        gemini_facts_generation = GeminiPlannerProvider().extract_facts(extraction_context)
+    assert gemini_facts_calls["create"]["system_instruction"] == ITEM_FACT_EXTRACTION_SYSTEM_PROMPT
+    assert gemini_facts_calls["create"]["input"] == extraction_context
+    assert gemini_facts_calls["create"]["response_format"]["schema"] == AIItemFactExtractionOut.model_json_schema()
+    assert gemini_facts_calls["create"]["generation_config"] == {"max_output_tokens": 2200}
+    assert gemini_facts_generation.extraction == fact_extraction()
+
+    for invalid_output, status in (("not json", "completed"), (valid_json(), "failed")):
+        invalid_gemini_calls = {}
+
+        def fake_invalid_gemini(**kwargs):
+            invalid_gemini_calls["client"] = kwargs
+            return FakeGeminiClient(invalid_gemini_calls, invalid_output, status=status)
+
+        with patch("app.ai_planner.genai.Client", side_effect=fake_invalid_gemini):
+            expect_invalid(lambda: GeminiPlannerProvider().generate("一个需要拆解的事项。"))
+        assert invalid_gemini_calls.get("create_count") == 1
+        assert invalid_gemini_calls["closed"] is True
 
     print("AI provider adapter tests passed")
 

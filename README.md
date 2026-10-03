@@ -193,7 +193,7 @@ Planner 不是聊天机器人，并且在生成阶段绝不会写入任务。它
 - 已认证的 active 用户
 - 系统角色为 admin
 - AI_PLANNER_ENABLED=true
-- 服务端配置 AI_API_KEY 和 AI_MODEL
+- 按 AI_PROVIDER 配置对应的服务端 API key 和模型名（Gemini 使用 GEMINI_API_KEY、GEMINI_MODEL）
 
 前端只有在 /api/ai/planner/access 表示可用时才显示入口。Planner POST 接口还会再次执行权威校验。
 
@@ -206,20 +206,36 @@ Planner 先使用自然语言输入，再生成可编辑的结构化草稿。每
 ~~~text
 AI_PLANNER_ENABLED=true
 AI_PLANNER_DAILY_REQUEST_LIMIT=100
-AI_PROVIDER=openai
+AI_PROVIDER=gemini
 AI_BASE_URL=
-AI_API_KEY=<server-side key>
-AI_MODEL=<structured-output-capable model>
+GEMINI_API_KEY=<server-side key from Google AI Studio>
+GEMINI_MODEL=gemini-3.8-flash
+
+# OpenAI:
+# AI_PROVIDER=openai
+# AI_API_KEY=<server-side key>
+# AI_MODEL=<structured-output-capable model>
 
 # DeepSeek:
 # AI_PROVIDER=deepseek
 # AI_BASE_URL=https://api.deepseek.com
+# AI_API_KEY=<server-side key>
 # AI_MODEL=deepseek-flash
 ~~~
 
 仓库中只包含空值 / 禁用状态的占位配置。API key 永远不会发送到前端，也不会通过 API 响应返回。
 
-OpenAI 和 DeepSeek 适配器都使用官方 OpenAI Python SDK。OpenAI 继续使用 responses.parse(..., text_format=AIPlannerDraft)。DeepSeek 连接其官方的 OpenAI-compatible Responses API（https://api.deepseek.com），但只调用一次 responses.create，并使用 text.format.type=json_schema、strict=true 和 AIPlannerDraft.model_json_schema()，随后通过 json.loads() 与 AIPlannerDraft.model_validate() 在本地校验 response.output_text。不存在 parse 后再 create 的 fallback，因此一次 Generate 操作仍然只执行一次模型请求。
+Gemini 使用 Google 官方 `google-genai` Python SDK 的 Interactions API，通过 `response_format` 发送 `AIPlannerDraft` 的 JSON Schema，并在服务端再次用 Pydantic 校验输出。请求设置 `store=false`，SDK 重试次数设为 1（仅首次调用），不保存完整 prompt 或草稿。默认示例模型 `gemini-3.8-flash` 当前包含在 Gemini Developer API Free Tier；免费额度和条款由 Google 管理，Free Tier 请求可能用于改进 Google 产品，敏感资料应按团队的数据处理要求选择服务层级。
+
+OpenAI 和 DeepSeek 适配器继续使用官方 OpenAI Python SDK。OpenAI 继续使用 responses.parse(..., text_format=AIPlannerDraft)。DeepSeek 连接其官方的 OpenAI-compatible Responses API（https://api.deepseek.com），但只调用一次 responses.create，并使用 text.format.type=json_schema、strict=true 和 AIPlannerDraft.model_json_schema()，随后通过 json.loads() 与 AIPlannerDraft.model_validate() 在本地校验 response.output_text。不存在 parse 后再 create 的 fallback，因此一次 Generate 操作仍然只执行一次模型请求。
+
+### 配置 Gemini API Key
+
+1. 登录 [Google AI Studio 的 API Keys 页面](https://aistudio.google.com/app/api-keys)，选择项目并创建 API Key。
+2. 将密钥直接写入部署服务器的 `.env`，例如 `GEMINI_API_KEY=...`。不要放进前端环境变量、仓库文件、聊天或日志。
+3. 在 `.env` 中设置 `AI_PROVIDER=gemini`、`GEMINI_MODEL=gemini-3.8-flash` 和 `AI_PLANNER_ENABLED=true`，然后按常规方式重建并启动服务。
+
+Gemini 密钥仅通过 Compose 传给 API 容器。Planner 继续使用当前 `/api/ai/planner` 接口、管理员权限、现有额度和 `/api/tasks/batch` 确认创建流程。
 
 ## 数据库迁移
 

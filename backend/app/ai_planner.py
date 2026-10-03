@@ -1,9 +1,12 @@
 import json
 import os
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Protocol
 
+from google import genai
+from google.genai import errors as genai_errors
+from google.genai import types as genai_types
 from openai import APIConnectionError, APIError, APITimeoutError, OpenAI, RateLimitError
 from pydantic import ValidationError
 
@@ -11,6 +14,7 @@ from .schemas import AIItemFactExtractionOut, AIItemReviewOut, AIPlannerDraft
 
 MAX_OUTPUT_TOKENS = 2200
 DEEPSEEK_MAX_OUTPUT_TOKENS = 4096
+GEMINI_MAX_OUTPUT_TOKENS = 4096
 REQUEST_TIMEOUT_SECONDS = 30.0
 DEEPSEEK_DEFAULT_BASE_URL = "https://api.deepseek.com"
 
@@ -210,6 +214,17 @@ def configured_provider_name() -> str:
     return os.getenv("AI_PROVIDER", "openai").strip().lower() or "openai"
 
 
+def provider_is_configured(provider_name: str | None = None) -> bool:
+    provider = provider_name or configured_provider_name()
+    if provider == "gemini":
+        required = ("GEMINI_API_KEY", "GEMINI_MODEL")
+    elif provider in {"openai", "deepseek"}:
+        required = ("AI_API_KEY", "AI_MODEL")
+    else:
+        return False
+    return all(os.getenv(name, "").strip() for name in required)
+
+
 def _client(*, base_url: str | None = None) -> OpenAI:
     kwargs = {
         "api_key": os.environ["AI_API_KEY"],
@@ -229,6 +244,108 @@ def _generation_from_response(response, draft: AIPlannerDraft) -> PlannerGenerat
         output_tokens=int(getattr(usage, "output_tokens", 0) or 0),
         total_tokens=int(getattr(usage, "total_tokens", 0) or 0),
     )
+
+
+def _gemini_client():
+    return genai.Client(
+        api_key=os.environ["GEMINI_API_KEY"],
+        http_options=genai_types.HttpOptions(
+            timeout=int(REQUEST_TIMEOUT_SECONDS * 1000),
+            retry_options=genai_types.HttpRetryOptions(attempts=1),
+        ),
+    )
+
+
+def _gemini_interaction(
+    *,
+    system_instruction: str,
+    input_text: str,
+    response_model,
+    max_output_tokens: int = GEMINI_MAX_OUTPUT_TOKENS,
+):
+    client = _gemini_client()
+    try:
+        try:
+            interaction = client.interactions.create(
+                model=os.environ["GEMINI_MODEL"],
+                input=input_text,
+                system_instruction=system_instruction,
+                response_format={
+                    "type": "text",
+                    "mime_type": "application/json",
+                    "schema": response_model.model_json_schema(),
+                },
+                generation_config={"max_output_tokens": max_output_tokens},
+                store=False,
+            )
+        except genai_errors.APIError as exc:
+            code = getattr(exc, "code", None)
+            if code == 429:
+                raise PlannerRateLimitError from exc
+            if code in {408, 504}:
+                raise PlannerTimeoutError from exc
+            raise PlannerProviderError from exc
+        except Exception as exc:
+            if type(exc).__name__ in {"TimeoutException", "ConnectTimeout", "ReadTimeout"}:
+                raise PlannerTimeoutError from exc
+            raise PlannerProviderError from exc
+
+        response_status = getattr(interaction, "status", None)
+        if getattr(response_status, "value", response_status) != "completed":
+            raise PlannerInvalidResponse
+        output_text = getattr(interaction, "output_text", None)
+        if not isinstance(output_text, str) or not output_text.strip():
+            raise PlannerInvalidResponse
+        try:
+            parsed = response_model.model_validate(json.loads(output_text))
+        except (json.JSONDecodeError, ValidationError, TypeError) as exc:
+            raise PlannerInvalidResponse from exc
+        if isinstance(parsed, AIPlannerDraft) and parsed.item.deadline is not None:
+            item_deadline = _deadline_in_utc(parsed.item.deadline)
+            if any(
+                task.deadline is not None
+                and _deadline_in_utc(task.deadline) > item_deadline
+                for task in parsed.tasks
+            ):
+                raise PlannerInvalidResponse
+        return parsed, interaction
+    finally:
+        close = getattr(client, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:
+                pass
+
+
+def _gemini_usage(interaction) -> tuple[int, int, int]:
+    usage = getattr(interaction, "usage", None)
+    input_tokens = int(getattr(usage, "total_input_tokens", 0) or 0)
+    output_tokens = int(getattr(usage, "total_output_tokens", 0) or 0)
+    total_tokens = int(getattr(usage, "total_tokens", 0) or 0)
+    return input_tokens, output_tokens, total_tokens
+
+
+def _deadline_in_utc(value: datetime) -> datetime:
+    if value.tzinfo is not None and value.utcoffset() is not None:
+        return value.astimezone(timezone.utc).replace(tzinfo=None)
+    return value
+
+
+def _generate_gemini_structured(
+    system_instruction: str,
+    input_text: str,
+    response_model,
+    *,
+    max_output_tokens: int = GEMINI_MAX_OUTPUT_TOKENS,
+):
+    parsed, interaction = _gemini_interaction(
+        system_instruction=system_instruction,
+        input_text=input_text,
+        response_model=response_model,
+        max_output_tokens=max_output_tokens,
+    )
+    return parsed, _gemini_usage(interaction)
 
 
 def _generate_openai_structured(client: OpenAI, description: str) -> PlannerGeneration:
@@ -468,6 +585,39 @@ class DeepSeekPlannerProvider:
         return _generate_deepseek_item_facts(_client(base_url=base_url), context)
 
 
+class GeminiPlannerProvider:
+    def generate(self, description: str) -> PlannerGeneration:
+        draft, usage = _generate_gemini_structured(
+            SYSTEM_PROMPT,
+            f"今天日期：{date.today().isoformat()}\n{description}",
+            AIPlannerDraft,
+        )
+        return PlannerGeneration(draft=draft, input_tokens=usage[0], output_tokens=usage[1], total_tokens=usage[2])
+
+    def review(self, context: str) -> PlannerReviewGeneration:
+        review, usage = _generate_gemini_structured(
+            ITEM_REVIEW_SYSTEM_PROMPT,
+            context,
+            AIItemReviewOut,
+            max_output_tokens=MAX_OUTPUT_TOKENS,
+        )
+        return PlannerReviewGeneration(review=review, input_tokens=usage[0], output_tokens=usage[1], total_tokens=usage[2])
+
+    def extract_facts(self, context: str) -> PlannerFactExtractionGeneration:
+        extraction, usage = _generate_gemini_structured(
+            ITEM_FACT_EXTRACTION_SYSTEM_PROMPT,
+            context,
+            AIItemFactExtractionOut,
+            max_output_tokens=MAX_OUTPUT_TOKENS,
+        )
+        return PlannerFactExtractionGeneration(
+            extraction=extraction,
+            input_tokens=usage[0],
+            output_tokens=usage[1],
+            total_tokens=usage[2],
+        )
+
+
 class UnavailablePlannerProvider:
     def generate(self, description: str) -> PlannerGeneration:
         raise PlannerProviderError
@@ -485,4 +635,6 @@ def get_planner_provider() -> PlannerProvider:
         return OpenAIPlannerProvider()
     if provider == "deepseek":
         return DeepSeekPlannerProvider()
+    if provider == "gemini":
+        return GeminiPlannerProvider()
     return UnavailablePlannerProvider()

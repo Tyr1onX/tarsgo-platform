@@ -1,0 +1,70 @@
+import assert from "node:assert/strict"
+import { readFileSync } from "node:fs"
+
+const app = readFileSync(new URL("../src/App.vue", import.meta.url), "utf8")
+const menu = readFileSync(new URL("../src/TaskActionMenu.vue", import.meta.url), "utf8")
+const css = readFileSync(new URL("../src/style.css", import.meta.url), "utf8")
+
+const itemDetailSection = app.slice(app.indexOf('<div v-if="detailChildren.length" class="detail-task-list child-task-list">'), app.indexOf('<section class="execution-section">', app.indexOf('<div v-if="detailChildren.length" class="detail-task-list child-task-list">')))
+const expandedList = app.slice(app.indexOf('<div class="child-task-list">', app.indexOf('class="work-breakdown"')), app.indexOf("</div>\n              </div>", app.indexOf('<div class="child-task-list">', app.indexOf('class="work-breakdown"'))))
+
+assert.match(itemDetailSection, /class="child-task-row detail-child-task-row"/)
+assert.match(expandedList, /class="child-task-row"/)
+assert.match(app, /class="child-task-list"[\s\S]*?class="child-task-row"/)
+assert.match(app, /<h2>分工 <span class="task-count">· \{\{ detailChildren\.length \}\}<\/span><\/h2>/)
+assert.match(app, /<strong>分工 <span class="task-count">· \{\{ childTasks\(task\.id\)\.length \}\}<\/span><\/strong>/)
+assert.match(app, /class="task-title-link child-task-title" type="button" @click="openTaskDetail\(task\)"/)
+assert.match(app, /class="task-title-link child-task-title" type="button" @click="openTaskDetail\(child\)"/)
+assert.doesNotMatch(itemDetailSection, /<button[^>]*detail-task-card/)
+assert.doesNotMatch(expandedList, /class="detail-task-card"/)
+
+for (const row of [itemDetailSection, expandedList]) {
+  assert.match(row, /class="child-task-heading"[\s\S]*?class="child-task-owner"/)
+  assert.doesNotMatch(row, /owner\?\.name \+ " 负责"/)
+  assert.match(row, /v-if="[a-z]+\.deadline" class="child-task-metadata-item"/)
+  assert.match(row, /等待 \{\{ [a-z]+\.blocked_by\.length \|\| 1 \}\} 项前置/)
+  assert.match(row, /\{\{ [a-z]+\.collaborators\.length \}\} 人协作/)
+  assert.doesNotMatch(row, /collaborators\.map\(\(member\) => member\.name\)/)
+  assert.match(row, /v-if="![a-z]+\.owner && [a-z]+\.owner_claimable[\s\S]*?认领任务/)
+  assert.match(row, /<TaskActionMenu[\s\S]*?taskMenuActions\(/)
+  assert.doesNotMatch(row, /:blocked="[a-z]+\.blocked"/, "blocked is shown in row metadata, not duplicated in the status indicator")
+}
+
+assert.match(app, /function taskMenuActions\(task: Task\): TaskActionMenuItem\[\]/)
+assert.match(app, /if \(isManager\.value\) actions\.push\(\{ key: "edit", label: "编辑任务"/)
+assert.match(app, /function handleTaskMenuAction\(task: Task, action: string\)/)
+assert.match(app, /if \(action === "unclaim"\)[\s\S]*?else if \(action === "edit" && isManager\.value\)/)
+assert.doesNotMatch(app.match(/function handleTaskMenuAction\([\s\S]*?\n}/)?.[0] ?? "", /loadRoute\s*\(/)
+
+assert.match(menu, /aria-label="更多操作"/)
+assert.match(menu, /aria-haspopup="menu"/)
+assert.match(menu, /role="menu"/)
+assert.match(menu, /role="menuitem"/)
+assert.match(menu, /document\.addEventListener\("pointerdown", onPointerDown\)/)
+assert.match(menu, /!root\.value\?\.contains\(event\.target\)/)
+assert.match(menu, /event\.key === "Escape"/)
+assert.match(menu, /window\.innerWidth/)
+assert.match(menu, /window\.innerHeight/)
+assert.match(menu, /ArrowDown|ArrowUp/)
+assert.match(menu, /Home|End/)
+
+const groupedSurface = css.match(/\.child-task-list\s*\{([^}]+)\}/)?.[1] ?? ""
+const rowStyles = css.match(/\.child-task-row\s*\{([^}]+)\}/)?.[1] ?? ""
+assert.match(groupedSurface, /border:\s*1px solid var\(--line\)/)
+assert.match(groupedSurface, /background:\s*var\(--surface\)/)
+assert.doesNotMatch(rowStyles, /border:|border-radius/)
+assert.match(css, /\.child-task-row \+ \.child-task-row\s*\{\s*border-top:\s*1px solid var\(--line\)/)
+assert.match(css, /\.child-task-row:hover\s*\{\s*background:\s*var\(--hover\)/)
+assert.match(css, /\.child-task-owner\s*\{[^}]*text-overflow:\s*ellipsis[^}]*white-space:\s*nowrap/s)
+assert.match(css, /-webkit-line-clamp:\s*2/)
+assert.match(css, /\.child-task-title strong\s*\{[^}]*color:\s*var\(--text\)[^}]*font-size:\s*16px/s)
+assert.match(css, /\.child-task-deliverable\s*\{[^}]*color:\s*var\(--secondary\)/s)
+assert.match(css, /\.child-task-metadata\s*\{[^}]*color:\s*var\(--faint\)/s)
+assert.match(css, /\.task-action-menu-trigger\s*\{[^}]*width:\s*36px[^}]*height:\s*36px/s)
+assert.match(css, /\.task-action-menu-item\s*\{[^}]*min-height:\s*36px/s)
+assert.match(css, /@media \(max-width: 560px\)[\s\S]*?\.child-task-footer\s*\{[^}]*flex-direction:\s*column/s)
+assert.match(css, /@media \(prefers-color-scheme: dark\)/)
+assert.match(css, /\.child-task-row:hover\s*\{\s*background:\s*var\(--hover\)/)
+assert.doesNotMatch(app, /[🕒👥🔗]/)
+
+console.log("Compact grouped execution list, metadata, overflow menu, and responsive theme rules passed")

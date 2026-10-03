@@ -7,6 +7,7 @@ import { filterIgnoredPlannerSuggestions, ignorePlannerSuggestion, plannerSugges
 import { itemReviewChanges, removeItemReviewSuggestion } from "./itemReview.js"
 import { isExpandedRoot, removeRootAndChildren, toggleExpandedRoot } from "./rootItemList.js"
 import TaskStatusIndicator from "./TaskStatusIndicator.vue"
+import TaskActionMenu, { type TaskActionMenuItem } from "./TaskActionMenu.vue"
 import LocalPageLoading from "./pages/LocalPageLoading.vue"
 import {
   claimableTask,
@@ -1224,6 +1225,29 @@ async function joinTask(task: Task) {
 
 async function leaveTask(task: Task) {
   await runTaskAction(task, "leave", () => api.leaveTask(task.id))
+}
+
+function taskMenuActions(task: Task): TaskActionMenuItem[] {
+  const pending = Boolean(pendingTaskAction(task.id))
+  const actions: TaskActionMenuItem[] = []
+  if (task.owner?.id === user.value?.id && task.owner_claimable && task.status !== "done") {
+    actions.push({ key: "unclaim", label: pendingTaskAction(task.id) === "unclaim" ? "取消中…" : "取消认领", disabled: pending })
+  }
+  if (task.collaboration_open && task.owner?.id !== user.value?.id && !isCollaborator(task) && task.status !== "done") {
+    actions.push({ key: "join", label: pendingTaskAction(task.id) === "join" ? "加入中…" : "加入协作", disabled: pending })
+  }
+  if (task.collaboration_open && isCollaborator(task) && task.status !== "done") {
+    actions.push({ key: "leave", label: pendingTaskAction(task.id) === "leave" ? "退出中…" : "退出协作", disabled: pending })
+  }
+  if (isManager.value) actions.push({ key: "edit", label: "编辑任务", disabled: pending })
+  return actions
+}
+
+function handleTaskMenuAction(task: Task, action: string) {
+  if (action === "unclaim") void unclaimTask(task)
+  else if (action === "join") void joinTask(task)
+  else if (action === "leave") void leaveTask(task)
+  else if (action === "edit" && isManager.value) void editTask(task)
 }
 
 
@@ -2695,19 +2719,45 @@ onBeforeUnmount(() => {
           </section>
 
           <section class="execution-section">
-            <div class="section-heading">
-              <h2>执行任务</h2>
+            <div class="section-heading breakdown-heading">
+              <h2>分工 <span class="task-count">· {{ detailChildren.length }}</span></h2>
               <button v-if="isManager" type="button" @click="startNewTask(detailRoot)">＋ 添加分工</button>
             </div>
-            <div v-if="detailChildren.length" class="detail-task-list">
-              <button v-for="task in detailChildren" :key="task.id" class="detail-task-card" type="button" @click="openTaskDetail(task)">
-                <TaskStatusIndicator :status="task.status" :task-id="task.id" :blocked="task.blocked" />
-                <strong>{{ task.title }}</strong>
-                <span v-if="task.deliverable">{{ task.deliverable }}</span>
-                <small v-if="task.blocked" class="blocked-inline">等待：{{ task.blocked_by.map((dependency) => dependency.title).join("、") }}</small>
-                <small>{{ task.owner ? task.owner.name + " 负责" : "待认领" }}<template v-if="task.deadline"> · 截止 {{ formatDate(task.deadline) }}</template></small>
-                <span class="home-task-arrow" aria-hidden="true">›</span>
-              </button>
+            <div v-if="detailChildren.length" class="detail-task-list child-task-list">
+              <article v-for="task in detailChildren" :key="task.id" class="child-task-row detail-child-task-row">
+                <div class="child-task-heading">
+                  <TaskStatusIndicator :status="task.status" :task-id="task.id" :editable="isManager" :pending="Boolean(pendingTaskAction(task.id)?.startsWith('status:'))" @update-status="updateOwnTaskStatus(task, $event)" />
+                  <small class="child-task-owner">{{ task.owner?.name ?? "待认领" }}</small>
+                </div>
+                <button class="task-title-link child-task-title" type="button" @click="openTaskDetail(task)"><strong>{{ task.title }}</strong></button>
+                <p v-if="task.deliverable" class="child-task-deliverable">{{ task.deliverable }}</p>
+                <div v-if="task.deadline || task.blocked || task.collaborators.length || taskMenuActions(task).length || (!task.owner && task.owner_claimable && task.status !== 'done')" class="child-task-footer">
+                  <div v-if="task.deadline || task.blocked || task.collaborators.length" class="child-task-metadata">
+                    <span v-if="task.deadline" class="child-task-metadata-item">
+                      <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6" /><path d="M8 4.5V8l2.5 1.5" /></svg>
+                      {{ formatDate(task.deadline) }}
+                    </span>
+                    <span v-if="task.blocked" class="child-task-metadata-item">
+                      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6.3 9.7 4.9 11a2.4 2.4 0 0 1-3.4-3.4l2-2a2.4 2.4 0 0 1 3.4 0" /><path d="m9.7 6.3 1.4-1.4a2.4 2.4 0 0 1 3.4 3.4l-2 2a2.4 2.4 0 0 1-3.4 0" /><path d="m5.8 10.2 4.4-4.4" /></svg>
+                      等待 {{ task.blocked_by.length || 1 }} 项前置
+                    </span>
+                    <span v-if="task.collaborators.length" class="child-task-metadata-item">
+                      <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="6" cy="5" r="2.3" /><path d="M1.8 13v-.8A3.2 3.2 0 0 1 5 9h2a3.2 3.2 0 0 1 3.2 3.2v.8M10.4 3.1a2.2 2.2 0 0 1 0 4.2M12 9.2a2.8 2.8 0 0 1 2.2 2.7v.7" /></svg>
+                      {{ task.collaborators.length }} 人协作
+                    </span>
+                  </div>
+                  <div class="child-task-actions">
+                    <button
+                      v-if="!task.owner && task.owner_claimable && task.status !== 'done'"
+                      class="primary small-action"
+                      type="button"
+                      :disabled="Boolean(pendingTaskAction(task.id))"
+                      @click="claimTask(task)"
+                    >{{ pendingTaskAction(task.id) === 'claim' ? '认领中…' : '认领任务' }}</button>
+                    <TaskActionMenu :task-id="task.id" :actions="taskMenuActions(task)" :disabled="Boolean(pendingTaskAction(task.id))" @select="handleTaskMenuAction(task, $event)" />
+                  </div>
+                </div>
+              </article>
             </div>
             <div v-else class="empty compact-empty"><p>还没有执行分工。</p></div>
           </section>
@@ -3229,64 +3279,46 @@ onBeforeUnmount(() => {
 
               <div v-if="childTasks(task.id).length && isRootExpanded(task.id)" :id="`work-breakdown-${task.id}`" class="work-breakdown">
                 <div class="breakdown-heading">
-                  <strong>分工</strong>
+                  <strong>分工 <span class="task-count">· {{ childTasks(task.id).length }}</span></strong>
                   <button v-if="isManager" type="button" @click="startNewTask(task)">＋ 添加分工</button>
                 </div>
 
-                <article v-for="child in childTasks(task.id)" :key="child.id" class="child-task">
-                  <div class="child-task-main">
+                <div class="child-task-list">
+                  <article v-for="child in childTasks(task.id)" :key="child.id" class="child-task-row">
                     <div class="child-task-heading">
-                    <TaskStatusIndicator :status="child.status" :task-id="child.id" :editable="isManager" :pending="Boolean(pendingTaskAction(child.id)?.startsWith('status:'))" :blocked="child.blocked" @update-status="updateOwnTaskStatus(child, $event)" />
-                      <small class="child-task-owner">{{ child.owner ? child.owner.name + " 负责" : "待认领" }}</small>
+                      <TaskStatusIndicator :status="child.status" :task-id="child.id" :editable="isManager" :pending="Boolean(pendingTaskAction(child.id)?.startsWith('status:'))" @update-status="updateOwnTaskStatus(child, $event)" />
+                      <small class="child-task-owner">{{ child.owner?.name ?? "待认领" }}</small>
                     </div>
-                    <button class="task-title-link" type="button" @click="openTaskDetail(child)"><h4>{{ child.title }}</h4></button>
-                    <p v-if="child.deliverable">{{ child.deliverable }}</p>
-                    <small v-if="child.deadline || child.collaborators.length" class="child-task-meta">
-                      <template v-if="child.deadline">截止 {{ formatDate(child.deadline) }}</template>
-                      <template v-if="child.collaborators.length">
-                        <template v-if="child.deadline"> · </template>协作 {{ child.collaborators.map((member) => member.name).join("、") }}
-                      </template>
-                    </small>
-                  </div>
-
-                  <div class="task-actions">
-                    <button
-                      v-if="!child.owner && child.owner_claimable && child.status !== 'done'"
-                      class="primary small-action"
-                      type="button"
-                      :disabled="Boolean(pendingTaskAction(child.id))"
-                      @click="claimTask(child)"
-                    >
-                      {{ pendingTaskAction(child.id) === 'claim' ? '认领中…' : '认领任务' }}
-                    </button>
-                    <button
-                      v-if="child.owner?.id === user?.id && child.owner_claimable && child.status !== 'done'"
-                      type="button"
-                      :disabled="Boolean(pendingTaskAction(child.id))"
-                      @click="unclaimTask(child)"
-                    >
-                      {{ pendingTaskAction(child.id) === 'unclaim' ? '取消中…' : '取消认领' }}
-                    </button>
-                    <button
-                      v-if="child.collaboration_open && child.owner?.id !== user?.id && !isCollaborator(child) && child.status !== 'done'"
-                      type="button"
-                      :disabled="Boolean(pendingTaskAction(child.id))"
-                      @click="joinTask(child)"
-                    >
-                      {{ pendingTaskAction(child.id) === 'join' ? '加入中…' : '加入协作' }}
-                    </button>
-                    <button
-                      v-if="child.collaboration_open && isCollaborator(child) && child.status !== 'done'"
-                      type="button"
-                      :disabled="Boolean(pendingTaskAction(child.id))"
-                      @click="leaveTask(child)"
-                    >
-                      {{ pendingTaskAction(child.id) === 'leave' ? '退出中…' : '退出协作' }}
-                    </button>
-                    <button v-if="isManager" type="button" @click="editTask(child)">编辑</button>
-                  </div>
-
-                </article>
+                    <button class="task-title-link child-task-title" type="button" @click="openTaskDetail(child)"><strong>{{ child.title }}</strong></button>
+                    <p v-if="child.deliverable" class="child-task-deliverable">{{ child.deliverable }}</p>
+                    <div v-if="child.deadline || child.blocked || child.collaborators.length || taskMenuActions(child).length || (!child.owner && child.owner_claimable && child.status !== 'done')" class="child-task-footer">
+                      <div v-if="child.deadline || child.blocked || child.collaborators.length" class="child-task-metadata">
+                        <span v-if="child.deadline" class="child-task-metadata-item">
+                          <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6" /><path d="M8 4.5V8l2.5 1.5" /></svg>
+                          {{ formatDate(child.deadline) }}
+                        </span>
+                        <span v-if="child.blocked" class="child-task-metadata-item">
+                          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6.3 9.7 4.9 11a2.4 2.4 0 0 1-3.4-3.4l2-2a2.4 2.4 0 0 1 3.4 0" /><path d="m9.7 6.3 1.4-1.4a2.4 2.4 0 0 1 3.4 3.4l-2 2a2.4 2.4 0 0 1-3.4 0" /><path d="m5.8 10.2 4.4-4.4" /></svg>
+                          等待 {{ child.blocked_by.length || 1 }} 项前置
+                        </span>
+                        <span v-if="child.collaborators.length" class="child-task-metadata-item">
+                          <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="6" cy="5" r="2.3" /><path d="M1.8 13v-.8A3.2 3.2 0 0 1 5 9h2a3.2 3.2 0 0 1 3.2 3.2v.8M10.4 3.1a2.2 2.2 0 0 1 0 4.2M12 9.2a2.8 2.8 0 0 1 2.2 2.7v.7" /></svg>
+                          {{ child.collaborators.length }} 人协作
+                        </span>
+                      </div>
+                      <div class="child-task-actions">
+                        <button
+                          v-if="!child.owner && child.owner_claimable && child.status !== 'done'"
+                          class="primary small-action"
+                          type="button"
+                          :disabled="Boolean(pendingTaskAction(child.id))"
+                          @click="claimTask(child)"
+                        >{{ pendingTaskAction(child.id) === 'claim' ? '认领中…' : '认领任务' }}</button>
+                        <TaskActionMenu :task-id="child.id" :actions="taskMenuActions(child)" :disabled="Boolean(pendingTaskAction(child.id))" @select="handleTaskMenuAction(child, $event)" />
+                      </div>
+                    </div>
+                  </article>
+                </div>
               </div>
             </article>
 

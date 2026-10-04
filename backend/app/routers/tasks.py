@@ -221,7 +221,7 @@ def _require_item_writer(db: Session, root: Task, current: Member) -> None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="只有事项参与者可以更新事项信息")
 
 
-def _require_fact_manager(root: Task, current: Member) -> None:
+def _require_fact_scope_editor(root: Task, current: Member) -> None:
     if not _is_admin(current) and root.owner_id != current.id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="只有管理员或事项负责人可以调整当前信息范围")
 
@@ -271,7 +271,7 @@ def _create_item_fact(
 
     previous = None
     if supersedes_fact_id is not None:
-        _require_fact_manager(root, current)
+        _require_fact_scope_editor(root, current)
         previous = db.get(ItemFact, supersedes_fact_id)
         if previous is None or previous.root_task_id != root.id or not previous.is_active:
             raise HTTPException(status_code=409, detail="待更新的当前信息已变化，请刷新后重试")
@@ -813,7 +813,7 @@ def delete_context_fact(
 ) -> TaskOut:
     root = _get_root_task(db, root_task_id)
     _require_item_writer(db, root, current)
-    _require_fact_manager(root, current)
+    _require_fact_scope_editor(root, current)
     facts = list(db.scalars(select(ItemFact).where(
         ItemFact.root_task_id == root.id, ItemFact.is_active.is_(True)
     ).order_by(ItemFact.created_at.asc(), ItemFact.id.asc())).all())
@@ -860,7 +860,7 @@ def update_item_fact_scope(
 ) -> TaskOut:
     root = _get_root_task(db, root_task_id)
     _require_item_writer(db, root, current)
-    _require_fact_manager(root, current)
+    _require_fact_scope_editor(root, current)
     fact = db.get(ItemFact, fact_id)
     if fact is None or fact.root_task_id != root.id or not fact.is_active:
         raise HTTPException(status_code=404, detail="当前信息不存在")
@@ -879,7 +879,7 @@ def deactivate_item_fact(
 ) -> TaskOut:
     root = _get_root_task(db, root_task_id)
     _require_item_writer(db, root, current)
-    _require_fact_manager(root, current)
+    _require_fact_scope_editor(root, current)
     fact = db.get(ItemFact, fact_id)
     if fact is None or fact.root_task_id != root.id or not fact.is_active:
         raise HTTPException(status_code=404, detail="当前信息不存在")

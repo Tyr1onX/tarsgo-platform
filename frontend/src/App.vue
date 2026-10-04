@@ -2386,7 +2386,7 @@ onBeforeUnmount(() => {
         </form>
       </template>
 
-      <div v-else-if="loading" class="tars-loading tars-loading-auth" role="status" aria-live="polite">
+      <div v-else-if="registrationChecking" class="tars-loading tars-loading-auth" role="status" aria-live="polite">
         <div class="tars-loading-mark" aria-hidden="true">
           <span class="tars-loading-block block-a"></span>
           <span class="tars-loading-block block-b"></span>
@@ -2406,7 +2406,7 @@ onBeforeUnmount(() => {
         <button class="secondary" type="button" @click="loadRoute()">重新加载</button>
       </div>
 
-      <div v-else class="empty auth-empty-state">
+      <div v-else-if="registrationEnded" class="empty auth-empty-state">
         <span class="empty-code">BASE / REGISTER</span>
         <h1>本次团队注册已结束</h1>
         <button class="secondary" type="button" @click="navigate('/login')">返回登录</button>

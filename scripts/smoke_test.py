@@ -89,12 +89,12 @@ def login(email, password, *, expected=200):
     return client
 
 
-def invite(admin, name, email, role="member"):
+def invite(admin, name, email):
     return call(
         admin,
         "/api/members/invite",
         method="POST",
-        data={"name": name, "email": email, "role": role},
+        data={"name": name, "email": email},
         expected=201,
     )
 

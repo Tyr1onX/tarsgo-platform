@@ -17,7 +17,12 @@ assert.match(page, /withdrawSchoolLeaveRequest/)
 assert.match(page, /相同请假时间会自动汇总到同一份请假材料中，请按自己的实际缺课时间填写。/)
 assert.match(page, /请先完善学号，生成学校请假材料时需要使用。/)
 assert.match(page, /暂无请假申请/)
-assert.match(page, /requestStatusLabel/)
+assert.match(page, /function requestStatusLabel\(item: SchoolLeaveRequest\)/)
+assert.match(page, /item\.status === "pending"[^]*?"待汇总"/)
+assert.match(page, /item\.status === "withdrawn"[^]*?"已撤回"/)
+assert.match(page, /item\.run_status === "sent"[^]*?"已发送"/)
+assert.match(page, /return "已汇总"/)
+assert.match(page, /requestStatusLabel\(item\)/)
 
 // Member does not see admin management; admin gets a compact two-view switch defaulting to mine.
 assert.match(page, /activeView = ref<"mine" \| "admin">\("mine"\)/)
@@ -151,6 +156,7 @@ assert.match(api, /markSchoolLeaveRunSent/)
 assert.match(api, /deleteSchoolLeaveRun/)
 assert.match(api, /method: "DELETE"/)
 assert.doesNotMatch(types, /send_message/)
+assert.match(types, /run_status: SchoolLeaveRunStatus \| null/)
 assert.doesNotMatch(types, /interface MemberSummary \{[^}]*student_id/s)
 
 // School/team profile fields remain editable only through personal/admin member flows.

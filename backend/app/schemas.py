@@ -200,6 +200,7 @@ class SchoolLeaveRequestOut(BaseModel):
     student_id_snapshot: str
     status: SchoolLeaveRequestStatus
     run_id: int | None
+    run_status: SchoolLeaveRunStatus | None = None
     created_at: datetime
     updated_at: datetime
 

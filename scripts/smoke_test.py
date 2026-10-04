@@ -9,7 +9,6 @@ from urllib.request import HTTPCookieProcessor, Request, build_opener
 
 BASE_URL = sys.argv[2].rstrip("/") if len(sys.argv) > 2 else "http://127.0.0.1"
 ADMIN_EMAIL = "admin@example.com"
-MANAGER_EMAIL = "manager@example.com"
 OWNER_EMAIL = "lisi@example.com"
 SECOND_MEMBER_EMAIL = "zhaoliu@example.com"
 ROOT_TITLE = "春屿展示"
@@ -150,10 +149,6 @@ def run_workflow():
     assert any(reference["id"] == uploaded_knowledge["id"] for reference in knowledge_results)
     upload_markdown(admin, content=b"x" * (10 * 1024 * 1024 + 64 * 1024), filename="too-large.txt", expected=413)
     call(admin, f"/api/knowledge/{uploaded_knowledge['id']}", method="DELETE", expected=204)
-
-    manager_invite = invite(admin, "王五", MANAGER_EMAIL, "manager")
-    manager_id = manager_invite["member"]["id"]
-    manager_password = activate(manager_invite)
 
     owner_invite = invite(admin, "李四", OWNER_EMAIL)
     owner_id = owner_invite["member"]["id"]

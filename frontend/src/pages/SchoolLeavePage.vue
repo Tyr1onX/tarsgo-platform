@@ -669,7 +669,6 @@ onMounted(() => {
 .leave-pending-group { padding: 10px 12px; }
 .leave-current-empty { margin-bottom: 28px; }
 
-.leave-history-list { overflow: hidden; }
 .leave-history-run + .leave-history-run { border-top: 1px solid var(--line); }
 .leave-history-run > summary { min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 11px 12px; cursor: pointer; list-style: none; }
 .leave-history-run > summary::-webkit-details-marker { display: none; }

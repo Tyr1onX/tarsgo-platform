@@ -162,7 +162,6 @@ export interface SchoolLeaveRun {
   request_count: number
   member_count: number
   groups: SchoolLeaveGroup[]
-  send_message: string
   document_ready: boolean
 }
 

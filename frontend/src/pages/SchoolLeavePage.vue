@@ -298,14 +298,25 @@ async function markSent(run: SchoolLeaveRun) {
   }
 }
 
-async function copyMessage(run: SchoolLeaveRun) {
+async function deleteRun(run: SchoolLeaveRun, event?: Event) {
+  closeOverflow(event)
+  const confirmed = window.confirm(
+    "删除这条发送记录？\n\n" +
+    "将同时删除该批次下的 " + run.request_count + " 条请假申请和历史记录。\n" +
+    "此操作不可恢复。",
+  )
+  if (!confirmed) return
+  actionRunId.value = run.id
   error.value = ""
   notice.value = ""
   try {
-    await navigator.clipboard.writeText(run.send_message)
-    notice.value = "发送文案已复制。"
-  } catch {
-    error.value = "复制失败，请手动选择发送文案。"
+    await api.deleteSchoolLeaveRun(run.id)
+    notice.value = "发送记录已删除。"
+    await load()
+  } catch (reason) {
+    error.value = messageOf(reason)
+  } finally {
+    actionRunId.value = null
   }
 }
 
@@ -332,12 +343,8 @@ function closeOverflow(event?: Event) {
   details?.removeAttribute("open")
 }
 
-function documentUrl(runId: number, groupIndex: number) {
-  return "/api/school-leave/admin/runs/" + runId + "/documents/" + groupIndex
-}
-
-function zipUrl(runId: number) {
-  return "/api/school-leave/admin/runs/" + runId + "/documents.zip"
+function runDocumentUrl(runId: number) {
+  return "/api/school-leave/admin/runs/" + runId + "/document"
 }
 
 function dayKey(value: string) {
@@ -439,7 +446,7 @@ onMounted(() => {
         <header class="leave-run-heading">
           <div>
             <strong>{{ formatCollectedAt(run.collected_at) }}</strong>
-            <span>{{ run.member_count }} 人 · {{ run.groups.length }} 份材料</span>
+            <span>{{ run.member_count }} 人 · {{ run.groups.length }} 个时间组</span>
           </div>
           <span v-if="isSupplementRun(run)" class="leave-run-note">补充批次</span>
         </header>
@@ -467,12 +474,9 @@ onMounted(() => {
           <div v-for="group in run.groups" :key="group.index" class="leave-group">
             <div class="leave-group-heading">
               <div><strong>{{ group.time_text }}</strong><span>{{ group.count }} 人</span></div>
-              <div class="row-actions leave-group-actions">
-                <button type="button" @click="togglePreview(run.id, group.index)">
-                  {{ previewKey === run.id + ':' + group.index ? "收起名单" : "名单" }}
-                </button>
-                <button type="button" :disabled="!run.document_ready" @click="download(documentUrl(run.id, group.index))">下载</button>
-              </div>
+              <button type="button" @click="togglePreview(run.id, group.index)">
+                {{ previewKey === run.id + ':' + group.index ? "收起名单" : "名单" }}
+              </button>
             </div>
             <div v-if="previewKey === run.id + ':' + group.index" class="leave-preview">
               <div v-for="member in group.members" :key="member.member_id" class="leave-preview-row">
@@ -482,19 +486,15 @@ onMounted(() => {
           </div>
         </div>
 
-        <div class="leave-message-block">
-          <div class="leave-message-heading">
-            <span class="leave-field-label">发送文案</span>
-            <button type="button" @click="copyMessage(run)">复制</button>
-          </div>
-          <p>{{ run.send_message }}</p>
-        </div>
-
         <footer class="leave-run-actions">
-          <div class="leave-secondary-actions">
-            <button type="button" :disabled="!run.document_ready" @click="download(zipUrl(run.id))">下载全部</button>
-            <button type="button" @click="copyMessage(run)">复制发送文案</button>
-          </div>
+          <button
+            class="secondary leave-run-download"
+            type="button"
+            :disabled="!run.document_ready"
+            @click="download(runDocumentUrl(run.id))"
+          >
+            下载请假材料
+          </button>
           <button class="primary leave-mark-sent" type="button" :disabled="actionRunId === run.id" @click="markSent(run)">标记已发送</button>
         </footer>
       </article>
@@ -545,7 +545,7 @@ onMounted(() => {
         <details v-for="run in visibleSentRuns" :key="run.id" class="leave-history-run">
           <summary>
             <div>
-              <strong>{{ formatDateTime(run.sent_at || run.collected_at) }} · {{ run.member_count }} 人 · {{ run.groups.length }} 份材料</strong>
+              <strong>{{ formatDateTime(run.sent_at || run.collected_at) }} · {{ run.member_count }} 人 · {{ run.groups.length }} 个时间组</strong>
               <span>{{ run.sent_by?.name || "管理员" }}已标记发送<span v-if="isSupplementRun(run)"> · 补充批次</span></span>
             </div>
             <span class="leave-history-chevron" aria-hidden="true">›</span>
@@ -553,7 +553,29 @@ onMounted(() => {
           <div class="leave-history-detail">
             <div v-for="group in run.groups" :key="group.index" class="leave-history-group">
               <div><strong>{{ group.time_text }}</strong><span>{{ group.count }} 人</span></div>
-              <button type="button" :disabled="!run.document_ready" @click="download(documentUrl(run.id, group.index))">下载</button>
+            </div>
+            <div class="leave-history-actions">
+              <button
+                class="secondary leave-history-download"
+                type="button"
+                :disabled="!run.document_ready"
+                @click="download(runDocumentUrl(run.id))"
+              >
+                下载请假材料
+              </button>
+              <details class="leave-more">
+                <summary aria-label="更多历史操作">···</summary>
+                <div class="leave-more-menu">
+                  <button
+                    class="leave-danger-action"
+                    type="button"
+                    :disabled="actionRunId === run.id"
+                    @click="deleteRun(run, $event)"
+                  >
+                    删除记录
+                  </button>
+                </div>
+              </details>
             </div>
           </div>
         </details>
@@ -586,10 +608,10 @@ onMounted(() => {
 .leave-success { border-left-color: var(--success); color: var(--success); }
 .leave-inline-notice, .leave-current-empty { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin: 0 0 24px; padding: 9px 0; border-bottom: 1px solid var(--line); color: var(--secondary); font-size: 13px; }
 
-.leave-inline-notice button, .leave-current-empty button, .leave-history-section .section-heading > button, .leave-group-heading > button, .leave-message-heading button, .leave-secondary-actions button, .leave-history-group button, .leave-inline-actions > button:first-child {
+.leave-inline-notice button, .leave-current-empty button, .leave-history-section .section-heading > button, .leave-group-heading > button, .leave-inline-actions > button:first-child {
   border: 0; background: transparent; padding: 4px 0; color: var(--muted);
 }
-.leave-inline-notice button:hover, .leave-current-empty button:hover, .leave-history-section .section-heading > button:hover, .leave-group-heading > button:hover, .leave-message-heading button:hover, .leave-secondary-actions button:hover, .leave-history-group button:hover, .leave-inline-actions > button:first-child:hover { color: var(--text); }
+.leave-inline-notice button:hover, .leave-current-empty button:hover, .leave-history-section .section-heading > button:hover, .leave-group-heading > button:hover, .leave-inline-actions > button:first-child:hover { color: var(--text); }
 
 .leave-list, .leave-history-list { border: 1px solid var(--line); background: var(--surface); }
 .leave-row { min-width: 0; min-height: 54px; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 10px 12px; }
@@ -613,7 +635,7 @@ onMounted(() => {
 .leave-run-row { padding: 12px 14px; border-bottom: 1px solid var(--line); }
 .leave-reason-summary > div:first-child { min-width: 0; }
 .leave-field-label { display: block; margin-bottom: 4px; color: var(--faint); font-size: 11.5px; }
-.leave-reason-summary p, .leave-message-block p { margin: 0; color: var(--secondary); font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; white-space: pre-wrap; }
+.leave-reason-summary p { margin: 0; color: var(--secondary); font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; white-space: pre-wrap; }
 
 .leave-more { position: relative; flex: 0 0 auto; }
 .leave-more summary { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 4px; color: var(--muted); cursor: pointer; list-style: none; user-select: none; }
@@ -636,11 +658,8 @@ onMounted(() => {
 .leave-preview-row span { min-width: 0; overflow-wrap: anywhere; }
 .leave-preview-row + .leave-preview-row { border-top: 1px solid var(--line); }
 
-.leave-message-block { padding: 12px 14px; border-bottom: 1px solid var(--line); }
-.leave-message-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 4px; }
-.leave-message-heading .leave-field-label { margin: 0; }
 .leave-run-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; }
-.leave-secondary-actions { min-width: 0; display: flex; flex-wrap: wrap; gap: 14px; }
+.leave-run-download, .leave-history-download { width: fit-content; white-space: nowrap; }
 
 .leave-pending-heading { align-items: flex-end; }
 .leave-pending-heading > div { display: grid; gap: 3px; }
@@ -658,9 +677,10 @@ onMounted(() => {
 .leave-history-run > summary strong { overflow-wrap: anywhere; }
 .leave-history-chevron { flex: 0 0 auto; color: var(--faint); font-size: 18px; transition: transform 120ms ease; }
 .leave-history-run[open] .leave-history-chevron { transform: rotate(90deg); }
-.leave-history-detail { border-top: 1px solid var(--line); padding: 0 12px; }
+.leave-history-detail { border-top: 1px solid var(--line); padding: 0 12px 10px; }
 .leave-history-group { padding: 9px 0; }
 .leave-history-group + .leave-history-group { border-top: 1px solid var(--line); }
+.leave-history-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
 
 @media (max-width: 768px) {
   .leave-form-controls { grid-template-columns: minmax(138px, 1fr) minmax(230px, 1.5fr) auto; gap: 9px; }
@@ -671,8 +691,8 @@ onMounted(() => {
   .leave-time-pair { grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); }
   .leave-submit { justify-self: start; }
   .leave-inline-notice, .leave-current-empty, .leave-pending-heading, .leave-run-actions { align-items: flex-start; flex-direction: column; }
+  .leave-history-actions { align-items: flex-start; }
   .leave-row, .leave-run-heading, .leave-group-heading, .leave-history-group { align-items: flex-start; }
-  .leave-secondary-actions { width: 100%; }
   .leave-preview-row { gap: 10px; }
   .leave-preview-row span:last-child { text-align: right; }
   .leave-more-menu { width: min(190px, calc(100vw - 32px)); }

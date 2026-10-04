@@ -5,7 +5,7 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from ..auth import get_current_member, require_admin
@@ -24,8 +24,7 @@ from ..schemas import (
 )
 from ..school_leave import (
     build_school_leave_docx,
-    build_school_leave_send_message,
-    build_school_leave_zip,
+    build_school_leave_run_docx,
     collect_pending_school_leave,
     format_school_leave_time,
     get_leave_contact_phone,
@@ -33,6 +32,7 @@ from ..school_leave import (
     group_school_leave_requests,
     requests_for_run,
     school_leave_document_filename,
+    school_leave_run_document_filename,
     school_leave_now,
 )
 
@@ -78,7 +78,6 @@ def _run_out(db: Session, run: SchoolLeaveRun) -> SchoolLeaveRunOut:
         request_count=len(requests),
         member_count=len({request.member_id for request in requests}),
         groups=group_outputs,
-        send_message=build_school_leave_send_message(requests, groups),
         document_ready=bool(get_leave_contact_phone()),
     )
 
@@ -310,6 +309,40 @@ def mark_run_sent(
     return _run_out(db, run)
 
 
+@router.delete("/admin/runs/{run_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_run_history(
+    run_id: int,
+    _: Member = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> None:
+    try:
+        run = _get_admin_run(db, run_id, lock=True)
+        if run.status == "ready":
+            db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="待发送批次不能直接删除，请先取消本次汇总",
+            )
+        linked_requests = list(
+            db.scalars(
+                select(SchoolLeaveRequest)
+                .where(SchoolLeaveRequest.run_id == run.id)
+                .order_by(SchoolLeaveRequest.id)
+                .with_for_update()
+            )
+        )
+        if linked_requests:
+            request_ids = [request.id for request in linked_requests]
+            db.execute(delete(SchoolLeaveRequest).where(SchoolLeaveRequest.id.in_(request_ids)))
+        db.delete(run)
+        db.commit()
+    except HTTPException:
+        raise
+    except Exception:
+        db.rollback()
+        raise
+
+
 def _document_context(
     db: Session,
     run_id: int,
@@ -349,21 +382,21 @@ def download_document(
     )
 
 
-@router.get("/admin/runs/{run_id}/documents.zip")
-def download_documents_zip(
+@router.get("/admin/runs/{run_id}/document")
+def download_run_document(
     run_id: int,
     _: Member = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> StreamingResponse:
     run, groups = _document_context(db, run_id)
-    content = build_school_leave_zip(
+    content = build_school_leave_run_docx(
         run,
         groups,
         contact_phone=get_leave_contact_phone(),
     )
-    filename = f"学校请假材料_批次{run.id}.zip"
+    filename = school_leave_run_document_filename(run)
     return StreamingResponse(
         io.BytesIO(content),
-        media_type="application/zip",
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
     )

@@ -3,7 +3,6 @@ from __future__ import annotations
 import io
 import os
 import re
-import zipfile
 from dataclasses import dataclass
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -156,21 +155,20 @@ def _set_cell_text(cell, text: str, *, bold: bool = False) -> None:
     _set_run_font(run, "宋体", 12, bold=bold)
 
 
-def build_school_leave_docx(
-    run: SchoolLeaveRun,
-    group: SchoolLeaveGroup,
-    *,
-    contact_phone: str,
-) -> bytes:
-    if not contact_phone.strip():
-        raise ValueError("LEAVE_CONTACT_PHONE 未配置，无法生成学校请假材料")
-
-    document = Document()
+def _configure_school_leave_document(document: Document) -> None:
     normal_style = document.styles["Normal"]
     normal_style.font.name = "宋体"
     normal_style.font.size = Pt(14)
     normal_style._element.rPr.rFonts.set(qn("w:eastAsia"), "宋体")
 
+
+def _append_school_leave_group(
+    document: Document,
+    run: SchoolLeaveRun,
+    group: SchoolLeaveGroup,
+    *,
+    contact_phone: str,
+) -> None:
     title = document.add_paragraph()
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
     title_run = title.add_run("请假条")
@@ -210,6 +208,45 @@ def build_school_leave_docx(
         _set_cell_text(cells[0], request.member_name_snapshot)
         _set_cell_text(cells[1], request.student_id_snapshot)
 
+
+def build_school_leave_docx(
+    run: SchoolLeaveRun,
+    group: SchoolLeaveGroup,
+    *,
+    contact_phone: str,
+) -> bytes:
+    """Build one exact-time group DOCX for backward-compatible downloads."""
+    if not contact_phone.strip():
+        raise ValueError("LEAVE_CONTACT_PHONE 未配置，无法生成学校请假材料")
+
+    document = Document()
+    _configure_school_leave_document(document)
+    _append_school_leave_group(document, run, group, contact_phone=contact_phone)
+
+    output = io.BytesIO()
+    document.save(output)
+    return output.getvalue()
+
+
+def build_school_leave_run_docx(
+    run: SchoolLeaveRun,
+    groups: list[SchoolLeaveGroup],
+    *,
+    contact_phone: str,
+) -> bytes:
+    """Build one DOCX for a run, with each exact-time group on its own page."""
+    if not contact_phone.strip():
+        raise ValueError("LEAVE_CONTACT_PHONE 未配置，无法生成学校请假材料")
+    if not groups:
+        raise ValueError("该汇总批次没有可生成的请假材料")
+
+    document = Document()
+    _configure_school_leave_document(document)
+    for index, group in enumerate(groups):
+        _append_school_leave_group(document, run, group, contact_phone=contact_phone)
+        if index < len(groups) - 1:
+            document.add_page_break()
+
     output = io.BytesIO()
     document.save(output)
     return output.getvalue()
@@ -221,51 +258,6 @@ def school_leave_document_filename(group: SchoolLeaveGroup) -> str:
     return f"请假条_{start}-{end}.docx"
 
 
-def build_school_leave_zip(
-    run: SchoolLeaveRun,
-    groups: list[SchoolLeaveGroup],
-    *,
-    contact_phone: str,
-) -> bytes:
-    if not groups:
-        raise ValueError("该汇总批次没有可生成的请假材料")
-    output = io.BytesIO()
-    with zipfile.ZipFile(output, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
-        for group in groups:
-            archive.writestr(
-                school_leave_document_filename(group),
-                build_school_leave_docx(run, group, contact_phone=contact_phone),
-            )
-    return output.getvalue()
-
-
-def build_school_leave_send_message(
-    requests: list[SchoolLeaveRequest],
-    groups: list[SchoolLeaveGroup],
-) -> str:
-    if not requests:
-        return "老师您好，本次汇总没有学生请假材料。"
-
-    dates = [request.start_at.date() for request in requests] + [
-        request.end_at.date() for request in requests
-    ]
-    first_date = min(dates)
-    last_date = max(dates)
-    if first_date == last_date:
-        date_text = f"{first_date.month} 月 {first_date.day} 日"
-    elif first_date.year == last_date.year:
-        date_text = (
-            f"{first_date.month} 月 {first_date.day} 日至 "
-            f"{last_date.month} 月 {last_date.day} 日"
-        )
-    else:
-        date_text = (
-            f"{first_date.year} 年 {first_date.month} 月 {first_date.day} 日至 "
-            f"{last_date.year} 年 {last_date.month} 月 {last_date.day} 日"
-        )
-
-    member_count = len({request.member_id for request in requests})
-    return (
-        f"老师您好，这是 {date_text}吉甲大师相关活动的学生请假材料，"
-        f"共 {member_count} 人，附件 {len(groups)} 份，麻烦您查收。"
-    )
+def school_leave_run_document_filename(run: SchoolLeaveRun) -> str:
+    date_text = run.collected_at.strftime("%Y-%m-%d")
+    return f"学校请假材料_{date_text}_批次{run.id}.docx"

@@ -195,7 +195,6 @@ class SchoolLeaveRunOut(BaseModel):
     request_count: int
     member_count: int
     groups: list[SchoolLeaveGroupOut]
-    send_message: str
     document_ready: bool
 
 

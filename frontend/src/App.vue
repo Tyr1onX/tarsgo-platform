@@ -236,6 +236,10 @@ const teamMemberDetail = computed(() =>
     : members.value.find((member) => member.id === teamMemberDetailId.value) ?? null,
 )
 const isTeamRoute = computed(() => path.value === "/team" || teamMemberDetailId.value !== null)
+const isMeRoute = computed(() => path.value === "/me" || path.value === "/me/edit")
+const myStudentIdChanged = computed(() =>
+  studentIdDraft.value.trim() !== (user.value?.student_id ?? ""),
+)
 const detailTask = computed(() =>
   taskDetailId.value === null ? null : tasks.value.find((task) => task.id === taskDetailId.value) ?? null,
 )
@@ -1026,8 +1030,10 @@ async function loadRoute() {
       if (!isCurrentLoad()) return
     } else if (routePath === "/leave") {
       // The leave page loads its own independent workflow data.
-    } else if (routePath === "/me") {
+    } else if (routePath === "/me/edit") {
       studentIdDraft.value = user.value?.student_id ?? ""
+    } else if (routePath === "/me") {
+      // Profile overview is intentionally read-only.
     } else {
       routeNotFound.value = true
     }
@@ -1159,7 +1165,7 @@ async function updateMemberStudentId(payload: { memberId: number; studentId: str
 }
 
 async function saveMyStudentId() {
-  if (!user.value || studentIdSaving.value) return
+  if (!user.value || studentIdSaving.value || !myStudentIdChanged.value) return
   error.value = ""
   notice.value = ""
   studentIdSaving.value = true
@@ -1167,6 +1173,7 @@ async function saveMyStudentId() {
     user.value = await api.updateMeStudentId(studentIdDraft.value.trim() || null)
     studentIdDraft.value = user.value.student_id ?? ""
     notice.value = "学号已保存"
+    navigate("/me")
   } catch (reason) {
     error.value = messageOf(reason)
   } finally {
@@ -2220,7 +2227,7 @@ onBeforeUnmount(() => {
         >
           团队
         </button>
-        <button :class="{ active: path === '/me' }" type="button" @click="navigate('/me')">
+        <button :class="{ active: isMeRoute }" type="button" @click="navigate('/me')">
           我的
         </button>
       </nav>
@@ -3447,21 +3454,50 @@ onBeforeUnmount(() => {
 
       <template v-else-if="path === '/me'">
         <div class="page-title"><h1>我的</h1></div>
+
         <section class="profile">
           <strong>{{ user?.name }}</strong>
           <span>{{ user?.email }}</span>
           <small>{{ user ? roleLabels[user.role] : "" }}</small>
-          <form class="profile-student-id" @submit.prevent="saveMyStudentId">
+        </section>
+
+        <section class="profile-section">
+          <h2>个人资料</h2>
+          <div class="profile-field-row">
+            <span class="profile-field-label">学号</span>
+            <span class="profile-field-value">{{ user?.student_id || "学号未填写" }}</span>
+            <button class="profile-edit-action" type="button" @click="navigate('/me/edit')">编辑 ></button>
+          </div>
+        </section>
+
+        <section class="profile-section profile-account-section">
+          <h2>账号</h2>
+          <button class="secondary profile-logout" type="button" @click="logout">退出登录</button>
+        </section>
+      </template>
+
+      <template v-else-if="path === '/me/edit'">
+        <button class="profile-back" type="button" @click="navigate('/me')">← 返回我的</button>
+        <header class="profile-edit-heading">
+          <h1>编辑资料</h1>
+        </header>
+
+        <section class="profile-section">
+          <h2>学校信息</h2>
+          <form class="profile-student-edit-form" @submit.prevent="saveMyStudentId">
             <label>
-              学号
-              <input v-model="studentIdDraft" maxlength="50" autocomplete="off" placeholder="填写学号" />
+              <span>学号</span>
+              <input v-model="studentIdDraft" maxlength="50" autocomplete="off" placeholder="未填写学号" />
             </label>
-            <button type="submit" :disabled="studentIdSaving">
-              {{ studentIdSaving ? "保存中…" : "保存" }}
+            <button
+              class="primary profile-save"
+              type="submit"
+              :disabled="studentIdSaving || !myStudentIdChanged"
+            >
+              {{ studentIdSaving ? "保存中…" : "保存修改" }}
             </button>
           </form>
         </section>
-        <button class="secondary full" type="button" @click="logout">退出登录</button>
       </template>
 
       <template v-else-if="path === '/leave'">
@@ -3531,7 +3567,7 @@ onBeforeUnmount(() => {
       >
         团队
       </button>
-      <button :class="{ active: path === '/me' }" type="button" @click="navigate('/me')">我的</button>
+      <button :class="{ active: isMeRoute }" type="button" @click="navigate('/me')">我的</button>
     </nav>
   </main>
 </template>

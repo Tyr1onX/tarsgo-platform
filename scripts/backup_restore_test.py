@@ -1,5 +1,4 @@
 """Cold restore drill on a fresh CI Compose project, never the source volume."""
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -82,11 +81,29 @@ with urllib.request.urlopen(request) as response:
             (ROOT / "backup-restore-report.json").write_text(json.dumps(report, indent=2) + "\n")
             print("Cold MySQL restore drill passed: all rows and knowledge files match; restored login works")
         finally:
-            target.run("down", "--volumes", stdout=subprocess.DEVNULL)
-            if original_storage is None:
-                os.environ.pop("KNOWLEDGE_STORAGE_HOST_DIR", None)
-            else:
-                os.environ["KNOWLEDGE_STORAGE_HOST_DIR"] = original_storage
+            try:
+                target.run("stop", "api", stdout=subprocess.DEVNULL)
+                if (directory / "restored-knowledge").exists():
+                    # Originals are intentionally root-owned 0600/0700 in the
+                    # API container. Remove only this drill's mounted target
+                    # from that container before host temp cleanup.
+                    target.files('''
+from pathlib import Path
+import shutil
+root = Path("/opt/tarsgo-knowledge")
+for path in root.iterdir():
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    else:
+        path.unlink()
+root.chmod(0o755)
+''', stdout=subprocess.DEVNULL)
+            finally:
+                target.run("down", "--volumes", stdout=subprocess.DEVNULL)
+                if original_storage is None:
+                    os.environ.pop("KNOWLEDGE_STORAGE_HOST_DIR", None)
+                else:
+                    os.environ["KNOWLEDGE_STORAGE_HOST_DIR"] = original_storage
 
 
 if __name__ == "__main__":

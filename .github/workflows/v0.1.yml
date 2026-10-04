@@ -19,6 +19,9 @@ jobs:
           MYSQL_PASSWORD="$(openssl rand -hex 18)"
           MYSQL_ROOT_PASSWORD="$(openssl rand -hex 18)"
           ADMIN_PASSWORD="$(openssl rand -hex 18)"
+          echo "::add-mask::$MYSQL_PASSWORD"
+          echo "::add-mask::$MYSQL_ROOT_PASSWORD"
+          echo "::add-mask::$ADMIN_PASSWORD"
           cat > .env <<EOF
           APP_DOMAIN=:80
           SESSION_COOKIE_SECURE=false

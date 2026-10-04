@@ -11,7 +11,7 @@ const app = readFileSync(new URL("../src/App.vue", import.meta.url), "utf8")
 const css = readFileSync(new URL("../src/style.css", import.meta.url), "utf8")
 
 const member = { id: 7 }
-const manager = { id: 8 }
+const owner = { id: 8 }
 const root = {
   id: 1, parent_id: null, owner: owner, owner_claimable: false,
   status: "doing", collaborators: [], deadline: null,

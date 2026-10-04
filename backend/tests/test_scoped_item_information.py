@@ -48,7 +48,7 @@ def expect_http(expected, callback):
     raise AssertionError(f"expected HTTP {expected}")
 
 
-def create_task(db, manager, *, title, parent_id=None, owner_id=None, claimable=False,
+def create_task(db, admin, *, title, parent_id=None, owner_id=None, claimable=False,
                 collaborators=None, dependencies=None):
     result = tasks_router.create_task(
         TaskCreate(
@@ -62,7 +62,7 @@ def create_task(db, manager, *, title, parent_id=None, owner_id=None, claimable=
             deadline=datetime.now() + timedelta(days=2),
             depends_on_task_ids=dependencies or [],
         ),
-        current=manager,
+        current=admin,
         db=db,
     )
     return result.id
@@ -75,8 +75,8 @@ def main():
     member_ids: set[int] = set()
     try:
         with SessionLocal() as db:
-            manager = db.scalar(select(Member).where(Member.email == "manager@example.com"))
-            assert manager and manager.status == "active"
+            admin = db.scalar(select(Member).where(Member.email == "admin@example.com"))
+            assert admin and admin.status == "active"
             claimant = Member(name=f"Scoped Claimant {token}", email=f"scoped-claim-{token}@example.invalid", role="member", status="active")
             collaborator = Member(name=f"Scoped Collaborator {token}", email=f"scoped-collab-{token}@example.invalid", role="member", status="active")
             unrelated = Member(name=f"Scoped Unrelated {token}", email=f"scoped-outside-{token}@example.invalid", role="member", status="active")
@@ -87,25 +87,25 @@ def main():
             db.refresh(unrelated)
             member_ids.update((claimant.id, collaborator.id, unrelated.id))
 
-            root_id = create_task(db, manager, title=f"Scoped Smoke Root {token}", owner_id=manager.id)
+            root_id = create_task(db, admin, title=f"Scoped Smoke Root {token}", owner_id=admin.id)
             root_ids.add(root_id)
-            task_a = create_task(db, manager, title="确认时间地点", parent_id=root_id, owner_id=manager.id)
-            task_b = create_task(db, manager, title="准备参观路线", parent_id=root_id, claimable=True, dependencies=[task_a])
-            task_c = create_task(db, manager, title="准备展示设备", parent_id=root_id, owner_id=manager.id, collaborators=[collaborator.id])
-            task_d = create_task(db, manager, title="归档活动资料", parent_id=root_id, owner_id=unrelated.id)
-            task_e = create_task(db, manager, title="准备接待资料", parent_id=root_id, owner_id=claimant.id)
+            task_a = create_task(db, admin, title="确认时间地点", parent_id=root_id, owner_id=admin.id)
+            task_b = create_task(db, admin, title="准备参观路线", parent_id=root_id, claimable=True, dependencies=[task_a])
+            task_c = create_task(db, admin, title="准备展示设备", parent_id=root_id, owner_id=admin.id, collaborators=[collaborator.id])
+            task_d = create_task(db, admin, title="归档活动资料", parent_id=root_id, owner_id=unrelated.id)
+            task_e = create_task(db, admin, title="准备接待资料", parent_id=root_id, owner_id=claimant.id)
             child_ids.update((task_a, task_b, task_c, task_d, task_e))
-            other_root = create_task(db, manager, title=f"Other Scoped Root {token}", owner_id=manager.id)
+            other_root = create_task(db, admin, title=f"Other Scoped Root {token}", owner_id=admin.id)
             root_ids.add(other_root)
-            other_child = create_task(db, manager, title="其他事项任务", parent_id=other_root, owner_id=manager.id)
+            other_child = create_task(db, admin, title="其他事项任务", parent_id=other_root, owner_id=admin.id)
             child_ids.add(other_child)
 
-            activity_b = ItemActivity(root_task_id=root_id, task_id=task_b, author_id=manager.id, content="参观路线的门禁信息已确认。")
+            activity_b = ItemActivity(root_task_id=root_id, task_id=task_b, author_id=admin.id, content="参观路线的门禁信息已确认。")
             db.add(activity_b)
             db.flush()
-            global_fact = tasks_router._create_item_fact(db, db.get(Task, root_id), manager, content="活动时间为周三 14:00。", scope="global")
+            global_fact = tasks_router._create_item_fact(db, db.get(Task, root_id), admin, content="活动时间为周三 14:00。", scope="global")
             route_fact = tasks_router._create_item_fact(
-                db, db.get(Task, root_id), manager,
+                db, db.get(Task, root_id), admin,
                 content="来访团队从东门进入。", scope="related", related_task_ids=[task_b],
                 source_activity_id=activity_b.id,
             )
@@ -115,7 +115,7 @@ def main():
             assert "活动时间为周三 14:00。" in tasks_router.get_task(task_d, current=unrelated, db=db).context_facts
             assert "来访团队从东门进入。" not in tasks_router.get_task(task_d, current=unrelated, db=db).context_facts
             assert "来访团队从东门进入。" not in tasks_router.get_task(task_b, current=claimant, db=db).context_facts
-            assert "来访团队从东门进入。" in tasks_router.get_task(root_id, current=manager, db=db).context_facts
+            assert "来访团队从东门进入。" in tasks_router.get_task(root_id, current=admin, db=db).context_facts
             assert "来访团队从东门进入。" not in tasks_router.get_task(root_id, current=unrelated, db=db).context_facts
             assert all(row.id != activity_b.id for row in tasks_router.list_item_activities(
                 root_id, task_id=task_b, current=claimant, db=db,
@@ -138,7 +138,7 @@ def main():
             assert all(row.id != activity_b.id for row in tasks_router.list_item_activities(
                 root_id, task_id=task_d, current=claimant, db=db,
             ))
-            assert any(row.id == activity_b.id for row in tasks_router.list_item_activities(root_id, current=manager, db=db))
+            assert any(row.id == activity_b.id for row in tasks_router.list_item_activities(root_id, current=admin, db=db))
             assert all(row.id != activity_b.id for row in tasks_router.list_item_activities(root_id, current=unrelated, db=db))
 
             # A new owner inherits the work's prior scoped context; unclaim removes it from their view.
@@ -152,14 +152,14 @@ def main():
 
             # Collaborators receive the task's scoped fact while a different task owner does not.
             fact_c = tasks_router._create_item_fact(
-                db, db.get(Task, root_id), manager,
+                db, db.get(Task, root_id), admin,
                 content="展示设备需从北侧入口搬运。", scope="related", related_task_ids=[task_c],
             )
             db.commit()
             assert "展示设备需从北侧入口搬运。" in tasks_router.get_task(task_c, current=collaborator, db=db).context_facts
             assert "展示设备需从北侧入口搬运。" not in tasks_router.get_task(task_d, current=unrelated, db=db).context_facts
-            manager_root = tasks_router.get_task(root_id, current=manager, db=db)
-            assert {fact.id for fact in manager_root.item_facts} >= {global_fact.id, route_fact.id, fact_c.id}
+            admin_root = tasks_router.get_task(root_id, current=admin, db=db)
+            assert {fact.id for fact in admin_root.item_facts} >= {global_fact.id, route_fact.id, fact_c.id}
 
             # AI extraction suggests scope, task targets and a possible replacement; it never writes a fact.
             progress = ItemActivity(root_task_id=root_id, task_id=task_b, author_id=claimant.id, content="已确认周三 14:30 到达，参观路线从东门开始。")
@@ -216,7 +216,7 @@ def main():
                     source_activity_id=progress.id,
                     supersedes_fact_id=route_fact.id,
                 ),
-                current=manager,
+                current=admin,
                 db=db,
             )
             db.expire_all()
@@ -227,24 +227,24 @@ def main():
             assert "来访团队从东门进入。" not in tasks_router.get_task(task_b, current=claimant, db=db).context_facts
             assert any(row.id == activity_b.id for row in tasks_router.list_item_activities(root_id, current=claimant, db=db))
 
-            # Members cannot rewrite scope or replace an existing fact; manager/root owner can.
+            # Members cannot rewrite scope or replace an existing fact; admin/root owner can.
             expect_http(403, lambda: tasks_router.update_item_fact_scope(
                 root_id, fact_c.id, ItemFactScopeUpdate(scope="global", related_task_ids=[]), current=collaborator, db=db,
             ))
             expect_http(422, lambda: tasks_router.add_context_fact(
                 root_id,
                 ItemFactCreate(content="跨事项错误关联", scope="related", related_task_ids=[task_b + 99999]),
-                current=manager,
+                current=admin,
                 db=db,
             ))
             expect_http(422, lambda: tasks_router.add_context_fact(
                 root_id,
                 ItemFactCreate(content="关联到其他事项", scope="related", related_task_ids=[other_child]),
-                current=manager,
+                current=admin,
                 db=db,
             ))
             tasks_router.update_item_fact_scope(
-                root_id, fact_c.id, ItemFactScopeUpdate(scope="global", related_task_ids=[]), current=manager, db=db,
+                root_id, fact_c.id, ItemFactScopeUpdate(scope="global", related_task_ids=[]), current=admin, db=db,
             )
             assert "展示设备需从北侧入口搬运。" in tasks_router.get_task(task_d, current=unrelated, db=db).context_facts
     finally:

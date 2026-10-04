@@ -14,7 +14,7 @@ from ..auth import (
 )
 from ..db import get_db
 from ..models import LoginSession, Member
-from ..schemas import LoginIn, MemberOut, MemberStudentIDUpdate
+from ..schemas import LoginIn, MemberOut, MemberProfileUpdate
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -53,11 +53,15 @@ def me(member: Member = Depends(get_current_member)) -> Member:
 
 @router.patch("/me", response_model=MemberOut)
 def update_me(
-    payload: MemberStudentIDUpdate,
+    payload: MemberProfileUpdate,
     member: Member = Depends(get_current_member),
     db: Session = Depends(get_db),
 ) -> Member:
-    member.student_id = payload.student_id
+    fields = payload.model_fields_set
+    if "student_id" in fields:
+        member.student_id = payload.student_id
+    if "team_group" in fields:
+        member.team_group = payload.team_group
     try:
         db.commit()
     except IntegrityError as exc:

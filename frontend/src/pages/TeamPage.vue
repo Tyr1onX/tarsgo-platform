@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed } from "vue"
 import type { Member, Role, TeamGroup, TeamRegistrationWindow } from "../types"
 
 const props = defineProps<{
@@ -19,8 +20,13 @@ const emit = defineEmits<{
   navigate: [path: string]
 }>()
 
+const enabledMembers = computed(() => props.members.filter((member) => member.status !== "disabled"))
+const disabledMembers = computed(() => props.members.filter((member) => member.status === "disabled"))
+
 function memberStatusLabel(member: Member) {
-  return member.status === "invited" ? "邀请中" : member.status
+  if (member.status === "invited") return "邀请中"
+  if (member.status === "disabled") return "已停用"
+  return "正常"
 }
 
 function groupLabel(member: Member) {
@@ -81,10 +87,10 @@ function groupLabel(member: Member) {
   <section>
     <div class="section-heading">
       <h2>成员</h2>
-      <span>{{ members.length }}</span>
+      <span>{{ enabledMembers.length }}</span>
     </div>
     <div class="member-list">
-      <div v-for="member in members" :key="member.id" class="member-row team-member-row">
+      <div v-for="member in enabledMembers" :key="member.id" class="member-row team-member-row">
         <div class="team-member-summary">
           <strong>{{ member.name }}</strong>
           <span>{{ member.email }}</span>
@@ -98,6 +104,25 @@ function groupLabel(member: Member) {
         </div>
       </div>
     </div>
+
+    <details v-if="disabledMembers.length" class="team-disabled-members">
+      <summary>已停用成员（{{ disabledMembers.length }}）</summary>
+      <div class="member-list">
+        <div v-for="member in disabledMembers" :key="member.id" class="member-row team-member-row">
+          <div class="team-member-summary">
+            <strong>{{ member.name }}</strong>
+            <span>{{ member.email }}</span>
+            <small>{{ groupLabel(member) }} · {{ roleLabels[member.role] }} · {{ memberStatusLabel(member) }}</small>
+            <span class="team-member-student-id">
+              {{ member.student_id ? `学号 ${member.student_id}` : "学号未填写" }}
+            </span>
+          </div>
+          <div class="row-actions team-member-action">
+            <button type="button" @click="emit('navigate', `/team/${member.id}`)">编辑</button>
+          </div>
+        </div>
+      </div>
+    </details>
   </section>
 </template>
 
@@ -165,6 +190,21 @@ function groupLabel(member: Member) {
 
 .team-member-action {
   align-self: center;
+}
+
+.team-disabled-members {
+  margin-top: 14px;
+}
+
+.team-disabled-members > summary {
+  width: fit-content;
+  padding: 4px 0;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.team-disabled-members[open] > summary {
+  margin-bottom: 8px;
 }
 
 @media (max-width: 520px) {

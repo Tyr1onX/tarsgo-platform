@@ -44,6 +44,12 @@ const currentInvite = computed(() =>
   props.latestInvite?.member.id === props.member.id ? props.latestInvite : null,
 )
 
+function memberStatusLabel(member: Member) {
+  if (member.status === "invited") return "邀请中"
+  if (member.status === "disabled") return "已停用"
+  return "正常"
+}
+
 function saveProfile() {
   if (!profileChanged.value || props.profileSaving) return
   emit("updateProfile", {
@@ -79,7 +85,7 @@ function saveProfile() {
       </div>
       <div>
         <dt>状态</dt>
-        <dd>{{ member.status }}</dd>
+        <dd>{{ memberStatusLabel(member) }}</dd>
       </div>
     </dl>
   </section>

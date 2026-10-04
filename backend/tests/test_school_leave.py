@@ -328,7 +328,6 @@ def main() -> None:
             assert "2026 年 10 月 8 日 15:00 至 17:00" in rendered
             assert "2026 年 10 月 8 日 18:00 至 19:00" in rendered
             assert "联系电话：000-0000-0000" in rendered
-            assert "TEST199999" not in rendered
             document = open_docx(doc_response.content)
             assert len(document.tables) == 3
             assert docx_page_break_count(doc_response.content) == 2
@@ -340,7 +339,8 @@ def main() -> None:
             assert "测试丙" not in first_group
             assert "测试丙" in second_group and "TEST100003" in second_group
             assert "测试甲" not in second_group and "测试乙" not in second_group
-            assert "测试甲" in third_group and "TEST100001" in third_group
+            assert "测试甲" in third_group and "TEST199999" in third_group
+            assert "TEST100001" not in third_group
             assert "测试乙" not in third_group and "测试丙" not in third_group
 
             # Backward-compatible single-group endpoint remains available, but ZIP is gone.

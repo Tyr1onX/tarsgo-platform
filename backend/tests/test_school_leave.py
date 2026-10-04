@@ -1,11 +1,10 @@
-"""MySQL-backed School Leave v1 workflow and privacy coverage."""
+"""MySQL-backed School Leave workflow, delivery, deletion, and privacy coverage."""
 
 from __future__ import annotations
 
 import io
 import os
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
 
 from docx import Document
 from fastapi.testclient import TestClient
@@ -36,13 +35,30 @@ def request_payload(start: str, end: str) -> dict[str, str]:
     return {"start_at": start, "end_at": end}
 
 
+def open_docx(content: bytes) -> Document:
+    return Document(io.BytesIO(content))
+
+
 def docx_text(content: bytes) -> str:
-    document = Document(io.BytesIO(content))
+    document = open_docx(content)
     text_parts = [paragraph.text for paragraph in document.paragraphs]
     for table in document.tables:
         for row in table.rows:
             text_parts.extend(cell.text for cell in row.cells)
     return "\n".join(text_parts)
+
+
+def docx_page_break_count(content: bytes) -> int:
+    document = open_docx(content)
+    return document._element.xml.count('w:type="page"')
+
+
+def table_text(document: Document, index: int) -> str:
+    return "\n".join(
+        cell.text
+        for row in document.tables[index].rows
+        for cell in row.cells
+    )
 
 
 def main() -> None:
@@ -124,7 +140,7 @@ def main() -> None:
         client = TestClient(app)
 
         try:
-            # 1. A student id is mandatory for school-leave submission.
+            # A student id is mandatory for school-leave submission.
             set_actor(missing_id)
             response = client.post(
                 "/api/school-leave/requests",
@@ -139,7 +155,7 @@ def main() -> None:
             assert task_assignees.status_code == 200, task_assignees.text
             assert all("student_id" not in row for row in task_assignees.json())
 
-            # 2/3. A member can update/withdraw only their own pending request.
+            # A member can update/withdraw only their own pending request.
             set_actor(member_a)
             first = client.post(
                 "/api/school-leave/requests",
@@ -192,34 +208,42 @@ def main() -> None:
             assert c_response.status_code == 201
             c_request_id = c_response.json()["id"]
 
-            # 11. manager/member never gain school-leave administration permission.
+            # Managers/members never gain school-leave administration permission.
             set_actor(manager)
             assert client.get("/api/school-leave/admin/runs").status_code == 403
             assert client.post("/api/school-leave/admin/runs/collect").status_code == 403
             set_actor(member_a)
             assert client.get("/api/school-leave/admin/requests").status_code == 403
 
-            # 5/6. Collection groups only exact equal start/end times.
+            # Collection groups only exact equal start/end times.
             set_actor(admin)
             collected = client.post("/api/school-leave/admin/runs/collect")
             assert collected.status_code == 200, collected.text
             run_one = collected.json()
             assert run_one is not None
             run_one_id = run_one["id"]
+            assert "send_message" not in run_one
             assert [(group["time_text"], group["count"]) for group in run_one["groups"]] == [
                 ("2026 年 10 月 8 日 13:00 至 17:00", 2),
                 ("2026 年 10 月 8 日 15:00 至 17:00", 1),
             ]
 
-            # 4. Included requests are frozen for members.
+            # New document/delete endpoints remain admin-only.
+            set_actor(manager)
+            assert client.get(f"/api/school-leave/admin/runs/{run_one_id}/document").status_code == 403
+            assert client.delete(f"/api/school-leave/admin/runs/{run_one_id}").status_code == 403
             set_actor(member_a)
+            assert client.get(f"/api/school-leave/admin/runs/{run_one_id}/document").status_code == 403
+            assert client.delete(f"/api/school-leave/admin/runs/{run_one_id}").status_code == 403
+
+            # Included requests are frozen for members.
             included_update = client.patch(
                 f"/api/school-leave/requests/{a_request_id}",
                 json=request_payload("2026-10-08T13:05:00", "2026-10-08T17:00:00"),
             )
             assert included_update.status_code == 409
 
-            # 17. Profile changes never mutate frozen snapshots.
+            # Profile changes never mutate frozen snapshots.
             member_a.student_id = "TEST199999"
             db.commit()
             set_actor(admin)
@@ -231,7 +255,12 @@ def main() -> None:
             assert "TEST100001" in shared_group_ids
             assert "TEST199999" not in shared_group_ids
 
-            # 8/9. Later submissions stay pending; cancelling a ready run releases included rows.
+            # A ready run cannot be deleted; it must go through cancellation.
+            ready_delete = client.delete(f"/api/school-leave/admin/runs/{run_one_id}")
+            assert ready_delete.status_code == 409
+            assert "取消" in ready_delete.json()["detail"]
+
+            # Later submissions stay pending; cancelling a ready run releases included rows.
             set_actor(member_a)
             later = client.post(
                 "/api/school-leave/requests",
@@ -246,18 +275,28 @@ def main() -> None:
             cancelled = client.post(f"/api/school-leave/admin/runs/{run_one_id}/cancel")
             assert cancelled.status_code == 200, cancelled.text
             assert cancelled.json()["status"] == "cancelled"
+            assert client.get(f"/api/school-leave/admin/runs/{run_one_id}/document").status_code == 409
             db.expire_all()
             for request_id in (a_request_id, b_request_id, c_request_id):
                 request = db.get(SchoolLeaveRequest, request_id)
                 assert request and request.status == "pending" and request.run_id is None
 
-            # Re-collect the released requests plus the later supplement.
+            # Cancelled history can be cleaned without touching released requests.
+            cancelled_delete = client.delete(f"/api/school-leave/admin/runs/{run_one_id}")
+            assert cancelled_delete.status_code == 204, cancelled_delete.text
+            db.expire_all()
+            assert db.get(SchoolLeaveRun, run_one_id) is None
+            for request_id in (a_request_id, b_request_id, c_request_id):
+                assert db.get(SchoolLeaveRequest, request_id) is not None
+
+            # Re-collect released requests plus the later supplement.
             recollected = client.post("/api/school-leave/admin/runs/collect")
             assert recollected.status_code == 200, recollected.text
             run_two = recollected.json()
             run_two_id = run_two["id"]
             assert run_two["request_count"] == 4
             assert [group["count"] for group in run_two["groups"]] == [2, 1, 1]
+            assert "send_message" not in run_two
 
             # Ready reason can change and is reflected deterministically in generated files.
             reason = "参加虚构机器人战队校内创新实践活动"
@@ -268,53 +307,66 @@ def main() -> None:
             assert changed_reason.status_code == 200
             assert changed_reason.json()["reason"] == reason
 
-            # 14. Missing private phone configuration safely blocks documents.
+            # Missing private phone configuration safely blocks the run document.
             os.environ.pop("LEAVE_CONTACT_PHONE", None)
-            missing_phone = client.get(
-                f"/api/school-leave/admin/runs/{run_two_id}/documents/0"
-            )
+            missing_phone = client.get(f"/api/school-leave/admin/runs/{run_two_id}/document")
             assert missing_phone.status_code == 503
             assert "LEAVE_CONTACT_PHONE" in missing_phone.json()["detail"]
 
-            # 12/13. Admin can generate deterministic DOCX with snapshots/time/body.
+            # Multi-group run: one DOCX, one full leave form per group, page-break separated.
             os.environ["LEAVE_CONTACT_PHONE"] = "000-0000-0000"
-            doc_response = client.get(
-                f"/api/school-leave/admin/runs/{run_two_id}/documents/0"
-            )
+            doc_response = client.get(f"/api/school-leave/admin/runs/{run_two_id}/document")
             assert doc_response.status_code == 200, doc_response.text
+            assert doc_response.headers["content-type"].startswith(
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            )
+            assert ".docx" in doc_response.headers["content-disposition"]
             rendered = docx_text(doc_response.content)
-            assert "请假条" in rendered
+            assert rendered.count("请假条") == 3
             assert reason in rendered
             assert "2026 年 10 月 8 日 13:00 至 17:00" in rendered
-            assert "测试甲" in rendered and "TEST100001" in rendered
-            assert "测试乙" in rendered and "TEST100002" in rendered
-            assert "TEST199999" not in rendered
+            assert "2026 年 10 月 8 日 15:00 至 17:00" in rendered
+            assert "2026 年 10 月 8 日 18:00 至 19:00" in rendered
             assert "联系电话：000-0000-0000" in rendered
+            assert "TEST199999" not in rendered
+            document = open_docx(doc_response.content)
+            assert len(document.tables) == 3
+            assert docx_page_break_count(doc_response.content) == 2
+            first_group = table_text(document, 0)
+            second_group = table_text(document, 1)
+            third_group = table_text(document, 2)
+            assert "测试甲" in first_group and "TEST100001" in first_group
+            assert "测试乙" in first_group and "TEST100002" in first_group
+            assert "测试丙" not in first_group
+            assert "测试丙" in second_group and "TEST100003" in second_group
+            assert "测试甲" not in second_group and "测试乙" not in second_group
+            assert "测试甲" in third_group and "TEST100001" in third_group
+            assert "测试乙" not in third_group and "测试丙" not in third_group
 
-            # 15. ZIP contains exactly one DOCX per exact time group.
-            zip_response = client.get(
-                f"/api/school-leave/admin/runs/{run_two_id}/documents.zip"
-            )
-            assert zip_response.status_code == 200, zip_response.text
-            import zipfile
+            # Backward-compatible single-group endpoint remains available, but ZIP is gone.
+            group_doc = client.get(f"/api/school-leave/admin/runs/{run_two_id}/documents/0")
+            assert group_doc.status_code == 200
+            assert len(open_docx(group_doc.content).tables) == 1
+            assert client.get(f"/api/school-leave/admin/runs/{run_two_id}/documents.zip").status_code == 404
 
-            with zipfile.ZipFile(io.BytesIO(zip_response.content)) as archive:
-                names = archive.namelist()
-                assert len(names) == 3
-                assert all(name.endswith(".docx") for name in names)
-                assert len(set(names)) == 3
-
-            # 16/10. Marking sent records actor/time; a sent run cannot be changed/cancelled.
+            # Marking sent records actor/time; sent history freezes reason/cancel operations.
             marked = client.post(f"/api/school-leave/admin/runs/{run_two_id}/sent")
             assert marked.status_code == 200, marked.text
             assert marked.json()["status"] == "sent"
             assert marked.json()["sent_by"]["id"] == admin.id
             assert marked.json()["sent_at"]
+            assert client.get(f"/api/school-leave/admin/runs/{run_two_id}/document").status_code == 200
             assert client.post(f"/api/school-leave/admin/runs/{run_two_id}/cancel").status_code == 409
             assert client.patch(
                 f"/api/school-leave/admin/runs/{run_two_id}/reason",
                 json={"reason": "不应允许修改"},
             ).status_code == 409
+
+            # Deleting sent history remains admin-only.
+            set_actor(manager)
+            assert client.delete(f"/api/school-leave/admin/runs/{run_two_id}").status_code == 403
+            set_actor(member_a)
+            assert client.delete(f"/api/school-leave/admin/runs/{run_two_id}").status_code == 403
 
             # A later request forms a fresh supplementary run and never mutates the sent one.
             set_actor(member_b)
@@ -329,7 +381,8 @@ def main() -> None:
             supplement_run = client.post("/api/school-leave/admin/runs/collect")
             assert supplement_run.status_code == 200
             run_three = supplement_run.json()
-            assert run_three["id"] != run_two_id
+            run_three_id = run_three["id"]
+            assert run_three_id != run_two_id
             assert run_three["request_count"] == 1
             db.expire_all()
             sent_request_ids = {
@@ -341,10 +394,69 @@ def main() -> None:
             assert supplement_id not in sent_request_ids
             assert db.get(SchoolLeaveRun, run_two_id).status == "sent"
 
-            # 18. No pending requests is an idempotent safe no-op.
+            # One-group run produces one DOCX with no page break.
+            single_doc = client.get(f"/api/school-leave/admin/runs/{run_three_id}/document")
+            assert single_doc.status_code == 200
+            single_document = open_docx(single_doc.content)
+            assert len(single_document.tables) == 1
+            assert docx_page_break_count(single_doc.content) == 0
+            assert "2026 年 10 月 8 日 20:00 至 21:00" in docx_text(single_doc.content)
+            assert "测试乙" in table_text(single_document, 0)
+            assert client.delete(f"/api/school-leave/admin/runs/{run_three_id}").status_code == 409
+
+            # Successful sent deletion removes the run and every linked request, never orphaning included rows.
+            run_two_request_ids = list(
+                db.scalars(select(SchoolLeaveRequest.id).where(SchoolLeaveRequest.run_id == run_two_id))
+            )
+            assert len(run_two_request_ids) == 4
+            sent_delete = client.delete(f"/api/school-leave/admin/runs/{run_two_id}")
+            assert sent_delete.status_code == 204, sent_delete.text
+            db.expire_all()
+            assert db.get(SchoolLeaveRun, run_two_id) is None
+            assert all(db.get(SchoolLeaveRequest, request_id) is None for request_id in run_two_request_ids)
+            orphaned = list(
+                db.scalars(
+                    select(SchoolLeaveRequest).where(
+                        SchoolLeaveRequest.status == "included",
+                        SchoolLeaveRequest.run_id.is_(None),
+                    )
+                )
+            )
+            assert orphaned == []
+            assert client.delete(f"/api/school-leave/admin/runs/{run_two_id}").status_code == 404
+
+            # Deletion is atomic: a commit failure rolls back request and run deletion together.
+            marked_three = client.post(f"/api/school-leave/admin/runs/{run_three_id}/sent")
+            assert marked_three.status_code == 200
+            original_commit = db.commit
+
+            def failing_commit() -> None:
+                raise RuntimeError("forced delete commit failure")
+
+            db.commit = failing_commit  # type: ignore[method-assign]
+            failing_client = TestClient(app, raise_server_exceptions=False)
+            failed_delete = failing_client.delete(f"/api/school-leave/admin/runs/{run_three_id}")
+            assert failed_delete.status_code == 500
+            db.commit = original_commit  # type: ignore[method-assign]
+            db.rollback()
+            db.expire_all()
+            assert db.get(SchoolLeaveRun, run_three_id) is not None
+            supplement_row = db.get(SchoolLeaveRequest, supplement_id)
+            assert supplement_row is not None
+            assert supplement_row.status == "included"
+            assert supplement_row.run_id == run_three_id
+
+            # After restoring the transaction, the same sent history can be deleted normally.
+            deleted_three = client.delete(f"/api/school-leave/admin/runs/{run_three_id}")
+            assert deleted_three.status_code == 204
+            db.expire_all()
+            assert db.get(SchoolLeaveRun, run_three_id) is None
+            assert db.get(SchoolLeaveRequest, supplement_id) is None
+
+            # No pending requests is an idempotent safe no-op.
             assert collect_pending_school_leave(db, created_by=None) is None
 
-            # 7. Two simultaneous collectors can include a pending request only once.
+            # Two simultaneous collectors can include a pending request only once.
             set_actor(member_c)
             concurrency_request = client.post(
                 "/api/school-leave/requests",
@@ -379,10 +491,10 @@ def main() -> None:
                 "contact_phone_configured": True,
             }
 
-            # Sanity-check exact request statuses used throughout the workflow.
+            # Sanity-check request statuses that intentionally remain after workflow cleanup.
             db.expire_all()
             assert db.get(SchoolLeaveRequest, first_id).status == "withdrawn"
-            assert db.get(SchoolLeaveRequest, later_id).run_id == run_two_id
+            assert db.get(SchoolLeaveRequest, later_id) is None
 
         finally:
             app.dependency_overrides.clear()

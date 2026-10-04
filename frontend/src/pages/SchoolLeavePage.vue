@@ -24,6 +24,10 @@ const notice = ref("")
 const editingRequestId = ref<number | null>(null)
 const reasonDrafts = ref<Record<number, string>>({})
 const previewKey = ref("")
+const pendingPreviewKey = ref("")
+const editingReasonRunId = ref<number | null>(null)
+const historyExpanded = ref(false)
+const activeView = ref<"mine" | "admin">("mine")
 
 function shanghaiToday() {
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -42,8 +46,43 @@ const endTime = ref("17:00")
 
 const isAdmin = computed(() => props.currentUser.role === "admin")
 const pendingAdminRequests = computed(() => adminRequests.value.filter((item) => item.status === "pending"))
+const pendingMemberCount = computed(() => new Set(pendingAdminRequests.value.map((item) => item.member_id)).size)
 const readyRuns = computed(() => runs.value.filter((item) => item.status === "ready"))
 const sentRuns = computed(() => runs.value.filter((item) => item.status === "sent"))
+const visibleSentRuns = computed(() => historyExpanded.value ? sentRuns.value : sentRuns.value.slice(0, 3))
+const pendingPreviewDays = computed(() => {
+  const days = new Map<string, Map<string, {
+    key: string
+    startAt: string
+    endAt: string
+    requests: SchoolLeaveRequest[]
+  }>>()
+
+  for (const request of pendingAdminRequests.value) {
+    const date = request.start_at.slice(0, 10)
+    const exactKey = request.start_at + "\u0000" + request.end_at
+    let groups = days.get(date)
+    if (!groups) {
+      groups = new Map()
+      days.set(date, groups)
+    }
+    let group = groups.get(exactKey)
+    if (!group) {
+      group = { key: exactKey, startAt: request.start_at, endAt: request.end_at, requests: [] }
+      groups.set(exactKey, group)
+    }
+    group.requests.push(request)
+  }
+
+  return [...days.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([date, groups]) => ({
+      date,
+      groups: [...groups.values()].sort(
+        (left, right) => left.startAt.localeCompare(right.startAt) || left.endAt.localeCompare(right.endAt),
+      ),
+    }))
+})
 
 function messageOf(reason: unknown) {
   return reason instanceof Error ? reason.message : "操作失败"
@@ -54,16 +93,35 @@ function toInputParts(value: string) {
   return { date: datePart, time: timePart.slice(0, 5) }
 }
 
+function formatMonthDay(date: string) {
+  const [, month = "", day = ""] = date.split("-")
+  return Number(month) + " 月 " + Number(day) + " 日"
+}
+
 function formatDateTime(value: string | null) {
   if (!value) return ""
-  return value.replace("T", " ").slice(0, 16)
+  const parts = toInputParts(value)
+  return formatMonthDay(parts.date) + " · " + parts.time
+}
+
+function formatCollectedAt(value: string) {
+  const parts = toInputParts(value)
+  const day = parts.date === shanghaiToday() ? "今天" : formatMonthDay(parts.date)
+  return day + " " + parts.time + " 汇总"
 }
 
 function formatRange(item: Pick<SchoolLeaveRequest, "start_at" | "end_at">) {
   const start = toInputParts(item.start_at)
   const end = toInputParts(item.end_at)
-  if (start.date === end.date) return `${start.date} · ${start.time}–${end.time}`
-  return `${start.date} ${start.time} → ${end.date} ${end.time}`
+  if (start.date === end.date) return formatMonthDay(start.date) + " · " + start.time + "–" + end.time
+  return formatMonthDay(start.date) + " " + start.time + " → " + formatMonthDay(end.date) + " " + end.time
+}
+
+function formatTimeSpan(startAt: string, endAt: string) {
+  const start = toInputParts(startAt)
+  const end = toInputParts(endAt)
+  if (start.date === end.date) return start.time + "–" + end.time
+  return formatMonthDay(start.date) + " " + start.time + " → " + formatMonthDay(end.date) + " " + end.time
 }
 
 function requestStatusLabel(status: SchoolLeaveRequest["status"]) {
@@ -180,12 +238,24 @@ async function collectNow() {
   }
 }
 
+function startReasonEdit(run: SchoolLeaveRun, event?: Event) {
+  closeOverflow(event)
+  reasonDrafts.value[run.id] = run.reason
+  editingReasonRunId.value = run.id
+}
+
+function cancelReasonEdit(run: SchoolLeaveRun) {
+  reasonDrafts.value[run.id] = run.reason
+  editingReasonRunId.value = null
+}
+
 async function saveReason(run: SchoolLeaveRun) {
   actionRunId.value = run.id
   error.value = ""
   notice.value = ""
   try {
     await api.updateSchoolLeaveRunReason(run.id, reasonDrafts.value[run.id] ?? "")
+    editingReasonRunId.value = null
     notice.value = "统一请假事由已更新。"
     await load()
   } catch (reason) {
@@ -195,7 +265,8 @@ async function saveReason(run: SchoolLeaveRun) {
   }
 }
 
-async function cancelRun(run: SchoolLeaveRun) {
+async function cancelRun(run: SchoolLeaveRun, event?: Event) {
+  closeOverflow(event)
   if (!window.confirm("取消本次汇总？其中申请会退回待汇总并可由成员重新修改。")) return
   actionRunId.value = run.id
   error.value = ""
@@ -252,6 +323,23 @@ function togglePreview(runId: number, groupIndex: number) {
   previewKey.value = previewKey.value === key ? "" : key
 }
 
+function togglePendingPreview(key: string) {
+  pendingPreviewKey.value = pendingPreviewKey.value === key ? "" : key
+}
+
+function closeOverflow(event?: Event) {
+  const details = (event?.currentTarget as HTMLElement | null)?.closest("details")
+  details?.removeAttribute("open")
+}
+
+function documentUrl(runId: number, groupIndex: number) {
+  return "/api/school-leave/admin/runs/" + runId + "/documents/" + groupIndex
+}
+
+function zipUrl(runId: number) {
+  return "/api/school-leave/admin/runs/" + runId + "/documents.zip"
+}
+
 function dayKey(value: string) {
   return value.slice(0, 10)
 }
@@ -271,346 +359,328 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="page-title">
-    <h1>学校请假</h1>
-  </div>
+  <div class="page-title leave-page-title"><h1>学校请假</h1></div>
+
+  <nav v-if="isAdmin" class="leave-view-tabs" aria-label="学校请假视图">
+    <button type="button" :class="{ active: activeView === 'mine' }" @click="activeView = 'mine'">我的请假</button>
+    <button type="button" :class="{ active: activeView === 'admin' }" @click="activeView = 'admin'">汇总管理</button>
+  </nav>
 
   <p v-if="error" class="leave-feedback leave-error">{{ error }}</p>
   <p v-if="notice" class="leave-feedback leave-success">{{ notice }}</p>
 
-  <section v-if="!currentUser.student_id" class="leave-alert">
-    <strong>请先完善学号，生成学校请假材料时需要使用。</strong>
-    <button type="button" @click="emit('navigate', '/me')">去完善</button>
-  </section>
+  <template v-if="activeView === 'mine' || !isAdmin">
+    <section v-if="!currentUser.student_id" class="leave-inline-notice">
+      <span>请先完善学号，生成学校请假材料时需要使用。</span>
+      <button type="button" @click="emit('navigate', '/me')">去完善</button>
+    </section>
 
-  <form class="management-form leave-form" @submit.prevent="submitRequest">
-    <div class="section-heading">
-      <h2>{{ editingRequestId === null ? "提交请假" : "修改请假" }}</h2>
-      <button v-if="editingRequestId !== null" type="button" @click="resetForm">取消修改</button>
-    </div>
-    <label>
-      请假日期
-      <input v-model="leaveDate" type="date" required />
-    </label>
-    <div class="leave-time-grid">
-      <label>
-        开始时间
-        <input v-model="startTime" type="time" step="300" required />
-      </label>
-      <label>
-        结束时间
-        <input v-model="endTime" type="time" step="300" required />
-      </label>
-    </div>
-    <p class="leave-help">相同请假时间会自动汇总到同一份请假材料中，请按自己的实际缺课时间填写。</p>
-    <button class="primary" type="submit" :disabled="saving || !currentUser.student_id">
-      {{ saving ? "正在保存…" : editingRequestId === null ? "提交请假" : "保存修改" }}
-    </button>
-  </form>
-
-  <section>
-    <div class="section-heading"><h2>我的申请</h2></div>
-    <div v-if="loading" class="leave-empty">正在加载…</div>
-    <div v-else-if="requests.length === 0" class="leave-empty">暂无请假申请。</div>
-    <div v-else class="leave-list">
-      <div v-for="item in requests" :key="item.id" class="leave-row">
-        <div>
-          <strong>{{ formatRange(item) }}</strong>
-          <span>{{ requestStatusLabel(item.status) }}</span>
-        </div>
-        <div v-if="item.status === 'pending'" class="row-actions">
-          <button type="button" @click="editRequest(item)">修改</button>
-          <button class="danger-text" type="button" @click="withdrawRequest(item)">撤回</button>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <template v-if="isAdmin">
-    <section class="leave-admin">
+    <section class="leave-submit-section">
       <div class="section-heading">
-        <div>
-          <h2>汇总管理</h2>
-          <small v-if="config">每日 {{ config.daily_cutoff }} · Asia/Shanghai</small>
-        </div>
-        <button class="primary" type="button" :disabled="actionRunId !== null" @click="collectNow">立即汇总</button>
+        <h2>{{ editingRequestId === null ? "提交请假" : "修改请假" }}</h2>
+        <button v-if="editingRequestId !== null" type="button" @click="resetForm">取消修改</button>
       </div>
-      <p v-if="config && !config.contact_phone_configured" class="leave-feedback leave-error">
-        LEAVE_CONTACT_PHONE 未配置，当前不能生成 DOCX。
-      </p>
-    </section>
-
-    <section>
-      <div class="section-heading"><h2>待汇总</h2><span>{{ pendingAdminRequests.length }}</span></div>
-      <div v-if="pendingAdminRequests.length === 0" class="leave-empty">当前没有待汇总申请。</div>
-      <div v-else class="leave-list">
-        <div v-for="item in pendingAdminRequests" :key="item.id" class="leave-row leave-row-admin">
-          <div>
-            <strong>{{ item.member_name_snapshot }} · {{ item.student_id_snapshot }}</strong>
-            <span>{{ formatRange(item) }}</span>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <section>
-      <div class="section-heading"><h2>待发送</h2><span>{{ readyRuns.length }}</span></div>
-      <div v-if="readyRuns.length === 0" class="leave-empty">当前没有待发送批次。</div>
-      <article v-for="run in readyRuns" :key="run.id" class="leave-run">
-        <header class="leave-run-heading">
-          <div>
-            <strong>{{ formatDateTime(run.collected_at) }} 汇总</strong>
-            <span>{{ run.member_count }} 人 · {{ run.groups.length }} 个时间组</span>
-          </div>
-          <small v-if="isSupplementRun(run)">补充批次</small>
-        </header>
-
-        <div class="leave-reason">
+      <form class="leave-request-form" @submit.prevent="submitRequest">
+        <div class="leave-form-controls">
           <label>
-            统一事由
-            <textarea v-model="reasonDrafts[run.id]" rows="2" maxlength="500" />
+            <span>请假日期</span>
+            <input v-model="leaveDate" type="date" required />
           </label>
-          <button type="button" :disabled="actionRunId === run.id" @click="saveReason(run)">保存事由</button>
-        </div>
-
-        <div v-for="group in run.groups" :key="group.index" class="leave-group">
-          <div class="leave-group-heading">
-            <div>
-              <strong>{{ group.time_text }}</strong>
-              <span>{{ group.count }} 人</span>
-            </div>
-            <div class="row-actions">
-              <button type="button" @click="togglePreview(run.id, group.index)">预览</button>
-              <button
-                type="button"
-                :disabled="!run.document_ready"
-                @click="download(`/api/school-leave/admin/runs/${run.id}/documents/${group.index}`)"
-              >下载 DOCX</button>
-            </div>
+          <div class="leave-time-pair">
+            <label><span>开始时间</span><input v-model="startTime" type="time" step="300" required /></label>
+            <span class="leave-time-arrow" aria-hidden="true">→</span>
+            <label><span>结束时间</span><input v-model="endTime" type="time" step="300" required /></label>
           </div>
-          <div v-if="previewKey === `${run.id}:${group.index}`" class="leave-preview">
-            <div v-for="member in group.members" :key="member.member_id" class="leave-preview-row">
-              <span>{{ member.name }}</span>
-              <span>{{ member.student_id }}</span>
-            </div>
-          </div>
-        </div>
-
-        <div class="leave-message">{{ run.send_message }}</div>
-        <div class="leave-run-actions">
-          <button type="button" :disabled="!run.document_ready" @click="download(`/api/school-leave/admin/runs/${run.id}/documents.zip`)">
-            下载全部
+          <button class="primary leave-submit" type="submit" :disabled="saving || !currentUser.student_id">
+            {{ saving ? "正在保存…" : editingRequestId === null ? "提交请假" : "保存修改" }}
           </button>
-          <button type="button" @click="copyMessage(run)">复制发送文案</button>
-          <button class="primary" type="button" :disabled="actionRunId === run.id" @click="markSent(run)">标记已发送</button>
-          <button class="danger-text" type="button" :disabled="actionRunId === run.id" @click="cancelRun(run)">取消本次汇总</button>
         </div>
+        <p class="leave-help">相同请假时间会自动汇总到同一份请假材料中，请按自己的实际缺课时间填写。</p>
+      </form>
+    </section>
+
+    <section class="leave-my-requests">
+      <div class="section-heading"><h2>我的申请</h2></div>
+      <div v-if="loading" class="leave-empty">正在加载…</div>
+      <div v-else-if="requests.length === 0" class="leave-empty">暂无请假申请</div>
+      <div v-else class="leave-list">
+        <div
+          v-for="item in requests"
+          :key="item.id"
+          class="leave-row"
+          :class="{ 'leave-row-muted': item.status === 'withdrawn' }"
+        >
+          <div class="leave-row-main">
+            <strong>{{ formatRange(item) }}</strong>
+            <span>{{ requestStatusLabel(item.status) }}</span>
+          </div>
+          <div v-if="item.status === 'pending'" class="row-actions leave-row-actions">
+            <button type="button" @click="editRequest(item)">修改</button>
+            <button class="danger-text" type="button" @click="withdrawRequest(item)">撤回</button>
+          </div>
+        </div>
+      </div>
+    </section>
+  </template>
+
+  <template v-else-if="isAdmin">
+    <section class="leave-admin-heading">
+      <h2>汇总管理</h2>
+      <p v-if="config">每天 {{ config.daily_cutoff }} 自动汇总 · Asia/Shanghai</p>
+    </section>
+
+    <p v-if="config && !config.contact_phone_configured" class="leave-feedback leave-error">
+      请假材料联系电话未配置，暂时无法下载材料。
+    </p>
+
+    <section v-if="readyRuns.length" class="leave-ready-section">
+      <div class="section-heading"><h2>待发送 <span>· {{ readyRuns.length }}</span></h2></div>
+      <article v-for="run in readyRuns" :key="run.id" class="leave-ready-run">
+        <header class="leave-run-heading">
+          <div>
+            <strong>{{ formatCollectedAt(run.collected_at) }}</strong>
+            <span>{{ run.member_count }} 人 · {{ run.groups.length }} 份材料</span>
+          </div>
+          <span v-if="isSupplementRun(run)" class="leave-run-note">补充批次</span>
+        </header>
+
+        <div class="leave-run-row leave-reason-summary">
+          <div><span class="leave-field-label">事由</span><p>{{ run.reason }}</p></div>
+          <details class="leave-more">
+            <summary aria-label="更多管理操作">···</summary>
+            <div class="leave-more-menu">
+              <button type="button" :disabled="actionRunId === run.id" @click="startReasonEdit(run, $event)">修改统一事由</button>
+              <button class="leave-danger-action" type="button" :disabled="actionRunId === run.id" @click="cancelRun(run, $event)">取消本次汇总</button>
+            </div>
+          </details>
+        </div>
+
+        <div v-if="editingReasonRunId === run.id" class="leave-reason-editor">
+          <textarea v-model="reasonDrafts[run.id]" rows="3" maxlength="500" aria-label="统一事由" />
+          <div class="leave-inline-actions">
+            <button type="button" @click="cancelReasonEdit(run)">取消</button>
+            <button class="primary" type="button" :disabled="actionRunId === run.id" @click="saveReason(run)">保存事由</button>
+          </div>
+        </div>
+
+        <div class="leave-run-groups">
+          <div v-for="group in run.groups" :key="group.index" class="leave-group">
+            <div class="leave-group-heading">
+              <div><strong>{{ group.time_text }}</strong><span>{{ group.count }} 人</span></div>
+              <div class="row-actions leave-group-actions">
+                <button type="button" @click="togglePreview(run.id, group.index)">
+                  {{ previewKey === run.id + ':' + group.index ? "收起名单" : "名单" }}
+                </button>
+                <button type="button" :disabled="!run.document_ready" @click="download(documentUrl(run.id, group.index))">下载</button>
+              </div>
+            </div>
+            <div v-if="previewKey === run.id + ':' + group.index" class="leave-preview">
+              <div v-for="member in group.members" :key="member.member_id" class="leave-preview-row">
+                <span>{{ member.name }}</span><span>{{ member.student_id }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="leave-message-block">
+          <div class="leave-message-heading">
+            <span class="leave-field-label">发送文案</span>
+            <button type="button" @click="copyMessage(run)">复制</button>
+          </div>
+          <p>{{ run.send_message }}</p>
+        </div>
+
+        <footer class="leave-run-actions">
+          <div class="leave-secondary-actions">
+            <button type="button" :disabled="!run.document_ready" @click="download(zipUrl(run.id))">下载全部</button>
+            <button type="button" @click="copyMessage(run)">复制发送文案</button>
+          </div>
+          <button class="primary leave-mark-sent" type="button" :disabled="actionRunId === run.id" @click="markSent(run)">标记已发送</button>
+        </footer>
       </article>
     </section>
 
-    <section>
-      <div class="section-heading"><h2>已发送</h2><span>{{ sentRuns.length }}</span></div>
-      <div v-if="sentRuns.length === 0" class="leave-empty">暂无已发送批次。</div>
-      <article v-for="run in sentRuns" :key="run.id" class="leave-run leave-run-sent">
-        <header class="leave-run-heading">
-          <div>
-            <strong>{{ formatDateTime(run.collected_at) }} 汇总</strong>
-            <span>{{ run.member_count }} 人 · {{ run.groups.length }} 个时间组</span>
-          </div>
-          <small>{{ formatDateTime(run.sent_at) }} · {{ run.sent_by?.name ?? "管理员" }}已标记发送</small>
-        </header>
-        <div v-for="group in run.groups" :key="group.index" class="leave-group leave-group-sent">
-          <div class="leave-group-heading">
-            <div>
-              <strong>{{ group.time_text }}</strong>
-              <span>{{ group.count }} 人</span>
+    <section v-if="pendingAdminRequests.length" class="leave-pending-section">
+      <div class="section-heading leave-pending-heading">
+        <div>
+          <h2>待汇总 <span>· {{ pendingMemberCount }} 人</span></h2>
+          <small v-if="config">每日 {{ config.daily_cutoff }} 自动汇总</small>
+        </div>
+        <button class="primary leave-collect" type="button" :disabled="actionRunId !== null" @click="collectNow">立即汇总</button>
+      </div>
+      <div v-for="day in pendingPreviewDays" :key="day.date" class="leave-pending-day">
+        <h3>{{ formatMonthDay(day.date) }}</h3>
+        <div class="leave-list">
+          <div v-for="group in day.groups" :key="group.key" class="leave-group leave-pending-group">
+            <div class="leave-group-heading">
+              <div><strong>{{ formatTimeSpan(group.startAt, group.endAt) }}</strong><span>{{ group.requests.length }} 人</span></div>
+              <button type="button" @click="togglePendingPreview(group.key)">
+                {{ pendingPreviewKey === group.key ? "收起名单" : "名单" }}
+              </button>
             </div>
-            <button
-              type="button"
-              :disabled="!run.document_ready"
-              @click="download(`/api/school-leave/admin/runs/${run.id}/documents/${group.index}`)"
-            >下载 DOCX</button>
+            <div v-if="pendingPreviewKey === group.key" class="leave-preview">
+              <div v-for="request in group.requests" :key="request.id" class="leave-preview-row">
+                <span>{{ request.member_name_snapshot }}</span><span>{{ request.student_id_snapshot }}</span>
+              </div>
+            </div>
           </div>
         </div>
-      </article>
+      </div>
+    </section>
+
+    <section v-if="!loading && readyRuns.length === 0 && pendingAdminRequests.length === 0" class="leave-current-empty">
+      <span>当前没有需要处理的请假。</span>
+      <button type="button" :disabled="actionRunId !== null" @click="collectNow">立即汇总</button>
+    </section>
+
+    <section class="leave-history-section">
+      <div class="section-heading">
+        <h2>发送历史</h2>
+        <button v-if="sentRuns.length > 3" type="button" @click="historyExpanded = !historyExpanded">
+          {{ historyExpanded ? "收起" : "查看全部历史" }}
+        </button>
+      </div>
+      <div v-if="sentRuns.length === 0" class="leave-empty">暂无记录</div>
+      <div v-else class="leave-history-list">
+        <details v-for="run in visibleSentRuns" :key="run.id" class="leave-history-run">
+          <summary>
+            <div>
+              <strong>{{ formatDateTime(run.sent_at || run.collected_at) }} · {{ run.member_count }} 人 · {{ run.groups.length }} 份材料</strong>
+              <span>{{ run.sent_by?.name || "管理员" }}已标记发送<span v-if="isSupplementRun(run)"> · 补充批次</span></span>
+            </div>
+            <span class="leave-history-chevron" aria-hidden="true">›</span>
+          </summary>
+          <div class="leave-history-detail">
+            <div v-for="group in run.groups" :key="group.index" class="leave-history-group">
+              <div><strong>{{ group.time_text }}</strong><span>{{ group.count }} 人</span></div>
+              <button type="button" :disabled="!run.document_ready" @click="download(documentUrl(run.id, group.index))">下载</button>
+            </div>
+          </div>
+        </details>
+      </div>
     </section>
   </template>
 </template>
 
 <style scoped>
-.leave-form,
-.leave-admin,
-section {
-  margin-bottom: 28px;
-}
+.leave-page-title { margin-bottom: 0; }
+.leave-view-tabs { display: flex; gap: 20px; margin-bottom: 24px; border-bottom: 1px solid var(--line); }
+.leave-view-tabs button { border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; padding: 10px 1px 9px; color: var(--muted); font-size: 13px; }
+.leave-view-tabs button:hover, .leave-view-tabs button.active { color: var(--text); }
+.leave-view-tabs button.active { border-bottom-color: var(--text); }
 
-.leave-time-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-}
+.leave-submit-section, .leave-my-requests, .leave-ready-section, .leave-pending-section, .leave-history-section { margin-bottom: 30px; }
+.leave-request-form { display: grid; gap: 9px; padding-bottom: 26px; border-bottom: 1px solid var(--line); }
+.leave-form-controls { display: grid; grid-template-columns: minmax(150px, 1.1fr) minmax(250px, 1.6fr) auto; align-items: end; gap: 12px; }
+.leave-form-controls label, .leave-time-pair label { min-width: 0; display: grid; gap: 6px; color: var(--muted); font-size: 12.5px; }
+.leave-form-controls input { width: 100%; min-width: 0; }
+.leave-time-pair { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: end; gap: 9px; }
+.leave-time-arrow { padding-bottom: 9px; color: var(--faint); }
+.leave-submit, .leave-collect, .leave-mark-sent { width: fit-content; white-space: nowrap; }
+.leave-help, .leave-empty, .leave-admin-heading p, .leave-pending-heading small, .leave-row span, .leave-run-heading span, .leave-group-heading span, .leave-history-run span { color: var(--muted); font-size: 13px; }
+.leave-help { margin: 0; line-height: 1.55; }
+.leave-empty { padding: 10px 0; }
 
-.leave-help,
-.leave-empty,
-.leave-run span,
-.leave-row span,
-.leave-run small,
-.leave-admin small {
-  color: var(--muted);
-  font-size: 13px;
-}
+.leave-feedback { margin: 14px 0 18px; padding: 4px 0 4px 10px; border-left: 2px solid var(--line-strong); font-size: 13px; line-height: 1.55; }
+.leave-error { border-left-color: var(--danger); color: var(--danger); }
+.leave-success { border-left-color: var(--success); color: var(--success); }
+.leave-inline-notice, .leave-current-empty { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin: 0 0 24px; padding: 9px 0; border-bottom: 1px solid var(--line); color: var(--secondary); font-size: 13px; }
 
-.leave-help {
-  margin: -4px 0 0;
-  line-height: 1.6;
+.leave-inline-notice button, .leave-current-empty button, .leave-history-section .section-heading > button, .leave-group-heading > button, .leave-message-heading button, .leave-secondary-actions button, .leave-history-group button, .leave-inline-actions > button:first-child {
+  border: 0; background: transparent; padding: 4px 0; color: var(--muted);
 }
+.leave-inline-notice button:hover, .leave-current-empty button:hover, .leave-history-section .section-heading > button:hover, .leave-group-heading > button:hover, .leave-message-heading button:hover, .leave-secondary-actions button:hover, .leave-history-group button:hover, .leave-inline-actions > button:first-child:hover { color: var(--text); }
 
-.leave-feedback,
-.leave-alert {
-  margin: 0 0 18px;
-  padding: 10px 12px;
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  font-size: 13px;
+.leave-list, .leave-history-list { border: 1px solid var(--line); background: var(--surface); }
+.leave-row { min-width: 0; min-height: 54px; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 10px 12px; }
+.leave-row + .leave-row { border-top: 1px solid var(--line); }
+.leave-row-main { min-width: 0; display: grid; gap: 3px; }
+.leave-row-main strong { overflow-wrap: anywhere; }
+.leave-row-muted { opacity: 0.58; }
+.leave-row-actions, .leave-group-actions { flex: 0 0 auto; }
+
+.leave-admin-heading { margin: 0 0 22px; }
+.leave-admin-heading h2, .leave-admin-heading p { margin: 0; }
+.leave-admin-heading p { margin-top: 4px; }
+.section-heading h2 span { color: var(--faint); font-size: 13px; font-weight: 500; }
+
+.leave-ready-run { border: 1px solid var(--line-strong); background: var(--surface); }
+.leave-ready-run + .leave-ready-run { margin-top: 14px; }
+.leave-run-heading, .leave-run-row, .leave-group-heading, .leave-preview-row, .leave-history-group { min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.leave-run-heading { align-items: flex-start; padding: 14px; border-bottom: 1px solid var(--line); }
+.leave-run-heading > div, .leave-group-heading > div, .leave-history-group > div { min-width: 0; display: grid; gap: 3px; }
+.leave-run-note { flex: 0 0 auto; color: var(--faint); font-size: 12px; }
+.leave-run-row { padding: 12px 14px; border-bottom: 1px solid var(--line); }
+.leave-reason-summary > div:first-child { min-width: 0; }
+.leave-field-label { display: block; margin-bottom: 4px; color: var(--faint); font-size: 11.5px; }
+.leave-reason-summary p, .leave-message-block p { margin: 0; color: var(--secondary); font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; white-space: pre-wrap; }
+
+.leave-more { position: relative; flex: 0 0 auto; }
+.leave-more summary { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 4px; color: var(--muted); cursor: pointer; list-style: none; user-select: none; }
+.leave-more summary::-webkit-details-marker { display: none; }
+.leave-more summary:hover { background: var(--hover); color: var(--text); }
+.leave-more-menu { position: absolute; z-index: 5; top: calc(100% + 4px); right: 0; width: 190px; max-width: calc(100vw - 32px); display: grid; padding: 4px; border: 1px solid var(--line-strong); background: var(--surface); }
+.leave-more-menu button { min-width: 0; border: 0; background: transparent; padding: 8px 9px; text-align: left; color: var(--secondary); }
+.leave-more-menu button:hover { background: var(--hover); color: var(--text); }
+.leave-more-menu .leave-danger-action { color: var(--danger); }
+
+.leave-reason-editor { display: grid; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+.leave-reason-editor textarea { width: 100%; min-width: 0; resize: vertical; }
+.leave-inline-actions { display: flex; justify-content: flex-end; gap: 10px; }
+.leave-run-groups { border-bottom: 1px solid var(--line); }
+.leave-group { min-width: 0; padding: 11px 14px; }
+.leave-group + .leave-group { border-top: 1px solid var(--line); }
+.leave-group-heading strong { white-space: pre-line; }
+.leave-preview { margin-top: 9px; padding-top: 4px; border-top: 1px solid var(--line); }
+.leave-preview-row { padding: 7px 0; font-size: 13px; }
+.leave-preview-row span { min-width: 0; overflow-wrap: anywhere; }
+.leave-preview-row + .leave-preview-row { border-top: 1px solid var(--line); }
+
+.leave-message-block { padding: 12px 14px; border-bottom: 1px solid var(--line); }
+.leave-message-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 4px; }
+.leave-message-heading .leave-field-label { margin: 0; }
+.leave-run-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; }
+.leave-secondary-actions { min-width: 0; display: flex; flex-wrap: wrap; gap: 14px; }
+
+.leave-pending-heading { align-items: flex-end; }
+.leave-pending-heading > div { display: grid; gap: 3px; }
+.leave-pending-day + .leave-pending-day { margin-top: 18px; }
+.leave-pending-day h3 { margin: 0 0 7px; color: var(--secondary); font-size: 13px; font-weight: 560; }
+.leave-pending-group { padding: 10px 12px; }
+.leave-current-empty { margin-bottom: 28px; }
+
+.leave-history-list { overflow: hidden; }
+.leave-history-run + .leave-history-run { border-top: 1px solid var(--line); }
+.leave-history-run > summary { min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 11px 12px; cursor: pointer; list-style: none; }
+.leave-history-run > summary::-webkit-details-marker { display: none; }
+.leave-history-run > summary:hover { background: var(--hover); }
+.leave-history-run > summary > div { min-width: 0; display: grid; gap: 3px; }
+.leave-history-run > summary strong { overflow-wrap: anywhere; }
+.leave-history-chevron { flex: 0 0 auto; color: var(--faint); font-size: 18px; transition: transform 120ms ease; }
+.leave-history-run[open] .leave-history-chevron { transform: rotate(90deg); }
+.leave-history-detail { border-top: 1px solid var(--line); padding: 0 12px; }
+.leave-history-group { padding: 9px 0; }
+.leave-history-group + .leave-history-group { border-top: 1px solid var(--line); }
+
+@media (max-width: 768px) {
+  .leave-form-controls { grid-template-columns: minmax(138px, 1fr) minmax(230px, 1.5fr) auto; gap: 9px; }
 }
-
-.leave-error {
-  border-color: color-mix(in srgb, #c43d3d 45%, var(--line));
-}
-
-.leave-success {
-  border-color: color-mix(in srgb, #2f8f5b 45%, var(--line));
-}
-
-.leave-alert {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.leave-list,
-.leave-run,
-.leave-group,
-.leave-preview {
-  border-top: 1px solid var(--line);
-}
-
-.leave-row,
-.leave-run-heading,
-.leave-group-heading,
-.leave-preview-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.leave-row {
-  min-height: 58px;
-  padding: 10px 0;
-}
-
-.leave-row > div:first-child,
-.leave-run-heading > div,
-.leave-group-heading > div {
-  min-width: 0;
-  display: grid;
-  gap: 4px;
-}
-
-.leave-run {
-  padding: 16px 0 22px;
-}
-
-.leave-run-heading {
-  align-items: flex-start;
-  margin-bottom: 14px;
-}
-
-.leave-reason {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: end;
-  gap: 10px;
-  margin-bottom: 12px;
-}
-
-.leave-reason label {
-  display: grid;
-  gap: 6px;
-}
-
-.leave-reason textarea {
-  width: 100%;
-  resize: vertical;
-}
-
-.leave-group {
-  padding: 12px 0;
-}
-
-.leave-group-heading strong {
-  white-space: pre-line;
-}
-
-.leave-preview {
-  margin-top: 10px;
-}
-
-.leave-preview-row {
-  padding: 8px 0;
-  font-size: 13px;
-}
-
-.leave-preview-row + .leave-preview-row {
-  border-top: 1px solid var(--line);
-}
-
-.leave-message {
-  margin-top: 14px;
-  padding: 10px 0;
-  color: var(--muted);
-  font-size: 13px;
-  line-height: 1.65;
-}
-
-.leave-run-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.leave-run-sent {
-  opacity: 0.86;
-}
-
 @media (max-width: 520px) {
-  .leave-time-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .leave-row,
-  .leave-run-heading,
-  .leave-group-heading {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
-  .leave-reason {
-    grid-template-columns: 1fr;
-  }
-
-  .row-actions,
-  .leave-run-actions {
-    width: 100%;
-    display: flex;
-    flex-wrap: wrap;
-  }
-
-  .row-actions > *,
-  .leave-run-actions > * {
-    max-width: 100%;
-  }
+  .leave-view-tabs { gap: 16px; margin-bottom: 20px; }
+  .leave-form-controls { grid-template-columns: minmax(0, 1fr); }
+  .leave-time-pair { grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); }
+  .leave-submit { justify-self: start; }
+  .leave-inline-notice, .leave-current-empty, .leave-pending-heading, .leave-run-actions { align-items: flex-start; flex-direction: column; }
+  .leave-row, .leave-run-heading, .leave-group-heading, .leave-history-group { align-items: flex-start; }
+  .leave-secondary-actions { width: 100%; }
+  .leave-preview-row { gap: 10px; }
+  .leave-preview-row span:last-child { text-align: right; }
+  .leave-more-menu { width: min(190px, calc(100vw - 32px)); }
+}
+@media (max-width: 380px) {
+  .leave-time-pair { grid-template-columns: minmax(0, 1fr); }
+  .leave-time-arrow { display: none; }
+  .leave-row, .leave-group-heading, .leave-preview-row, .leave-history-group { flex-direction: column; }
+  .leave-preview-row span:last-child { text-align: left; }
 }
 </style>

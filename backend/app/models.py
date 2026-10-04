@@ -24,7 +24,8 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .db import Base
 
 
-ROLE_VALUES = ("admin", "manager", "member")
+ROLE_VALUES = ("admin", "member")
+TEAM_GROUP_VALUES = ("electrical", "mechanical", "vision", "ai", "operations")
 MEMBER_STATUS_VALUES = ("invited", "active", "disabled")
 TASK_STATUS_VALUES = ("todo", "doing", "done")
 SCHOOL_LEAVE_REQUEST_STATUS_VALUES = ("pending", "included", "withdrawn")
@@ -61,18 +62,38 @@ item_fact_tasks = Table(
 class Member(Base):
     __tablename__ = "members"
     __table_args__ = (
-        CheckConstraint("role IN ('admin','manager','member')", name="ck_members_role"),
+        CheckConstraint("role IN ('admin','member')", name="ck_members_role"),
         CheckConstraint("status IN ('invited','active','disabled')", name="ck_members_status"),
+        CheckConstraint(
+            "team_group IS NULL OR team_group IN ('electrical','mechanical','vision','ai','operations')",
+            name="ck_members_team_group",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(100))
     email: Mapped[str] = mapped_column(String(255), unique=True)
     student_id: Mapped[str | None] = mapped_column(String(50), nullable=True, unique=True)
+    team_group: Mapped[str | None] = mapped_column(String(20), nullable=True)
     password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
     role: Mapped[str] = mapped_column(String(20), default="member")
     status: Mapped[str] = mapped_column(String(20), default="invited")
     created_at: Mapped[datetime] = mapped_column(DateTime(), server_default=func.now())
+
+
+class TeamRegistrationWindow(Base):
+    __tablename__ = "team_registration_windows"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(), nullable=False)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(), nullable=True)
+    created_by: Mapped[int | None] = mapped_column(
+        ForeignKey("members.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(), server_default=func.now())
+
+    creator: Mapped[Member | None] = relationship()
 
 
 class Invitation(Base):

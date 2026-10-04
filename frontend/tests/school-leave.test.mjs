@@ -153,12 +153,13 @@ assert.match(api, /method: "DELETE"/)
 assert.doesNotMatch(types, /send_message/)
 assert.doesNotMatch(types, /interface MemberSummary \{[^}]*student_id/s)
 
-// Student id remains editable only through personal/admin member flows.
-assert.match(app, /updateMeStudentId/)
-assert.doesNotMatch(team, /updateStudentId/)
-assert.match(memberDetail, /updateStudentId/)
+// School/team profile fields remain editable only through personal/admin member flows.
+assert.match(app, /updateMeProfile/)
+assert.doesNotMatch(team, /updateProfile/)
+assert.match(memberDetail, /updateProfile/)
 assert.match(api, /\/api\/auth\/me/)
-assert.match(api, /\/api\/members\/\$\{memberId\}\/student-id/)
+assert.match(api, /\/api\/members\/\$\{memberId\}\/profile/)
 assert.match(types, /student_id: string \| null/)
+assert.match(types, /team_group: TeamGroup \| null/)
 
 console.log("School Leave delivery and history controls frontend tests passed")

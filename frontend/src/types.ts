@@ -8,6 +8,7 @@ export interface Member {
   id: number
   name: string
   email: string
+  student_id: string | null
   role: Role
   status: MemberStatus
   created_at: string
@@ -117,6 +118,57 @@ export interface InvitationInfo {
   name: string
   email: string
   expires_at: string
+}
+
+export type SchoolLeaveRequestStatus = "pending" | "included" | "withdrawn"
+export type SchoolLeaveRunStatus = "ready" | "sent" | "cancelled"
+
+export interface SchoolLeaveRequest {
+  id: number
+  member_id: number
+  start_at: string
+  end_at: string
+  member_name_snapshot: string
+  student_id_snapshot: string
+  status: SchoolLeaveRequestStatus
+  run_id: number | null
+  created_at: string
+  updated_at: string
+}
+
+export interface SchoolLeaveGroupMember {
+  member_id: number
+  name: string
+  student_id: string
+}
+
+export interface SchoolLeaveGroup {
+  index: number
+  start_at: string
+  end_at: string
+  time_text: string
+  count: number
+  members: SchoolLeaveGroupMember[]
+}
+
+export interface SchoolLeaveRun {
+  id: number
+  collected_at: string
+  created_by: MemberSummary | null
+  reason: string
+  status: SchoolLeaveRunStatus
+  sent_at: string | null
+  sent_by: MemberSummary | null
+  request_count: number
+  member_count: number
+  groups: SchoolLeaveGroup[]
+  send_message: string
+  document_ready: boolean
+}
+
+export interface SchoolLeaveAdminConfig {
+  daily_cutoff: string
+  contact_phone_configured: boolean
 }
 
 export interface AIPlannerAccess { available: boolean }

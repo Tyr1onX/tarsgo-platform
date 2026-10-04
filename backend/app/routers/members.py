@@ -2,12 +2,13 @@ from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..auth import hash_token, new_token, require_admin, utcnow
 from ..db import get_db
 from ..models import Invitation, LoginSession, Member
-from ..schemas import InviteCreate, InviteOut, MemberOut
+from ..schemas import InviteCreate, InviteOut, MemberOut, MemberStudentIDUpdate
 
 router = APIRouter(prefix="/api/members", tags=["members"])
 INVITATION_TTL = timedelta(days=7)
@@ -62,6 +63,26 @@ def regenerate_invitation(
     if member.status != "invited":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="只有待激活成员可以重新生成邀请")
     return _create_invitation(db, member)
+
+
+@router.patch("/{member_id}/student-id", response_model=MemberOut)
+def update_member_student_id(
+    member_id: int,
+    payload: MemberStudentIDUpdate,
+    _: Member = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> Member:
+    member = db.get(Member, member_id)
+    if not member:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="成员不存在")
+    member.student_id = payload.student_id
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="该学号已被使用") from exc
+    db.refresh(member)
+    return member
 
 
 @router.post("/{member_id}/disable", response_model=MemberOut)

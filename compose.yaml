@@ -39,6 +39,8 @@ services:
       KNOWLEDGE_GITHUB_TOKEN: ${KNOWLEDGE_GITHUB_TOKEN:-}
       KNOWLEDGE_GITHUB_PATHS: ${KNOWLEDGE_GITHUB_PATHS:-docs,knowledge}
       KNOWLEDGE_STORAGE_DIR: /opt/tarsgo-knowledge
+      LEAVE_CONTACT_PHONE: ${LEAVE_CONTACT_PHONE:-}
+      LEAVE_DAILY_CUTOFF: ${LEAVE_DAILY_CUTOFF:-11:30}
     volumes:
       - ${KNOWLEDGE_STORAGE_HOST_DIR:-/opt/tarsgo-knowledge}:/opt/tarsgo-knowledge
     depends_on:

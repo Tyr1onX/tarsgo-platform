@@ -60,6 +60,11 @@ const KnowledgePage = defineAsyncComponent({
   loadingComponent: LocalPageLoading,
   delay: 120,
 })
+const SchoolLeavePage = defineAsyncComponent({
+  loader: () => import("./pages/SchoolLeavePage.vue"),
+  loadingComponent: LocalPageLoading,
+  delay: 120,
+})
 const user = ref<Member | null>(null)
 const loading = ref(true)
 const initialRouteResolved = ref(false)
@@ -72,6 +77,8 @@ let feedbackTimer: number | undefined
 
 const loginEmail = ref("")
 const loginPassword = ref("")
+const studentIdDraft = ref("")
+const studentIdSaving = ref(false)
 
 const invitation = ref<InvitationInfo | null>(null)
 const invitePassword = ref("")
@@ -892,6 +899,7 @@ async function loadKnowledgeDocuments() {
 async function loadCurrentUser() {
   try {
     user.value = await api.me()
+    studentIdDraft.value = user.value.student_id ?? ""
     await loadPlannerAccess()
   } catch (reason) {
     if (reason instanceof ApiError && reason.status === 401) {
@@ -989,8 +997,10 @@ async function loadRoute() {
       }
       members.value = await api.members()
       if (!isCurrentLoad()) return
+    } else if (routePath === "/leave") {
+      // The leave page loads its own independent workflow data.
     } else if (routePath === "/me") {
-      // Current user data is already sufficient.
+      studentIdDraft.value = user.value?.student_id ?? ""
     } else {
       routeNotFound.value = true
     }
@@ -1104,6 +1114,32 @@ async function enableMember(memberId: number) {
     replaceMemberInState(await api.enableMember(memberId))
   } catch (reason) {
     error.value = messageOf(reason)
+  }
+}
+
+async function updateMemberStudentId(payload: { memberId: number; studentId: string }) {
+  error.value = ""
+  try {
+    replaceMemberInState(await api.updateMemberStudentId(payload.memberId, payload.studentId.trim() || null))
+    notice.value = "学号已更新"
+  } catch (reason) {
+    error.value = messageOf(reason)
+  }
+}
+
+async function saveMyStudentId() {
+  if (!user.value || studentIdSaving.value) return
+  error.value = ""
+  notice.value = ""
+  studentIdSaving.value = true
+  try {
+    user.value = await api.updateMeStudentId(studentIdDraft.value.trim() || null)
+    studentIdDraft.value = user.value.student_id ?? ""
+    notice.value = "学号已保存"
+  } catch (reason) {
+    error.value = messageOf(reason)
+  } finally {
+    studentIdSaving.value = false
   }
 }
 
@@ -2141,6 +2177,9 @@ onBeforeUnmount(() => {
         <button :class="{ active: path === '/' }" type="button" @click="navigate('/')">Base</button>
         <button :class="{ active: path.startsWith('/tasks') }" type="button" @click="navigateTasks('mine')">
           任务
+        </button>
+        <button :class="{ active: path === '/leave' }" type="button" @click="navigate('/leave')">
+          请假
         </button>
         <button
           v-if="isAdmin"
@@ -3381,8 +3420,21 @@ onBeforeUnmount(() => {
           <strong>{{ user?.name }}</strong>
           <span>{{ user?.email }}</span>
           <small>{{ user ? roleLabels[user.role] : "" }}</small>
+          <form class="profile-student-id" @submit.prevent="saveMyStudentId">
+            <label>
+              学号
+              <input v-model="studentIdDraft" maxlength="50" autocomplete="off" placeholder="填写学号" />
+            </label>
+            <button type="submit" :disabled="studentIdSaving">
+              {{ studentIdSaving ? "保存中…" : "保存" }}
+            </button>
+          </form>
         </section>
         <button class="secondary full" type="button" @click="logout">退出登录</button>
+      </template>
+
+      <template v-else-if="path === '/leave'">
+        <SchoolLeavePage v-if="user" :current-user="user" @navigate="navigate" />
       </template>
 
       <template v-else-if="path === '/team'">
@@ -3396,6 +3448,7 @@ onBeforeUnmount(() => {
           @regenerate-invite="regenerateInvite"
           @disable-member="disableMember"
           @enable-member="enableMember"
+          @update-student-id="updateMemberStudentId"
           @copy-invite="copyInvite"
           @navigate="navigate"
         />
@@ -3420,12 +3473,13 @@ onBeforeUnmount(() => {
     <nav
       class="bottom-nav"
       aria-label="主导航"
-      :style="{ gridTemplateColumns: `repeat(${isAdmin ? 4 : 3}, 1fr)` }"
+      :style="{ gridTemplateColumns: `repeat(${isAdmin ? 5 : 4}, 1fr)` }"
     >
       <button :class="{ active: path === '/' }" type="button" @click="navigate('/')">Base</button>
       <button :class="{ active: path.startsWith('/tasks') }" type="button" @click="navigateTasks('mine')">
         任务
       </button>
+      <button :class="{ active: path === '/leave' }" type="button" @click="navigate('/leave')">请假</button>
       <button
         v-if="isAdmin"
         :class="{ active: path === '/team' }"

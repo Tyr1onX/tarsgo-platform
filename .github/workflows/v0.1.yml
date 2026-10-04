@@ -36,6 +36,8 @@ jobs:
           KNOWLEDGE_GITHUB_TOKEN=
           KNOWLEDGE_GITHUB_PATHS=docs,knowledge
           KNOWLEDGE_STORAGE_HOST_DIR=/tmp/tarsgo-knowledge-ci
+          LEAVE_CONTACT_PHONE=000-0000-0000
+          LEAVE_DAILY_CUTOFF=11:30
           EOF
           echo "CI_ADMIN_PASSWORD=$ADMIN_PASSWORD" >> "$GITHUB_ENV"
           echo "CI_MYSQL_PASSWORD=$MYSQL_PASSWORD" >> "$GITHUB_ENV"
@@ -84,6 +86,12 @@ jobs:
           test "$DEADLINE_NULLABLE" = "YES"
           LEGACY_DEADLINE="$(docker compose exec -T db mysql -uroot -p"$CI_MYSQL_ROOT_PASSWORD" -N -B tarsgo_migration -e "SELECT DATE_FORMAT(deadline, '%Y-%m-%d %H:%i:%s') FROM tasks WHERE id = 100")"
           test "$LEGACY_DEADLINE" = "2026-09-20 18:00:00"
+          STUDENT_ID_NULLABLE="$(docker compose exec -T db mysql -uroot -p"$CI_MYSQL_ROOT_PASSWORD" -N -B -e "SELECT IS_NULLABLE FROM information_schema.columns WHERE table_schema = 'tarsgo_migration' AND table_name = 'members' AND column_name = 'student_id'")"
+          test "$STUDENT_ID_NULLABLE" = "YES"
+          LEGACY_STUDENT_IDS="$(docker compose exec -T db mysql -uroot -p"$CI_MYSQL_ROOT_PASSWORD" -N -B tarsgo_migration -e "SELECT COUNT(*) FROM members WHERE id IN (100, 101) AND student_id IS NULL")"
+          test "$LEGACY_STUDENT_IDS" = "2"
+          LEAVE_TABLES="$(docker compose exec -T db mysql -uroot -p"$CI_MYSQL_ROOT_PASSWORD" -N -B -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'tarsgo_migration' AND table_name IN ('school_leave_requests', 'school_leave_runs')")"
+          test "$LEAVE_TABLES" = "2"
           RESULT="$(docker compose exec -T db mysql -uroot -p"$CI_MYSQL_ROOT_PASSWORD" -N -B tarsgo_migration -e "
             SELECT CONCAT(
               owner_id, '|',
@@ -144,6 +152,12 @@ jobs:
 
       - name: Verify root item deletion
         run: docker compose exec -T api python -m tests.test_root_task_deletion
+
+      - name: Verify school leave workflow
+        run: docker compose exec -T api python -m tests.test_school_leave
+
+      - name: Verify school leave timer installer syntax
+        run: bash -n scripts/install_school_leave_timer.sh
 
       - name: Verify AI planner
         run: docker compose exec -T api python -m tests.test_ai_planner

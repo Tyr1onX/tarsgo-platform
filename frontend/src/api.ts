@@ -17,6 +17,9 @@ import type {
   KnowledgeDocument,
   KnowledgeSyncSummary,
   Role,
+  SchoolLeaveAdminConfig,
+  SchoolLeaveRequest,
+  SchoolLeaveRun,
   Task,
   TaskDetailContext,
   TaskProgressResult,
@@ -74,6 +77,8 @@ export interface TaskPayload {
 
 export const api = {
   me: () => request<Member>("/api/auth/me"),
+  updateMeStudentId: (studentId: string | null) =>
+    request<Member>("/api/auth/me", { method: "PATCH", body: JSON.stringify({ student_id: studentId }) }),
   login: (email: string, password: string) =>
     request<Member>("/api/auth/login", { method: "POST", body: JSON.stringify({ email, password }) }),
   logout: () => request<void>("/api/auth/logout", { method: "POST" }),
@@ -94,6 +99,38 @@ export const api = {
   regenerateInvite: (memberId: number) => request<InviteResult>(`/api/members/${memberId}/invite`, { method: "POST" }),
   disableMember: (memberId: number) => request<Member>(`/api/members/${memberId}/disable`, { method: "POST" }),
   enableMember: (memberId: number) => request<Member>(`/api/members/${memberId}/enable`, { method: "POST" }),
+  updateMemberStudentId: (memberId: number, studentId: string | null) =>
+    request<Member>(`/api/members/${memberId}/student-id`, {
+      method: "PATCH",
+      body: JSON.stringify({ student_id: studentId }),
+    }),
+
+  schoolLeaveRequests: () => request<SchoolLeaveRequest[]>("/api/school-leave/requests"),
+  createSchoolLeaveRequest: (startAt: string, endAt: string) =>
+    request<SchoolLeaveRequest>("/api/school-leave/requests", {
+      method: "POST",
+      body: JSON.stringify({ start_at: startAt, end_at: endAt }),
+    }),
+  updateSchoolLeaveRequest: (requestId: number, startAt: string, endAt: string) =>
+    request<SchoolLeaveRequest>(`/api/school-leave/requests/${requestId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ start_at: startAt, end_at: endAt }),
+    }),
+  withdrawSchoolLeaveRequest: (requestId: number) =>
+    request<SchoolLeaveRequest>(`/api/school-leave/requests/${requestId}/withdraw`, { method: "POST" }),
+  schoolLeaveAdminConfig: () => request<SchoolLeaveAdminConfig>("/api/school-leave/admin/config"),
+  schoolLeaveAdminRequests: () => request<SchoolLeaveRequest[]>("/api/school-leave/admin/requests"),
+  schoolLeaveRuns: () => request<SchoolLeaveRun[]>("/api/school-leave/admin/runs"),
+  collectSchoolLeave: () => request<SchoolLeaveRun | null>("/api/school-leave/admin/runs/collect", { method: "POST" }),
+  updateSchoolLeaveRunReason: (runId: number, reason: string) =>
+    request<SchoolLeaveRun>(`/api/school-leave/admin/runs/${runId}/reason`, {
+      method: "PATCH",
+      body: JSON.stringify({ reason }),
+    }),
+  cancelSchoolLeaveRun: (runId: number) =>
+    request<SchoolLeaveRun>(`/api/school-leave/admin/runs/${runId}/cancel`, { method: "POST" }),
+  markSchoolLeaveRunSent: (runId: number) =>
+    request<SchoolLeaveRun>(`/api/school-leave/admin/runs/${runId}/sent`, { method: "POST" }),
 
   aiPlannerAccess: () => request<AIPlannerAccess>("/api/ai/planner/access"),
   generateAIPlan: (payload: AIPlannerInput) =>

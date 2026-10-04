@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Response, status
 from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..auth import (
@@ -13,7 +14,7 @@ from ..auth import (
 )
 from ..db import get_db
 from ..models import LoginSession, Member
-from ..schemas import LoginIn, MemberOut
+from ..schemas import LoginIn, MemberOut, MemberStudentIDUpdate
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -47,4 +48,20 @@ def logout(
 
 @router.get("/me", response_model=MemberOut)
 def me(member: Member = Depends(get_current_member)) -> Member:
+    return member
+
+
+@router.patch("/me", response_model=MemberOut)
+def update_me(
+    payload: MemberStudentIDUpdate,
+    member: Member = Depends(get_current_member),
+    db: Session = Depends(get_db),
+) -> Member:
+    member.student_id = payload.student_id
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="该学号已被使用") from exc
+    db.refresh(member)
     return member

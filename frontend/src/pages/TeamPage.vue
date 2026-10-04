@@ -15,6 +15,7 @@ const emit = defineEmits<{
   regenerateInvite: [memberId: number]
   disableMember: [memberId: number]
   enableMember: [memberId: number]
+  updateStudentId: [payload: { memberId: number; studentId: string }]
   copyInvite: []
   navigate: [path: string]
 }>()
@@ -22,6 +23,17 @@ const emit = defineEmits<{
 const memberName = ref("")
 const memberEmail = ref("")
 const memberRole = ref<Role>("member")
+const studentIdDrafts = ref<Record<number, string>>({})
+
+watch(
+  () => props.members,
+  (members) => {
+    studentIdDrafts.value = Object.fromEntries(
+      members.map((member) => [member.id, member.student_id ?? ""]),
+    )
+  },
+  { immediate: true },
+)
 
 watch(() => props.latestInvite, (invite) => {
   if (!invite) return
@@ -77,6 +89,20 @@ function submitInvite() {
           <strong>{{ member.name }}</strong>
           <span>{{ member.email }}</span>
           <small>{{ roleLabels[member.role] }} · {{ member.status }}</small>
+          <label class="member-student-id">
+            学号
+            <input
+              v-model="studentIdDrafts[member.id]"
+              maxlength="50"
+              autocomplete="off"
+              placeholder="未填写"
+            />
+            <button
+              type="button"
+              :disabled="(studentIdDrafts[member.id] ?? '').trim() === (member.student_id ?? '')"
+              @click="emit('updateStudentId', { memberId: member.id, studentId: studentIdDrafts[member.id] ?? '' })"
+            >保存</button>
+          </label>
         </div>
         <div class="row-actions">
           <button v-if="member.status === 'invited'" type="button" @click="emit('regenerateInvite', member.id)">
@@ -96,3 +122,25 @@ function submitInvite() {
     </div>
   </section>
 </template>
+
+<style scoped>
+.member-student-id {
+  display: grid;
+  grid-template-columns: auto minmax(110px, 160px) auto;
+  align-items: center;
+  gap: 8px;
+  margin-top: 7px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.member-student-id input {
+  min-width: 0;
+}
+
+@media (max-width: 520px) {
+  .member-student-id {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+}
+</style>

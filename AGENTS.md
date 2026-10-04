@@ -68,7 +68,9 @@ Continue evolving Task as the item / execution-task source of truth. The shared-
 
 The V0.2 second-stage first slice adds an active-admin AI draft planner and transactional batch confirmation. Knowledge Source V0.1 adds read-only GitHub sync, admin document uploads, local text extraction and bounded keyword retrieval for the planner. Shared Execution Scene adds linked progress history, deterministic status aggregation, bounded fact suggestions and same-item dependencies. Keep these slices simple: no embeddings, vector database, multi-agent flow, auto-summarization or writeback to GitHub.
 
-Do not expand these slices into cross-item dependencies, automatic scheduling, member recommendation, time-conflict algorithms, workload algorithms, notifications, task comments/files, leave, weekly reports, technical R&D workflows, complex dashboards or complex organization structures.
+Do not expand these slices into cross-item dependencies, automatic scheduling, member recommendation, time-conflict algorithms, workload algorithms, notifications, task comments/files, weekly reports, technical R&D workflows, complex dashboards or complex organization structures.
+
+School Leave v1 is a separate school-material workflow, not Task state. It collects exact member leave intervals, freezes them into deterministic batches, groups only identical start/end times, generates DOCX/ZIP in memory for admins, and stops at manual teacher messaging. Do not connect it to task attendance, AI, notifications or automatic messaging.
 
 ## Task model boundary
 
@@ -236,7 +238,7 @@ Do not add controller/service/repository/facade layers without a concrete bounda
 
 The frontend intentionally has no UI framework, router library or state-management library.
 
-Primary routes are /login, /invite/:token, /, /tasks, /tasks/:id, /team and /me. /ai-planner is an active-admin-only workflow entry and /knowledge is an admin-only management page; neither becomes a global navigation destination.
+Primary routes are /login, /invite/:token, /, /tasks, /tasks/:id, /leave, /team and /me. /ai-planner is an active-admin-only workflow entry and /knowledge is an admin-only management page; neither becomes a global navigation destination.
 
 Keep one task entry: /tasks.
 

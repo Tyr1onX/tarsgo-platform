@@ -27,6 +27,8 @@ from .db import Base
 ROLE_VALUES = ("admin", "manager", "member")
 MEMBER_STATUS_VALUES = ("invited", "active", "disabled")
 TASK_STATUS_VALUES = ("todo", "doing", "done")
+SCHOOL_LEAVE_REQUEST_STATUS_VALUES = ("pending", "included", "withdrawn")
+SCHOOL_LEAVE_RUN_STATUS_VALUES = ("ready", "sent", "cancelled")
 
 
 task_collaborators = Table(
@@ -66,6 +68,7 @@ class Member(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(100))
     email: Mapped[str] = mapped_column(String(255), unique=True)
+    student_id: Mapped[str | None] = mapped_column(String(50), nullable=True, unique=True)
     password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
     role: Mapped[str] = mapped_column(String(20), default="member")
     status: Mapped[str] = mapped_column(String(20), default="invited")
@@ -94,6 +97,62 @@ class LoginSession(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(), server_default=func.now())
 
     member: Mapped[Member] = relationship()
+
+
+class SchoolLeaveRun(Base):
+    __tablename__ = "school_leave_runs"
+    __table_args__ = (
+        CheckConstraint("status IN ('ready','sent','cancelled')", name="ck_school_leave_runs_status"),
+        Index("ix_school_leave_runs_status_collected", "status", "collected_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    collected_at: Mapped[datetime] = mapped_column(DateTime(), nullable=False)
+    created_by: Mapped[int | None] = mapped_column(
+        ForeignKey("members.id", ondelete="SET NULL"), nullable=True
+    )
+    reason: Mapped[str] = mapped_column(Text(), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="ready", nullable=False)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(), nullable=True)
+    sent_by: Mapped[int | None] = mapped_column(
+        ForeignKey("members.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(), server_default=func.now(), nullable=False)
+
+    creator: Mapped[Member | None] = relationship(foreign_keys=[created_by])
+    sender: Mapped[Member | None] = relationship(foreign_keys=[sent_by])
+    requests: Mapped[list["SchoolLeaveRequest"]] = relationship(
+        back_populates="run", order_by="SchoolLeaveRequest.id"
+    )
+
+
+class SchoolLeaveRequest(Base):
+    __tablename__ = "school_leave_requests"
+    __table_args__ = (
+        CheckConstraint("status IN ('pending','included','withdrawn')", name="ck_school_leave_requests_status"),
+        CheckConstraint("start_at < end_at", name="ck_school_leave_requests_time_order"),
+        Index("ix_school_leave_requests_status_created", "status", "created_at"),
+        Index("ix_school_leave_requests_run", "run_id"),
+        Index("ix_school_leave_requests_member_created", "member_id", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    member_id: Mapped[int] = mapped_column(ForeignKey("members.id"), nullable=False)
+    start_at: Mapped[datetime] = mapped_column(DateTime(), nullable=False)
+    end_at: Mapped[datetime] = mapped_column(DateTime(), nullable=False)
+    member_name_snapshot: Mapped[str] = mapped_column(String(100), nullable=False)
+    student_id_snapshot: Mapped[str] = mapped_column(String(50), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="pending", nullable=False)
+    run_id: Mapped[int | None] = mapped_column(
+        ForeignKey("school_leave_runs.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    member: Mapped[Member] = relationship(foreign_keys=[member_id])
+    run: Mapped[SchoolLeaveRun | None] = relationship(back_populates="requests")
 
 
 class Task(Base):

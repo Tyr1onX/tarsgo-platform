@@ -6,6 +6,8 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_vali
 Role = Literal["admin", "manager", "member"]
 MemberStatus = Literal["invited", "active", "disabled"]
 TaskStatus = Literal["todo", "doing", "done"]
+SchoolLeaveRequestStatus = Literal["pending", "included", "withdrawn"]
+SchoolLeaveRunStatus = Literal["ready", "sent", "cancelled"]
 ItemFactScope = Literal["global", "related"]
 TaskDetailText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=240)]
 ContextFactText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)]
@@ -53,6 +55,7 @@ class MemberOut(BaseModel):
     id: int
     name: str
     email: str
+    student_id: str | None = None
     role: Role
     status: MemberStatus
     created_at: datetime
@@ -97,6 +100,108 @@ class MemberSummary(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
     name: str
+
+
+class MemberStudentIDUpdate(BaseModel):
+    student_id: str | None = Field(default=None, max_length=50)
+
+    @field_validator("student_id")
+    @classmethod
+    def normalize_student_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        return value or None
+
+
+def _normalize_school_leave_datetime(value: datetime) -> datetime:
+    if value.tzinfo is not None:
+        raise ValueError("请使用学校所在地的明确本地时间，不要包含时区偏移")
+    value = value.replace(second=0, microsecond=0)
+    if value.minute % 5 != 0:
+        raise ValueError("请假时间请按 5 分钟粒度填写")
+    return value
+
+
+class SchoolLeaveRequestCreate(BaseModel):
+    start_at: datetime
+    end_at: datetime
+
+    @field_validator("start_at", "end_at")
+    @classmethod
+    def normalize_time(cls, value: datetime) -> datetime:
+        return _normalize_school_leave_datetime(value)
+
+    @model_validator(mode="after")
+    def validate_order(self):
+        if self.start_at >= self.end_at:
+            raise ValueError("开始时间必须早于结束时间")
+        return self
+
+
+class SchoolLeaveRequestUpdate(SchoolLeaveRequestCreate):
+    pass
+
+
+class SchoolLeaveRequestOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    member_id: int
+    start_at: datetime
+    end_at: datetime
+    member_name_snapshot: str
+    student_id_snapshot: str
+    status: SchoolLeaveRequestStatus
+    run_id: int | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class SchoolLeaveReasonUpdate(BaseModel):
+    reason: str = Field(min_length=1, max_length=500)
+
+    @field_validator("reason")
+    @classmethod
+    def clean_reason(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("请假事由不能为空")
+        return value
+
+
+class SchoolLeaveGroupMemberOut(BaseModel):
+    member_id: int
+    name: str
+    student_id: str
+
+
+class SchoolLeaveGroupOut(BaseModel):
+    index: int
+    start_at: datetime
+    end_at: datetime
+    time_text: str
+    count: int
+    members: list[SchoolLeaveGroupMemberOut]
+
+
+class SchoolLeaveRunOut(BaseModel):
+    id: int
+    collected_at: datetime
+    created_by: MemberSummary | None
+    reason: str
+    status: SchoolLeaveRunStatus
+    sent_at: datetime | None
+    sent_by: MemberSummary | None
+    request_count: int
+    member_count: int
+    groups: list[SchoolLeaveGroupOut]
+    send_message: str
+    document_ready: bool
+
+
+class SchoolLeaveAdminConfigOut(BaseModel):
+    daily_cutoff: str
+    contact_phone_configured: bool
 
 
 class TaskCreate(BaseModel):

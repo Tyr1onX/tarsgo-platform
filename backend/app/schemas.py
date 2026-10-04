@@ -113,6 +113,7 @@ class TeamRegistrationWindowOpenOut(TeamRegistrationWindowOut):
 
 
 class TeamRegistrationIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     name: str = Field(min_length=1, max_length=100)
     email: str = Field(min_length=3, max_length=255)
     student_id: str = Field(min_length=1, max_length=50)

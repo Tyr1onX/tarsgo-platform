@@ -89,9 +89,8 @@ def main() -> None:
     with SessionLocal() as db:
         assert planner_router.DAILY_REQUEST_LIMIT == 100
         admin = db.scalar(select(Member).where(Member.email == "admin@example.com"))
-        manager = db.scalar(select(Member).where(Member.email == "manager@example.com"))
         member = db.scalar(select(Member).where(Member.role == "member", Member.status == "active").order_by(Member.id).limit(1))
-        assert admin is not None and manager is not None and member is not None
+        assert admin is not None and member is not None
         os.environ.update({
             "AI_PLANNER_ENABLED": "true",
             "AI_API_KEY": "ci-placeholder",
@@ -117,12 +116,12 @@ def main() -> None:
         )
         assert anonymous_upload.status_code == 401
 
-        manager_upload = UploadFile(filename="event.txt", file=io.BytesIO(b"event details"))
+        member_upload = UploadFile(filename="event.txt", file=io.BytesIO(b"event details"))
         expect_http(
             403,
-            lambda: planner_router.extract_planner_material(file=manager_upload, current=manager),
+            lambda: planner_router.extract_planner_material(file=member_upload, current=member),
         )
-        assert manager_upload.file.closed
+        assert member_upload.file.closed
 
         documents_before = db.scalar(select(func.count(KnowledgeDocument.id))) or 0
         planner_upload = UploadFile(
@@ -160,7 +159,7 @@ def main() -> None:
         inactive_admin = Member(name="停用管理员", email="inactive-ai-admin@example.com", password_hash=None, role="admin", status="disabled")
         assert planner_access_for(admin)
         assert planner_access_for(extra_admin)
-        assert not planner_access_for(manager)
+        assert not planner_access_for(member)
         assert not planner_access_for(member)
         assert not planner_access_for(inactive_admin)
 
@@ -170,7 +169,7 @@ def main() -> None:
             "GEMINI_MODEL": "gemini-3.8-flash",
         }):
             assert planner_access_for(admin)
-            assert not planner_access_for(manager)
+            assert not planner_access_for(member)
             with patch.dict(os.environ, {"GEMINI_API_KEY": ""}):
                 assert not planner_access_for(admin)
                 expect_http(
@@ -178,7 +177,7 @@ def main() -> None:
                     lambda: planner_router.generate_plan(request, current=admin, db=db, provider=FakeProvider()),
                 )
 
-        expect_http(403, lambda: planner_router.generate_plan(request, current=manager, db=db, provider=FakeProvider()))
+        expect_http(403, lambda: planner_router.generate_plan(request, current=member, db=db, provider=FakeProvider()))
         expect_http(403, lambda: planner_router.generate_plan(request, current=member, db=db, provider=FakeProvider()))
         expect_http(403, lambda: planner_router.generate_plan(request, current=inactive_admin, db=db, provider=FakeProvider()))
         extra_admin_generate = FakeProvider()
@@ -282,7 +281,7 @@ def main() -> None:
             draft=draft,
             instruction="检查遗漏",
         )
-        expect_http(403, lambda: planner_router.refine_plan(denied_refine, current=manager, db=db, provider=FakeProvider()))
+        expect_http(403, lambda: planner_router.refine_plan(denied_refine, current=member, db=db, provider=FakeProvider()))
         expect_http(403, lambda: planner_router.refine_plan(denied_refine, current=member, db=db, provider=FakeProvider()))
         expect_http(403, lambda: planner_router.refine_plan(denied_refine, current=inactive_admin, db=db, provider=FakeProvider()))
         extra_admin_refine = FakeProvider()

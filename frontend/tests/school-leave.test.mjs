@@ -105,13 +105,20 @@ assert.match(historySection, />\s*删除记录\s*<\/button>/)
 assert.match(historySection, /deleteRun\(run, \$event\)/)
 assert.doesNotMatch(page, /runs\.value\.filter\(\(item\) => item\.status === "cancelled"\)/)
 
-// Delete confirmation states destructive scope, then reloads data without changing admin view or page.
+// Delete confirmation states destructive scope, removes the confirmed record locally after DELETE succeeds, then reloads.
 const deleteBody = page.match(/async function deleteRun\([^]*?\n}/)?.[0] ?? ""
 assert.match(deleteBody, /删除这条发送记录？/)
 assert.match(deleteBody, /run\.request_count/)
 assert.match(deleteBody, /此操作不可恢复/)
 assert.match(deleteBody, /api\.deleteSchoolLeaveRun\(run\.id\)/)
+assert.match(deleteBody, /runs\.value = runs\.value\.filter\(\(item\) => item\.id !== run\.id\)/)
 assert.match(deleteBody, /await load\(\)/)
+assert.ok(
+  deleteBody.indexOf("await api.deleteSchoolLeaveRun(run.id)") <
+    deleteBody.indexOf("runs.value = runs.value.filter((item) => item.id !== run.id)") &&
+    deleteBody.indexOf("runs.value = runs.value.filter((item) => item.id !== run.id)") <
+      deleteBody.indexOf("await load()"),
+)
 assert.doesNotMatch(deleteBody, /activeView\.value\s*=/)
 assert.doesNotMatch(deleteBody, /window\.location\.reload|scrollTo/)
 

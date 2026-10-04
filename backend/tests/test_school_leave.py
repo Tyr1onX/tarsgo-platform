@@ -14,7 +14,7 @@ from app.auth import get_current_member
 from app.db import SessionLocal, get_db
 from app.main import app
 from app.models import Member, SchoolLeaveRequest, SchoolLeaveRun
-from app.school_leave import collect_pending_school_leave
+from app.school_leave import SCHOOL_LEAVE_TEMPLATE_PATH, collect_pending_school_leave
 
 
 TEST_EMAILS = (
@@ -336,13 +336,28 @@ def main() -> None:
             rendered = docx_text(doc_response.content)
             assert rendered.count("请假条") == 3
             assert reason in rendered
+            assert "以下学生因参加" in rendered
+            assert "不能参加下午课程，特此证明。" in rendered
             assert "2026 年 10 月 8 日 13:00 至 17:00" in rendered
             assert "2026 年 10 月 8 日 15:00 至 17:00" in rendered
             assert "2026 年 10 月 8 日 18:00 至 19:00" in rendered
             assert "联系电话：000-0000-0000" in rendered
             document = open_docx(doc_response.content)
+            template_document = Document(SCHOOL_LEAVE_TEMPLATE_PATH)
             assert len(document.tables) == 3
             assert docx_page_break_count(doc_response.content) == 2
+            assert document.sections[0].top_margin == template_document.sections[0].top_margin
+            assert document.sections[0].bottom_margin == template_document.sections[0].bottom_margin
+            assert document.sections[0].left_margin == template_document.sections[0].left_margin
+            assert document.sections[0].right_margin == template_document.sections[0].right_margin
+            assert document.tables[0].autofit == template_document.tables[0].autofit
+            assert [
+                cell._tc.tcPr.tcW.w for cell in document.tables[0].rows[0].cells
+            ] == [
+                cell._tc.tcPr.tcW.w for cell in template_document.tables[0].rows[0].cells
+            ]
+            assert [cell.text for cell in document.tables[0].rows[0].cells] == ["姓名", "学号"]
+            assert len(document.tables[0].rows) == 3
             first_group = table_text(document, 0)
             second_group = table_text(document, 1)
             third_group = table_text(document, 2)
@@ -420,6 +435,7 @@ def main() -> None:
             assert single_doc.status_code == 200
             single_document = open_docx(single_doc.content)
             assert len(single_document.tables) == 1
+            assert len(single_document.paragraphs) == len(template_document.paragraphs)
             assert docx_page_break_count(single_doc.content) == 0
             assert "2026 年 10 月 8 日 20:00 至 21:00" in docx_text(single_doc.content)
             assert "测试乙" in table_text(single_document, 0)

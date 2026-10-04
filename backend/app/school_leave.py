@@ -3,14 +3,13 @@ from __future__ import annotations
 import io
 import os
 import re
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from docx import Document
-from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.oxml.ns import qn
-from docx.shared import Pt
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -19,6 +18,7 @@ from .models import SchoolLeaveRequest, SchoolLeaveRun
 
 DEFAULT_SCHOOL_LEAVE_REASON = "参加吉林大学吉甲大师机器人战队相关创新实践活动及工作安排"
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
+SCHOOL_LEAVE_TEMPLATE_PATH = Path(__file__).with_name("templates") / "school_leave.docx"
 _CUTOFF_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
 
 
@@ -140,73 +140,77 @@ def format_school_leave_time(start_at: datetime, end_at: datetime) -> str:
     )
 
 
-def _set_run_font(run, font_name: str, size: int, *, bold: bool | None = None) -> None:
-    run.font.name = font_name
-    run.font.size = Pt(size)
-    run._element.rPr.rFonts.set(qn("w:eastAsia"), font_name)
-    if bold is not None:
-        run.bold = bold
+def _replace_paragraph_text(paragraph, text: str) -> None:
+    if not paragraph.runs:
+        paragraph.add_run(text)
+        return
+    paragraph.runs[0].text = text
+    for run in paragraph.runs[1:]:
+        run.text = ""
 
 
-def _set_cell_text(cell, text: str, *, bold: bool = False) -> None:
-    paragraph = cell.paragraphs[0]
-    paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run = paragraph.add_run(text)
-    _set_run_font(run, "宋体", 12, bold=bold)
-
-
-def _configure_school_leave_document(document: Document) -> None:
-    normal_style = document.styles["Normal"]
-    normal_style.font.name = "宋体"
-    normal_style.font.size = Pt(14)
-    normal_style._element.rPr.rFonts.set(qn("w:eastAsia"), "宋体")
-
-
-def _append_school_leave_group(
-    document: Document,
+def _fill_school_leave_template(
+    document,
     run: SchoolLeaveRun,
     group: SchoolLeaveGroup,
     *,
     contact_phone: str,
 ) -> None:
-    title = document.add_paragraph()
-    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    title_run = title.add_run("请假条")
-    _set_run_font(title_run, "黑体", 18, bold=True)
-
-    time_text = format_school_leave_time(group.start_at, group.end_at)
-    body = document.add_paragraph()
-    body.paragraph_format.first_line_indent = Pt(28)
-    body.paragraph_format.line_spacing = 1.5
-    body_run = body.add_run(
-        f"以下学生因{run.reason}，需于{time_text}期间请假，"
-        "无法正常参加对应时段课程，特此证明。"
+    body = next(paragraph for paragraph in document.paragraphs if paragraph.text.startswith("以下学生因"))
+    phone = next(paragraph for paragraph in document.paragraphs if "联系电话：" in paragraph.text)
+    issued = next(
+        paragraph
+        for paragraph in document.paragraphs
+        if "2026年9月20日" in paragraph.text.replace(" ", "")
     )
-    _set_run_font(body_run, "宋体", 14)
+    table = document.tables[0]
 
-    signature = document.add_paragraph()
-    signature_run = signature.add_run("指导教师（签字）：")
-    _set_run_font(signature_run, "宋体", 14)
+    phone_indent = phone.text[: len(phone.text) - len(phone.text.lstrip())]
+    issued_indent = issued.text[: len(issued.text) - len(issued.text.lstrip())]
 
-    phone = document.add_paragraph()
-    phone_run = phone.add_run(f"联系电话：{contact_phone.strip()}")
-    _set_run_font(phone_run, "宋体", 14)
-
-    issued = document.add_paragraph()
-    issued.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-    issued_run = issued.add_run(
-        f"{run.collected_at.year} 年 {run.collected_at.month} 月 {run.collected_at.day} 日"
+    body_text = body.text.replace(
+        "9月20日下午3点到5点",
+        format_school_leave_time(group.start_at, group.end_at),
+    ).replace(
+        "吉甲大师双创基地参观接待活动",
+        run.reason,
     )
-    _set_run_font(issued_run, "宋体", 14)
+    _replace_paragraph_text(body, body_text)
+    _replace_paragraph_text(phone, f"{phone_indent}联系电话：{contact_phone.strip()}")
+    _replace_paragraph_text(
+        issued,
+        f"{issued_indent}{run.collected_at.year}年{run.collected_at.month}月{run.collected_at.day}日",
+    )
 
-    table = document.add_table(rows=1, cols=2)
-    table.style = "Table Grid"
-    _set_cell_text(table.rows[0].cells[0], "姓名", bold=True)
-    _set_cell_text(table.rows[0].cells[1], "学号", bold=True)
-    for request in group.requests:
-        cells = table.add_row().cells
-        _set_cell_text(cells[0], request.member_name_snapshot)
-        _set_cell_text(cells[1], request.student_id_snapshot)
+    row_template = deepcopy(table.rows[1]._tr)
+    for index, request in enumerate(group.requests):
+        if index == 0:
+            row = table.rows[1]
+        else:
+            table._tbl.append(deepcopy(row_template))
+            row = table.rows[-1]
+        _replace_paragraph_text(row.cells[0].paragraphs[0], request.member_name_snapshot)
+        _replace_paragraph_text(row.cells[1].paragraphs[0], request.student_id_snapshot)
+
+
+def _school_leave_group_document(
+    run: SchoolLeaveRun,
+    group: SchoolLeaveGroup,
+    *,
+    contact_phone: str,
+):
+    document = Document(SCHOOL_LEAVE_TEMPLATE_PATH)
+    _fill_school_leave_template(document, run, group, contact_phone=contact_phone)
+    return document
+
+
+def _append_school_leave_page(document, page) -> None:
+    document.add_page_break()
+    section_properties = document.element.body.sectPr
+    for child in page.element.body:
+        if child.tag.endswith("}sectPr"):
+            continue
+        section_properties.addprevious(deepcopy(child))
 
 
 def build_school_leave_docx(
@@ -215,14 +219,11 @@ def build_school_leave_docx(
     *,
     contact_phone: str,
 ) -> bytes:
-    """Build one exact-time group DOCX for backward-compatible downloads."""
+    """Build one exact-time group DOCX from the approved School Leave template."""
     if not contact_phone.strip():
         raise ValueError("LEAVE_CONTACT_PHONE 未配置，无法生成学校请假材料")
 
-    document = Document()
-    _configure_school_leave_document(document)
-    _append_school_leave_group(document, run, group, contact_phone=contact_phone)
-
+    document = _school_leave_group_document(run, group, contact_phone=contact_phone)
     output = io.BytesIO()
     document.save(output)
     return output.getvalue()
@@ -234,18 +235,16 @@ def build_school_leave_run_docx(
     *,
     contact_phone: str,
 ) -> bytes:
-    """Build one DOCX for a run, with each exact-time group on its own page."""
+    """Build one template-backed DOCX, with each exact-time group on its own page."""
     if not contact_phone.strip():
         raise ValueError("LEAVE_CONTACT_PHONE 未配置，无法生成学校请假材料")
     if not groups:
         raise ValueError("该汇总批次没有可生成的请假材料")
 
-    document = Document()
-    _configure_school_leave_document(document)
-    for index, group in enumerate(groups):
-        _append_school_leave_group(document, run, group, contact_phone=contact_phone)
-        if index < len(groups) - 1:
-            document.add_page_break()
+    document = _school_leave_group_document(run, groups[0], contact_phone=contact_phone)
+    for group in groups[1:]:
+        page = _school_leave_group_document(run, group, contact_phone=contact_phone)
+        _append_school_leave_page(document, page)
 
     output = io.BytesIO()
     document.save(output)

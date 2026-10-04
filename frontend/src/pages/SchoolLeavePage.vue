@@ -312,6 +312,7 @@ async function deleteRun(run: SchoolLeaveRun, event?: Event) {
   notice.value = ""
   try {
     await api.deleteSchoolLeaveRun(run.id)
+    runs.value = runs.value.filter((item) => item.id !== run.id)
     notice.value = "发送记录已删除。"
     await load()
   } catch (reason) {

@@ -55,6 +55,11 @@ const TeamPage = defineAsyncComponent({
   loadingComponent: LocalPageLoading,
   delay: 120,
 })
+const MemberDetailPage = defineAsyncComponent({
+  loader: () => import("./pages/MemberDetailPage.vue"),
+  loadingComponent: LocalPageLoading,
+  delay: 120,
+})
 const KnowledgePage = defineAsyncComponent({
   loader: () => import("./pages/KnowledgePage.vue"),
   loadingComponent: LocalPageLoading,
@@ -97,6 +102,7 @@ const taskMembers = ref<MemberSummary[]>([])
 const taskMembersLoaded = ref(false)
 const pendingTaskActions = ref<Map<number, string>>(new Map())
 const latestInvite = ref<InviteResult | null>(null)
+const memberStudentIdSavingId = ref<number | null>(null)
 const taskView = ref<TaskView>("mine")
 const tasksLoadedScope = ref<TaskView | null>(null)
 const taskListLoading = ref(false)
@@ -220,6 +226,16 @@ const taskDetailId = computed(() => {
   const match = path.value.match(/^\/tasks\/(\d+)$/)
   return match ? Number(match[1]) : null
 })
+const teamMemberDetailId = computed(() => {
+  const match = path.value.match(/^\/team\/(\d+)$/)
+  return match ? Number(match[1]) : null
+})
+const teamMemberDetail = computed(() =>
+  teamMemberDetailId.value === null
+    ? null
+    : members.value.find((member) => member.id === teamMemberDetailId.value) ?? null,
+)
+const isTeamRoute = computed(() => path.value === "/team" || teamMemberDetailId.value !== null)
 const detailTask = computed(() =>
   taskDetailId.value === null ? null : tasks.value.find((task) => task.id === taskDetailId.value) ?? null,
 )
@@ -990,6 +1006,17 @@ async function loadRoute() {
       }
       await loadKnowledgeDocuments()
       if (!isCurrentLoad()) return
+    } else if (teamMemberDetailId.value !== null) {
+      if (!isAdmin.value) {
+        navigate("/")
+        return
+      }
+      members.value = await api.members()
+      if (!isCurrentLoad()) return
+      if (!members.value.some((member) => member.id === teamMemberDetailId.value)) {
+        routeNotFound.value = true
+        return
+      }
     } else if (routePath === "/team") {
       if (!isAdmin.value) {
         navigate("/")
@@ -1118,12 +1145,16 @@ async function enableMember(memberId: number) {
 }
 
 async function updateMemberStudentId(payload: { memberId: number; studentId: string }) {
+  if (memberStudentIdSavingId.value !== null) return
   error.value = ""
+  memberStudentIdSavingId.value = payload.memberId
   try {
     replaceMemberInState(await api.updateMemberStudentId(payload.memberId, payload.studentId.trim() || null))
     notice.value = "学号已更新"
   } catch (reason) {
     error.value = messageOf(reason)
+  } finally {
+    memberStudentIdSavingId.value = null
   }
 }
 
@@ -2183,7 +2214,7 @@ onBeforeUnmount(() => {
         </button>
         <button
           v-if="isAdmin"
-          :class="{ active: path === '/team' }"
+          :class="{ active: isTeamRoute }"
           type="button"
           @click="navigate('/team')"
         >
@@ -3437,18 +3468,30 @@ onBeforeUnmount(() => {
         <SchoolLeavePage v-if="user" :current-user="user" @navigate="navigate" />
       </template>
 
-      <template v-else-if="path === '/team'">
-        <TeamPage
-          :members="members"
-          :latest-invite="latestInvite"
+      <template v-else-if="teamMemberDetailId !== null && teamMemberDetail">
+        <MemberDetailPage
+          :member="teamMemberDetail"
           :current-user-id="user?.id ?? null"
+          :latest-invite="latestInvite"
           :role-labels="roleLabels"
           :format-date="formatDate"
-          @invite="submitMemberInvite"
+          :student-id-saving="memberStudentIdSavingId === teamMemberDetail.id"
           @regenerate-invite="regenerateInvite"
           @disable-member="disableMember"
           @enable-member="enableMember"
           @update-student-id="updateMemberStudentId"
+          @copy-invite="copyInvite"
+          @navigate="navigate"
+        />
+      </template>
+
+      <template v-else-if="path === '/team'">
+        <TeamPage
+          :members="members"
+          :latest-invite="latestInvite"
+          :role-labels="roleLabels"
+          :format-date="formatDate"
+          @invite="submitMemberInvite"
           @copy-invite="copyInvite"
           @navigate="navigate"
         />
@@ -3482,7 +3525,7 @@ onBeforeUnmount(() => {
       <button :class="{ active: path === '/leave' }" type="button" @click="navigate('/leave')">请假</button>
       <button
         v-if="isAdmin"
-        :class="{ active: path === '/team' }"
+        :class="{ active: isTeamRoute }"
         type="button"
         @click="navigate('/team')"
       >

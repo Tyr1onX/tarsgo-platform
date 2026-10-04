@@ -134,6 +134,7 @@ def main() -> None:
             assert response.json()["detail"] == "请先完善学号，生成学校请假材料时需要使用。"
 
             # Task member summaries must not start exposing student ids.
+            set_actor(manager)
             task_assignees = client.get("/api/tasks/assignees")
             assert task_assignees.status_code == 200, task_assignees.text
             assert all("student_id" not in row for row in task_assignees.json())

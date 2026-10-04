@@ -459,9 +459,9 @@ def run_workflow():
     call(owner, f"/api/tasks/{releasable['id']}/claim", method="POST")
     call(
         owner,
-        f"/api/tasks/{releasable['id']}/complete",
-        method="POST",
-        data={"result": "直播值守完成，设备已归还。", "sync_to_item": False},
+        f"/api/tasks/{releasable['id']}",
+        method="PATCH",
+        data={"status": "done"},
     )
     call(owner, f"/api/tasks/{releasable['id']}/unclaim", method="POST", expected=409)
 

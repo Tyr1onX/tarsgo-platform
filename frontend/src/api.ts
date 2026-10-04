@@ -131,6 +131,8 @@ export const api = {
     request<SchoolLeaveRun>(`/api/school-leave/admin/runs/${runId}/cancel`, { method: "POST" }),
   markSchoolLeaveRunSent: (runId: number) =>
     request<SchoolLeaveRun>(`/api/school-leave/admin/runs/${runId}/sent`, { method: "POST" }),
+  deleteSchoolLeaveRun: (runId: number) =>
+    request<void>(`/api/school-leave/admin/runs/${runId}`, { method: "DELETE" }),
 
   aiPlannerAccess: () => request<AIPlannerAccess>("/api/ai/planner/access"),
   generateAIPlan: (payload: AIPlannerInput) =>

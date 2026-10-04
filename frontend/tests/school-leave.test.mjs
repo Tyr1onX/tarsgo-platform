@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises"
 const page = await readFile(new URL("../src/pages/SchoolLeavePage.vue", import.meta.url), "utf8")
 const app = await readFile(new URL("../src/App.vue", import.meta.url), "utf8")
 const team = await readFile(new URL("../src/pages/TeamPage.vue", import.meta.url), "utf8")
+const memberDetail = await readFile(new URL("../src/pages/MemberDetailPage.vue", import.meta.url), "utf8")
 const api = await readFile(new URL("../src/api.ts", import.meta.url), "utf8")
 const types = await readFile(new URL("../src/types.ts", import.meta.url), "utf8")
 
@@ -118,7 +119,8 @@ assert.doesNotMatch(types, /interface MemberSummary \{[^}]*student_id/s)
 
 // Student id remains editable only through personal/admin member flows.
 assert.match(app, /updateMeStudentId/)
-assert.match(team, /updateStudentId/)
+assert.doesNotMatch(team, /updateStudentId/)
+assert.match(memberDetail, /updateStudentId/)
 assert.match(api, /\/api\/auth\/me/)
 assert.match(api, /\/api\/members\/\$\{memberId\}\/student-id/)
 assert.match(types, /student_id: string \| null/)

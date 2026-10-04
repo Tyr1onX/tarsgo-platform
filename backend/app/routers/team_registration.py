@@ -142,7 +142,6 @@ def register_member(
     try:
         db.flush()
         session_token = create_login_session(db, member)
-        db.commit()
     except IntegrityError as exc:
         db.rollback()
         if db.scalar(select(Member.id).where(Member.email == payload.email)) is not None:

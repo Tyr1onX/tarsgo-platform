@@ -31,9 +31,9 @@ for (const row of [itemDetailSection, expandedList]) {
 }
 
 assert.match(app, /function taskMenuActions\(task: Task\): TaskActionMenuItem\[\]/)
-assert.match(app, /if \(isManager\.value\) actions\.push\(\{ key: "edit", label: "编辑任务"/)
+assert.match(app, /if \(isAdmin\.value\) actions\.push\(\{ key: "edit", label: "编辑任务"/)
 assert.match(app, /function handleTaskMenuAction\(task: Task, action: string\)/)
-assert.match(app, /if \(action === "unclaim"\)[\s\S]*?else if \(action === "edit" && isManager\.value\)/)
+assert.match(app, /if \(action === "unclaim"\)[\s\S]*?else if \(action === "edit" && isAdmin\.value\)/)
 assert.doesNotMatch(app.match(/function handleTaskMenuAction\([\s\S]*?\n}/)?.[0] ?? "", /loadRoute\s*\(/)
 
 assert.match(menu, /aria-label="更多操作"/)

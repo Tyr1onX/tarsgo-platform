@@ -161,17 +161,17 @@ def main() -> None:
             role="admin",
             status="active",
         )
-        manager = Member(
-            name="知识测试经理",
-            email=f"knowledge-manager-{uuid.uuid4().hex}@example.com",
+        non_admin = Member(
+            name="知识测试成员",
+            email=f"knowledge-member-{uuid.uuid4().hex}@example.com",
             password_hash=None,
-            role="manager",
+            role="member",
             status="active",
         )
-        db.add_all([admin, manager])
+        db.add_all([admin, non_admin])
         db.commit()
         db.refresh(admin)
-        db.refresh(manager)
+        db.refresh(non_admin)
 
         storage_temp = tempfile.TemporaryDirectory(prefix="tarsgo-knowledge-test-")
         fake = FixtureGitHub({
@@ -186,10 +186,10 @@ def main() -> None:
         knowledge.logger.addHandler(handler)
         planner_router.logger.addHandler(handler)
         try:
-            # Admin boundary is deterministic and the manager is rejected.
+            # Admin boundary is deterministic and the member is rejected.
             assert require_admin(admin) is admin
             try:
-                require_admin(manager)
+                require_admin(non_admin)
             except HTTPException as exc:
                 assert exc.status_code == 403
             else:
@@ -559,7 +559,7 @@ def main() -> None:
             db.execute(delete(KnowledgeDocument).where(KnowledgeDocument.source_name == repository))
             db.execute(delete(KnowledgeDocument).where(KnowledgeDocument.created_by == admin.id))
             db.delete(admin)
-            db.delete(manager)
+            db.delete(non_admin)
             db.commit()
             storage_temp.cleanup()
 

@@ -1,45 +1,56 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue"
-import type { InviteResult, Member, Role } from "../types"
+import type { InviteResult, Member, Role, TeamGroup } from "../types"
 
 const props = defineProps<{
   member: Member
   currentUserId: number | null
   latestInvite: InviteResult | null
   roleLabels: Record<Role, string>
+  groupLabels: Record<TeamGroup, string>
   formatDate: (value: string) => string
-  studentIdSaving: boolean
+  profileSaving: boolean
 }>()
 
 const emit = defineEmits<{
   regenerateInvite: [memberId: number]
   disableMember: [memberId: number]
   enableMember: [memberId: number]
-  updateStudentId: [payload: { memberId: number; studentId: string }]
+  updateProfile: [payload: { memberId: number; studentId: string; teamGroup: TeamGroup | null }]
   copyInvite: []
   navigate: [path: string]
 }>()
 
 const studentIdDraft = ref("")
+const teamGroupDraft = ref<TeamGroup | "">("")
 
 watch(
   () => props.member,
   (member) => {
     studentIdDraft.value = member.student_id ?? ""
+    teamGroupDraft.value = member.team_group ?? ""
   },
   { immediate: true },
 )
 
 const normalizedStudentId = computed(() => studentIdDraft.value.trim())
 const savedStudentId = computed(() => props.member.student_id ?? "")
-const studentIdChanged = computed(() => normalizedStudentId.value !== savedStudentId.value)
+const profileChanged = computed(
+  () =>
+    normalizedStudentId.value !== savedStudentId.value ||
+    teamGroupDraft.value !== (props.member.team_group ?? ""),
+)
 const currentInvite = computed(() =>
   props.latestInvite?.member.id === props.member.id ? props.latestInvite : null,
 )
 
-function saveStudentId() {
-  if (!studentIdChanged.value || props.studentIdSaving) return
-  emit("updateStudentId", { memberId: props.member.id, studentId: studentIdDraft.value })
+function saveProfile() {
+  if (!profileChanged.value || props.profileSaving) return
+  emit("updateProfile", {
+    memberId: props.member.id,
+    studentId: studentIdDraft.value,
+    teamGroup: teamGroupDraft.value || null,
+  })
 }
 </script>
 
@@ -74,8 +85,8 @@ function saveStudentId() {
   </section>
 
   <section class="member-detail-section">
-    <h2>学校信息</h2>
-    <form class="member-student-form" @submit.prevent="saveStudentId">
+    <h2>学校 / 团队资料</h2>
+    <form class="member-profile-form" @submit.prevent="saveProfile">
       <label>
         <span>学号</span>
         <input
@@ -85,12 +96,19 @@ function saveStudentId() {
           placeholder="未填写学号"
         />
       </label>
+      <label>
+        <span>所属组别</span>
+        <select v-model="teamGroupDraft">
+          <option value="">未填写</option>
+          <option v-for="(label, code) in groupLabels" :key="code" :value="code">{{ label }}</option>
+        </select>
+      </label>
       <button
-        class="primary member-student-save"
+        class="primary member-profile-save"
         type="submit"
-        :disabled="!studentIdChanged || studentIdSaving"
+        :disabled="!profileChanged || profileSaving"
       >
-        {{ studentIdSaving ? "保存中…" : "保存修改" }}
+        {{ profileSaving ? "保存中…" : "保存修改" }}
       </button>
     </form>
   </section>
@@ -194,15 +212,15 @@ function saveStudentId() {
   overflow-wrap: anywhere;
 }
 
-.member-student-form {
-  display: flex;
+.member-profile-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
   align-items: end;
   gap: 10px;
-  max-width: 520px;
+  max-width: 720px;
 }
 
-.member-student-form label {
-  flex: 1 1 260px;
+.member-profile-form label {
   min-width: 0;
   display: grid;
   gap: 6px;
@@ -210,12 +228,12 @@ function saveStudentId() {
   font-size: 12.5px;
 }
 
-.member-student-form input {
+.member-profile-form input,
+.member-profile-form select {
   min-width: 0;
 }
 
-.member-student-save {
-  flex: 0 0 auto;
+.member-profile-save {
   width: fit-content;
   white-space: nowrap;
 }
@@ -265,9 +283,19 @@ function saveStudentId() {
 
 .member-detail-heading,
 .member-detail-fields,
-.member-student-form,
+.member-profile-form,
 .member-invite-result {
   min-width: 0;
+}
+
+@media (max-width: 720px) {
+  .member-profile-form {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .member-profile-save {
+    justify-self: start;
+  }
 }
 
 @media (max-width: 520px) {
@@ -281,15 +309,6 @@ function saveStudentId() {
   .member-detail-fields > div {
     grid-template-columns: minmax(78px, 96px) minmax(0, 1fr);
     gap: 10px;
-  }
-
-  .member-student-form {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .member-student-save {
-    align-self: flex-start;
   }
 }
 </style>

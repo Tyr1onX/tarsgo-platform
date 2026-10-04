@@ -44,6 +44,9 @@ import type {
   Member,
   MemberSummary,
   Role,
+  TeamGroup,
+  TeamRegistrationInfo,
+  TeamRegistrationWindow,
   Task,
   TaskStatus,
   TaskView,
@@ -83,11 +86,28 @@ let feedbackTimer: number | undefined
 const loginEmail = ref("")
 const loginPassword = ref("")
 const studentIdDraft = ref("")
-const studentIdSaving = ref(false)
+const teamGroupDraft = ref<TeamGroup | "">("")
+const profileSaving = ref(false)
 
 const invitation = ref<InvitationInfo | null>(null)
 const invitePassword = ref("")
 const invitePasswordConfirm = ref("")
+
+const registrationInfo = ref<TeamRegistrationInfo | null>(null)
+const registrationChecking = ref(false)
+const registrationEnded = ref(false)
+const registrationLoadError = ref("")
+const registrationName = ref("")
+const registrationStudentId = ref("")
+const registrationEmail = ref("")
+const registrationTeamGroup = ref<TeamGroup | "">("")
+const registrationPassword = ref("")
+const registrationPasswordConfirm = ref("")
+const registrationSubmitting = ref(false)
+const registrationWindow = ref<TeamRegistrationWindow | null>(null)
+const registrationPath = ref("")
+const openingRegistration = ref(false)
+const closingRegistration = ref(false)
 
 const tasks = ref<Task[]>([])
 const homeMineTasks = ref<Task[]>([])
@@ -102,7 +122,7 @@ const taskMembers = ref<MemberSummary[]>([])
 const taskMembersLoaded = ref(false)
 const pendingTaskActions = ref<Map<number, string>>(new Map())
 const latestInvite = ref<InviteResult | null>(null)
-const memberStudentIdSavingId = ref<number | null>(null)
+const memberProfileSavingId = ref<number | null>(null)
 const taskView = ref<TaskView>("mine")
 const tasksLoadedScope = ref<TaskView | null>(null)
 const taskListLoading = ref(false)
@@ -198,11 +218,11 @@ const taskStatus = ref<TaskStatus>("todo")
 const taskDependencyIds = ref<number[]>([])
 
 const isAdmin = computed(() => user.value?.role === "admin")
-const isManager = computed(
-  () => user.value?.role === "admin" || user.value?.role === "manager",
-)
 const inviteToken = computed(() =>
   path.value.startsWith("/invite/") ? path.value.slice("/invite/".length) : "",
+)
+const registerToken = computed(() =>
+  path.value.startsWith("/register/") ? path.value.slice("/register/".length) : "",
 )
 const activeMembers = computed(() => taskMembers.value)
 const activeMemberIds = computed(() => new Set(activeMembers.value.map((member) => member.id)))
@@ -237,8 +257,9 @@ const teamMemberDetail = computed(() =>
 )
 const isTeamRoute = computed(() => path.value === "/team" || teamMemberDetailId.value !== null)
 const isMeRoute = computed(() => path.value === "/me" || path.value === "/me/edit")
-const myStudentIdChanged = computed(() =>
-  studentIdDraft.value.trim() !== (user.value?.student_id ?? ""),
+const myProfileChanged = computed(() =>
+  studentIdDraft.value.trim() !== (user.value?.student_id ?? "") ||
+  teamGroupDraft.value !== (user.value?.team_group ?? ""),
 )
 const detailTask = computed(() =>
   taskDetailId.value === null ? null : tasks.value.find((task) => task.id === taskDetailId.value) ?? null,
@@ -259,31 +280,31 @@ const detailTaskActivities = computed(() =>
   itemActivities.value,
 )
 const canManageFactScope = computed(() => Boolean(
-  detailRoot.value && (isManager.value || detailRoot.value.owner?.id === user.value?.id),
+  detailRoot.value && (isAdmin.value || detailRoot.value.owner?.id === user.value?.id),
 ))
 const canWriteDetailItem = computed(() => {
   const root = detailRoot.value
   const currentId = user.value?.id
   if (!root || !currentId) return false
-  if (isManager.value || root.owner?.id === currentId) return true
+  if (isAdmin.value || root.owner?.id === currentId) return true
   return detailChildren.value.some(
     (task) => task.owner?.id === currentId || task.collaborators.some((member) => member.id === currentId),
   )
 })
 const canEditDetailResult = computed(
-  () => Boolean(detailTask.value && isManager.value),
+  () => Boolean(detailTask.value && isAdmin.value),
 )
 const canPublishTaskProgress = computed(() => {
   const task = detailTask.value
   const currentId = user.value?.id
   return Boolean(
     task && task.parent_id !== null && task.status !== "done" && !task.blocked && currentId &&
-    (isManager.value || task.owner?.id === currentId || task.collaborators.some((person) => person.id === currentId)),
+    (isAdmin.value || task.owner?.id === currentId || task.collaborators.some((person) => person.id === currentId)),
   )
 })
 const canCompleteDetailTask = computed(() =>
   Boolean(detailTask.value && detailTask.value.parent_id !== null && detailTask.value.status !== "done" && !detailTask.value.blocked &&
-    (isManager.value || detailTask.value.owner?.id === user.value?.id)),
+    (isAdmin.value || detailTask.value.owner?.id === user.value?.id)),
 )
 const availableDependencyTasks = computed(() =>
   parentTaskId.value === null
@@ -323,8 +344,15 @@ const reviewProposalSections = [
 
 const roleLabels: Record<Role, string> = {
   admin: "管理员",
-  manager: "任务管理员",
   member: "成员",
+}
+
+const groupLabels: Record<TeamGroup, string> = {
+  electrical: "电控组",
+  mechanical: "机械组",
+  vision: "视觉组",
+  ai: "AI组",
+  operations: "运营组",
 }
 
 const viewLabels: Record<TaskView, string> = {
@@ -625,7 +653,7 @@ function changesForReviewSuggestion(suggestion: AIItemReviewSuggestion) {
 
 async function applyItemReviewSuggestion(entry: { key: string; suggestion: AIItemReviewSuggestion }) {
   const root = detailTask.value
-  if (!root || root.parent_id !== null || !isManager.value || itemReviewApplyingKey.value) return
+  if (!root || root.parent_id !== null || !isAdmin.value || itemReviewApplyingKey.value) return
   error.value = ""
   itemReviewApplyingKey.value = entry.key
   try {
@@ -829,7 +857,7 @@ function closeTaskForm() {
 }
 
 async function ensureTaskAssignees() {
-  if (!isManager.value || taskMembersLoaded.value) return
+  if (!isAdmin.value || taskMembersLoaded.value) return
   if (taskMembersRequest) {
     await taskMembersRequest
     return
@@ -920,6 +948,7 @@ async function loadCurrentUser() {
   try {
     user.value = await api.me()
     studentIdDraft.value = user.value.student_id ?? ""
+    teamGroupDraft.value = user.value.team_group ?? ""
     await loadPlannerAccess()
   } catch (reason) {
     if (reason instanceof ApiError && reason.status === 401) {
@@ -941,7 +970,10 @@ async function loadRoute() {
   detailContextLoading.value = taskDetailId.value !== null
 
   try {
-    const publicPage = routePath === "/login" || routePath.startsWith("/invite/")
+    const publicPage =
+      routePath === "/login" ||
+      routePath.startsWith("/invite/") ||
+      routePath.startsWith("/register/")
     if (!publicPage && !user.value) {
       await loadCurrentUser()
       if (!isCurrentLoad()) return
@@ -958,6 +990,24 @@ async function loadRoute() {
       }
     } else if (routePath.startsWith("/invite/")) {
       invitation.value = await api.invitation(inviteToken.value)
+      if (!isCurrentLoad()) return
+    } else if (routePath.startsWith("/register/")) {
+      registrationInfo.value = null
+      registrationChecking.value = true
+      registrationEnded.value = false
+      registrationLoadError.value = ""
+      try {
+        registrationInfo.value = await api.teamRegistrationInfo(registerToken.value)
+      } catch (reason) {
+        if (reason instanceof ApiError && (reason.status === 404 || reason.status === 410)) {
+          registrationEnded.value = true
+          return
+        }
+        registrationLoadError.value = messageOf(reason)
+        return
+      } finally {
+        registrationChecking.value = false
+      }
       if (!isCurrentLoad()) return
     } else if (routePath === "/admin/tasks") {
       navigate("/tasks")
@@ -1026,12 +1076,19 @@ async function loadRoute() {
         navigate("/")
         return
       }
-      members.value = await api.members()
+      const [teamMembers, currentRegistration] = await Promise.all([
+        api.members(),
+        api.currentTeamRegistration(),
+      ])
       if (!isCurrentLoad()) return
+      members.value = teamMembers
+      registrationWindow.value = currentRegistration
+      registrationPath.value = ""
     } else if (routePath === "/leave") {
       // The leave page loads its own independent workflow data.
     } else if (routePath === "/me/edit") {
       studentIdDraft.value = user.value?.student_id ?? ""
+      teamGroupDraft.value = user.value?.team_group ?? ""
     } else if (routePath === "/me") {
       // Profile overview is intentionally read-only.
     } else {
@@ -1042,7 +1099,12 @@ async function loadRoute() {
     if (routePath === "/tasks" && tasksLoadedScope.value !== taskView.value) {
       taskListLoadError.value = true
     }
-    if (reason instanceof ApiError && reason.status === 401 && !routePath.startsWith("/invite/")) {
+    if (
+      reason instanceof ApiError &&
+      reason.status === 401 &&
+      !routePath.startsWith("/invite/") &&
+      !routePath.startsWith("/register/")
+    ) {
       user.value = null
       navigate("/login")
       return
@@ -1094,25 +1156,79 @@ async function submitInvitation() {
   }
 }
 
+async function submitRegistration() {
+  error.value = ""
+  if (registrationPassword.value !== registrationPasswordConfirm.value) {
+    error.value = "两次输入的密码不一致"
+    return
+  }
+  if (!registrationTeamGroup.value) {
+    error.value = "请选择所属组别"
+    return
+  }
+  registrationSubmitting.value = true
+  try {
+    user.value = await api.registerTeamMember(registerToken.value, {
+      name: registrationName.value,
+      student_id: registrationStudentId.value,
+      email: registrationEmail.value,
+      team_group: registrationTeamGroup.value,
+      password: registrationPassword.value,
+    })
+    registrationPassword.value = ""
+    registrationPasswordConfirm.value = ""
+    await loadPlannerAccess()
+    navigate("/")
+  } catch (reason) {
+    error.value = messageOf(reason)
+  } finally {
+    registrationSubmitting.value = false
+  }
+}
+
+async function openTeamRegistration() {
+  if (openingRegistration.value) return
+  error.value = ""
+  openingRegistration.value = true
+  try {
+    const opened = await api.openTeamRegistration()
+    registrationWindow.value = opened
+    registrationPath.value = opened.register_path
+    notice.value = "团队注册已开放"
+  } catch (reason) {
+    error.value = messageOf(reason)
+  } finally {
+    openingRegistration.value = false
+  }
+}
+
+async function closeTeamRegistration() {
+  if (closingRegistration.value) return
+  error.value = ""
+  closingRegistration.value = true
+  try {
+    await api.closeTeamRegistration()
+    registrationWindow.value = null
+    registrationPath.value = ""
+    notice.value = "团队注册已关闭"
+  } catch (reason) {
+    error.value = messageOf(reason)
+  } finally {
+    closingRegistration.value = false
+  }
+}
+
+async function copyTeamRegistration() {
+  if (!registrationPath.value) return
+  await navigator.clipboard.writeText(window.location.origin + registrationPath.value)
+  notice.value = "注册链接已复制"
+}
+
 function replaceMemberInState(updated: Member) {
   const exists = members.value.some((member) => member.id === updated.id)
   members.value = exists
     ? members.value.map((member) => member.id === updated.id ? updated : member)
     : [...members.value, updated].sort((left, right) => left.name.localeCompare(right.name))
-}
-
-async function submitMemberInvite(payload: { name: string; email: string; role: Role }) {
-  error.value = ""
-  try {
-    latestInvite.value = await api.inviteMember(
-      payload.name,
-      payload.email,
-      payload.role,
-    )
-    replaceMemberInState(latestInvite.value.member)
-  } catch (reason) {
-    error.value = messageOf(reason)
-  }
 }
 
 async function regenerateInvite(memberId: number) {
@@ -1150,34 +1266,48 @@ async function enableMember(memberId: number) {
   }
 }
 
-async function updateMemberStudentId(payload: { memberId: number; studentId: string }) {
-  if (memberStudentIdSavingId.value !== null) return
+async function updateMemberProfile(payload: {
+  memberId: number
+  studentId: string
+  teamGroup: TeamGroup | null
+}) {
+  if (memberProfileSavingId.value !== null) return
   error.value = ""
-  memberStudentIdSavingId.value = payload.memberId
+  memberProfileSavingId.value = payload.memberId
   try {
-    replaceMemberInState(await api.updateMemberStudentId(payload.memberId, payload.studentId.trim() || null))
-    notice.value = "学号已更新"
+    replaceMemberInState(
+      await api.updateMemberProfile(
+        payload.memberId,
+        payload.studentId.trim() || null,
+        payload.teamGroup,
+      ),
+    )
+    notice.value = "成员资料已更新"
   } catch (reason) {
     error.value = messageOf(reason)
   } finally {
-    memberStudentIdSavingId.value = null
+    memberProfileSavingId.value = null
   }
 }
 
-async function saveMyStudentId() {
-  if (!user.value || studentIdSaving.value || !myStudentIdChanged.value) return
+async function saveMyProfile() {
+  if (!user.value || profileSaving.value || !myProfileChanged.value) return
   error.value = ""
   notice.value = ""
-  studentIdSaving.value = true
+  profileSaving.value = true
   try {
-    user.value = await api.updateMeStudentId(studentIdDraft.value.trim() || null)
+    user.value = await api.updateMeProfile(
+      studentIdDraft.value.trim() || null,
+      teamGroupDraft.value || null,
+    )
     studentIdDraft.value = user.value.student_id ?? ""
-    notice.value = "学号已保存"
+    teamGroupDraft.value = user.value.team_group ?? ""
+    notice.value = "资料已保存"
     navigate("/me")
   } catch (reason) {
     error.value = messageOf(reason)
   } finally {
-    studentIdSaving.value = false
+    profileSaving.value = false
   }
 }
 
@@ -1322,7 +1452,7 @@ function taskMenuActions(task: Task): TaskActionMenuItem[] {
   if (task.collaboration_open && isCollaborator(task) && task.status !== "done") {
     actions.push({ key: "leave", label: pendingTaskAction(task.id) === "leave" ? "退出中…" : "退出协作", disabled: pending })
   }
-  if (isManager.value) actions.push({ key: "edit", label: "编辑任务", disabled: pending })
+  if (isAdmin.value) actions.push({ key: "edit", label: "编辑任务", disabled: pending })
   return actions
 }
 
@@ -1330,7 +1460,7 @@ function handleTaskMenuAction(task: Task, action: string) {
   if (action === "unclaim") void unclaimTask(task)
   else if (action === "join") void joinTask(task)
   else if (action === "leave") void leaveTask(task)
-  else if (action === "edit" && isManager.value) void editTask(task)
+  else if (action === "edit" && isAdmin.value) void editTask(task)
 }
 
 
@@ -1582,7 +1712,7 @@ async function addResultToContext() {
 }
 
 function editTaskFromDetail(task: Task) {
-  if (!isManager.value) return
+  if (!isAdmin.value) return
   clearItemReview()
   taskView.value = "all"
   window.history.pushState({}, "", "/tasks?view=all")
@@ -2202,6 +2332,88 @@ onBeforeUnmount(() => {
     </section>
   </main>
 
+  <main v-else-if="path.startsWith('/register/')" class="auth-shell">
+    <section class="auth-form">
+      <p class="brand">TARS BASE</p>
+      <template v-if="registrationInfo">
+        <h1>加入吉甲大师</h1>
+        <p class="muted">请使用本人真实信息完成注册。</p>
+        <form @submit.prevent="submitRegistration">
+          <label>
+            姓名
+            <input v-model="registrationName" maxlength="100" autocomplete="name" required />
+          </label>
+          <label>
+            学号
+            <input v-model="registrationStudentId" maxlength="50" autocomplete="off" required />
+          </label>
+          <label>
+            邮箱
+            <input v-model="registrationEmail" type="email" maxlength="255" autocomplete="email" required />
+          </label>
+          <label>
+            所属组别
+            <select v-model="registrationTeamGroup" required>
+              <option value="" disabled>请选择</option>
+              <option v-for="(label, code) in groupLabels" :key="code" :value="code">{{ label }}</option>
+            </select>
+          </label>
+          <label>
+            密码
+            <input
+              v-model="registrationPassword"
+              type="password"
+              minlength="8"
+              maxlength="128"
+              autocomplete="new-password"
+              required
+            />
+          </label>
+          <label>
+            确认密码
+            <input
+              v-model="registrationPasswordConfirm"
+              type="password"
+              minlength="8"
+              maxlength="128"
+              autocomplete="new-password"
+              required
+            />
+          </label>
+          <button class="primary" type="submit" :disabled="registrationSubmitting">
+            {{ registrationSubmitting ? "正在注册…" : "注册并进入 TARS BASE" }}
+          </button>
+        </form>
+      </template>
+
+      <div v-else-if="registrationChecking" class="tars-loading tars-loading-auth" role="status" aria-live="polite">
+        <div class="tars-loading-mark" aria-hidden="true">
+          <span class="tars-loading-block block-a"></span>
+          <span class="tars-loading-block block-b"></span>
+          <span class="tars-loading-block block-c"></span>
+          <span class="tars-loading-block block-d"></span>
+        </div>
+        <div class="tars-loading-copy">
+          <strong>TARS BASE</strong>
+          <span>正在验证注册链接…</span>
+        </div>
+      </div>
+
+      <div v-else-if="registrationLoadError" class="empty auth-empty-state">
+        <span class="empty-code">BASE / REGISTER</span>
+        <h1>暂时无法验证注册链接</h1>
+        <p>{{ registrationLoadError }}</p>
+        <button class="secondary" type="button" @click="loadRoute()">重新加载</button>
+      </div>
+
+      <div v-else-if="registrationEnded" class="empty auth-empty-state">
+        <span class="empty-code">BASE / REGISTER</span>
+        <h1>本次团队注册已结束</h1>
+        <button class="secondary" type="button" @click="navigate('/login')">返回登录</button>
+      </div>
+    </section>
+  </main>
+
   <main v-else class="app-shell">
     <div class="brand-ribbon" aria-hidden="true"></div>
 
@@ -2333,7 +2545,7 @@ onBeforeUnmount(() => {
             </div>
           </div>
           <p v-if="plannerAttachmentMessage" class="planner-composer-message" role="status">{{ plannerAttachmentMessage }}</p>
-          <button v-if="isManager" class="base-manual-create" type="button" @click="startNewTask()">或手动创建任务</button>
+          <button v-if="isAdmin" class="base-manual-create" type="button" @click="startNewTask()">或手动创建任务</button>
         </section>
 
         <button
@@ -2714,7 +2926,7 @@ onBeforeUnmount(() => {
             <span class="state">{{ detailTask.parent_id ? detailRoot.title : "事项执行" }}</span>
             <h1>{{ detailTask.title }}</h1>
           </div>
-          <button v-if="isManager" type="button" @click="editTaskFromDetail(detailTask)">编辑</button>
+          <button v-if="isAdmin" type="button" @click="editTaskFromDetail(detailTask)">编辑</button>
         </div>
 
         <template v-if="detailTask.parent_id === null">
@@ -2723,7 +2935,7 @@ onBeforeUnmount(() => {
               <TaskStatusIndicator
                 :status="detailTask.status"
                 :task-id="detailTask.id"
-                :editable="isManager && detailChildren.length === 0"
+                :editable="isAdmin && detailChildren.length === 0"
                 :pending="Boolean(pendingTaskAction(detailTask.id)?.startsWith('status:'))"
                 :blocked="detailTask.blocked"
                 @update-status="updateOwnTaskStatus(detailTask, $event)"
@@ -2807,12 +3019,12 @@ onBeforeUnmount(() => {
           <section class="execution-section">
             <div class="section-heading breakdown-heading">
               <h2>分工 <span class="task-count">· {{ detailChildren.length }}</span></h2>
-              <button v-if="isManager" type="button" @click="startNewTask(detailRoot)">＋ 添加分工</button>
+              <button v-if="isAdmin" type="button" @click="startNewTask(detailRoot)">＋ 添加分工</button>
             </div>
             <div v-if="detailChildren.length" class="detail-task-list child-task-list">
               <article v-for="task in detailChildren" :key="task.id" class="child-task-row detail-child-task-row">
                 <div class="child-task-heading">
-                  <TaskStatusIndicator :status="task.status" :task-id="task.id" :editable="isManager" :pending="Boolean(pendingTaskAction(task.id)?.startsWith('status:'))" @update-status="updateOwnTaskStatus(task, $event)" />
+                  <TaskStatusIndicator :status="task.status" :task-id="task.id" :editable="isAdmin" :pending="Boolean(pendingTaskAction(task.id)?.startsWith('status:'))" @update-status="updateOwnTaskStatus(task, $event)" />
                   <small class="child-task-owner">{{ task.owner?.name ?? "待认领" }}</small>
                 </div>
                 <button class="task-title-link child-task-title" type="button" @click="openTaskDetail(task)"><strong>{{ task.title }}</strong></button>
@@ -2924,7 +3136,7 @@ onBeforeUnmount(() => {
                 </div>
                 <div class="ai-review-actions">
                   <button type="button" @click="dismissItemReviewSuggestion(entry.key)">忽略</button>
-                  <button v-if="isManager" class="primary small-action" type="button" :disabled="Boolean(itemReviewApplyingKey)" @click="applyItemReviewSuggestion(entry)">{{ itemReviewApplyingKey === entry.key ? "正在应用…" : "应用" }}</button>
+                  <button v-if="isAdmin" class="primary small-action" type="button" :disabled="Boolean(itemReviewApplyingKey)" @click="applyItemReviewSuggestion(entry)">{{ itemReviewApplyingKey === entry.key ? "正在应用…" : "应用" }}</button>
                 </div>
               </article>
             </section>
@@ -2945,7 +3157,7 @@ onBeforeUnmount(() => {
               <TaskStatusIndicator
                 :status="detailTask.status"
                 :task-id="detailTask.id"
-                :editable="isManager"
+                :editable="isAdmin"
                 :pending="Boolean(pendingTaskAction(detailTask.id)?.startsWith('status:'))"
                 :blocked="detailTask.blocked"
                 @update-status="updateOwnTaskStatus(detailTask, $event)"
@@ -3136,7 +3348,7 @@ onBeforeUnmount(() => {
           <h1>任务</h1>
           <div class="page-title-actions">
             <button v-if="aiPlannerAvailable" class="primary" type="button" @click="startAIPlanner">AI 规划任务</button>
-            <button v-if="isManager" class="text-action" type="button" @click="startNewTask()">手动创建</button>
+            <button v-if="isAdmin" class="text-action" type="button" @click="startNewTask()">手动创建</button>
           </div>
         </div>
 
@@ -3152,7 +3364,7 @@ onBeforeUnmount(() => {
           </button>
         </div>
 
-        <form v-if="isManager && taskFormOpen" class="management-form task-form" @submit.prevent="submitTask">
+        <form v-if="isAdmin && taskFormOpen" class="management-form task-form" @submit.prevent="submitTask">
           <div class="form-title">
             <div>
               <small v-if="parentTask" class="form-context">分工属于：{{ parentTask.title }}</small>
@@ -3332,7 +3544,7 @@ onBeforeUnmount(() => {
               </template>
               <div v-else class="operation-card-top">
                 <div class="operation-main">
-                  <div class="root-status-line"><span class="state">事项</span><TaskStatusIndicator :status="task.status" :task-id="task.id" :editable="isManager && taskView === 'all' && childTasks(task.id).length === 0" :pending="Boolean(pendingTaskAction(task.id)?.startsWith('status:'))" @update-status="updateOwnTaskStatus(task, $event)" /></div>
+                  <div class="root-status-line"><span class="state">事项</span><TaskStatusIndicator :status="task.status" :task-id="task.id" :editable="isAdmin && taskView === 'all' && childTasks(task.id).length === 0" :pending="Boolean(pendingTaskAction(task.id)?.startsWith('status:'))" @update-status="updateOwnTaskStatus(task, $event)" /></div>
                   <button class="task-title-link" type="button" @click="openTaskDetail(task)"><h3>{{ task.title }}</h3></button>
                   <small>{{ task.owner ? "总负责人 " + task.owner.name : "总负责人待认领" }}</small>
                   <small v-if="task.deadline">截止 {{ formatDate(task.deadline) }}</small>
@@ -3371,7 +3583,7 @@ onBeforeUnmount(() => {
                     :disabled="Boolean(pendingTaskAction(task.id))"
                     @click="leaveTask(task)"
                   >{{ pendingTaskAction(task.id) === 'leave' ? '退出中…' : '退出协作' }}</button>
-                  <button v-if="isManager" type="button" @click="editTask(task)">编辑</button>
+                  <button v-if="isAdmin" type="button" @click="editTask(task)">编辑</button>
                   <button v-if="isAdmin" class="danger-text" type="button" @click.stop="openDeleteRootItemModal(task, 'list')">删除</button>
                 </div>
               </div>
@@ -3387,19 +3599,19 @@ onBeforeUnmount(() => {
                 >{{ isRootExpanded(task.id) ? "收起分工 ▴" : "展开分工 ▾" }}</button>
                 <span v-else-if="taskView === 'all' && !childTasks(task.id).length" class="no-child-tasks">暂无分工</span>
                 <span v-else-if="!taskViewChildren(task.id).length" class="no-child-tasks">暂无与你相关的分工</span>
-                <button v-if="isManager && taskView === 'all' && !childTasks(task.id).length" type="button" class="add-first-child" @click="startNewTask(task)">＋ 添加分工</button>
+                <button v-if="isAdmin && taskView === 'all' && !childTasks(task.id).length" type="button" class="add-first-child" @click="startNewTask(task)">＋ 添加分工</button>
               </div>
 
               <div v-if="(taskView === 'claimable' ? claimableChildren(task.id).length : taskViewChildren(task.id).length) && isRootExpanded(task.id)" :id="`work-breakdown-${task.id}`" class="work-breakdown">
                 <div class="breakdown-heading">
                   <strong>{{ taskView === 'claimable' ? '待认领分工' : '分工' }} <span class="task-count">· {{ (taskView === 'claimable' ? claimableChildren(task.id) : taskViewChildren(task.id)).length }}</span></strong>
-                  <button v-if="isManager && taskView === 'all'" type="button" @click="startNewTask(task)">＋ 添加分工</button>
+                  <button v-if="isAdmin && taskView === 'all'" type="button" @click="startNewTask(task)">＋ 添加分工</button>
                 </div>
 
                 <div class="child-task-list">
                   <article v-for="child in (taskView === 'claimable' ? claimableChildren(task.id) : taskViewChildren(task.id))" :key="child.id" class="child-task-row">
                     <div class="child-task-heading">
-                      <TaskStatusIndicator :status="child.status" :task-id="child.id" :editable="isManager" :pending="Boolean(pendingTaskAction(child.id)?.startsWith('status:'))" @update-status="updateOwnTaskStatus(child, $event)" />
+                      <TaskStatusIndicator :status="child.status" :task-id="child.id" :editable="isAdmin" :pending="Boolean(pendingTaskAction(child.id)?.startsWith('status:'))" @update-status="updateOwnTaskStatus(child, $event)" />
                       <small class="child-task-owner">{{ child.owner?.name ?? "待认领" }}</small>
                     </div>
                     <button class="task-title-link child-task-title" type="button" @click="openTaskDetail(child)"><strong>{{ child.title }}</strong></button>
@@ -3447,7 +3659,7 @@ onBeforeUnmount(() => {
             <p v-else-if="taskView === 'claimable'">新的可认领任务出现后，会显示在这里。</p>
             <p v-else>还没有正式发布的运营事项。</p>
             <button v-if="aiPlannerAvailable && taskView === 'all'" class="primary" type="button" @click="startAIPlanner">AI 规划任务</button>
-            <button v-if="isManager && taskView === 'all'" class="text-action" type="button" @click="startNewTask()">手动创建</button>
+            <button v-if="isAdmin && taskView === 'all'" class="text-action" type="button" @click="startNewTask()">手动创建</button>
           </div>
         </section>
       </template>
@@ -3468,6 +3680,10 @@ onBeforeUnmount(() => {
             <span class="profile-field-value">{{ user?.student_id || "学号未填写" }}</span>
             <button class="profile-edit-action" type="button" @click="navigate('/me/edit')">编辑 ></button>
           </div>
+          <div class="profile-field-row">
+            <span class="profile-field-label">所属组别</span>
+            <span class="profile-field-value">{{ user?.team_group ? groupLabels[user.team_group] : "未填写" }}</span>
+          </div>
         </section>
 
         <section class="profile-section profile-account-section">
@@ -3484,17 +3700,24 @@ onBeforeUnmount(() => {
 
         <section class="profile-section">
           <h2>学校信息</h2>
-          <form class="profile-student-edit-form" @submit.prevent="saveMyStudentId">
+          <form class="profile-student-edit-form" @submit.prevent="saveMyProfile">
             <label>
               <span>学号</span>
               <input v-model="studentIdDraft" maxlength="50" autocomplete="off" placeholder="未填写学号" />
             </label>
+            <label>
+              <span>所属组别</span>
+              <select v-model="teamGroupDraft">
+                <option value="">未填写</option>
+                <option v-for="(label, code) in groupLabels" :key="code" :value="code">{{ label }}</option>
+              </select>
+            </label>
             <button
               class="primary profile-save"
               type="submit"
-              :disabled="studentIdSaving || !myStudentIdChanged"
+              :disabled="profileSaving || !myProfileChanged"
             >
-              {{ studentIdSaving ? "保存中…" : "保存修改" }}
+              {{ profileSaving ? "保存中…" : "保存修改" }}
             </button>
           </form>
         </section>
@@ -3510,12 +3733,13 @@ onBeforeUnmount(() => {
           :current-user-id="user?.id ?? null"
           :latest-invite="latestInvite"
           :role-labels="roleLabels"
+          :group-labels="groupLabels"
           :format-date="formatDate"
-          :student-id-saving="memberStudentIdSavingId === teamMemberDetail.id"
+          :profile-saving="memberProfileSavingId === teamMemberDetail.id"
           @regenerate-invite="regenerateInvite"
           @disable-member="disableMember"
           @enable-member="enableMember"
-          @update-student-id="updateMemberStudentId"
+          @update-profile="updateMemberProfile"
           @copy-invite="copyInvite"
           @navigate="navigate"
         />
@@ -3524,11 +3748,16 @@ onBeforeUnmount(() => {
       <template v-else-if="path === '/team'">
         <TeamPage
           :members="members"
-          :latest-invite="latestInvite"
+          :registration-window="registrationWindow"
+          :registration-path="registrationPath"
+          :opening-registration="openingRegistration"
+          :closing-registration="closingRegistration"
           :role-labels="roleLabels"
+          :group-labels="groupLabels"
           :format-date="formatDate"
-          @invite="submitMemberInvite"
-          @copy-invite="copyInvite"
+          @open-registration="openTeamRegistration"
+          @close-registration="closeTeamRegistration"
+          @copy-registration="copyTeamRegistration"
           @navigate="navigate"
         />
       </template>

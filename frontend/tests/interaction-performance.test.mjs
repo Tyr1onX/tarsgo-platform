@@ -121,6 +121,6 @@ assert.match(api, /itemActivityPage:/)
 assert.match(app, /loader: \(\) => import\("\.\/pages\/TeamPage\.vue"\)/)
 assert.match(app, /loader: \(\) => import\("\.\/pages\/KnowledgePage\.vue"\)/)
 assert.match(knowledgePage, /emit\("upload", file\)/)
-assert.match(teamPage, /emit\("invite"/)
+assert.ok(teamPage.includes("emit('openRegistration')"))
 
 console.log("Local task patching, pending actions, route loading and interaction requests passed")

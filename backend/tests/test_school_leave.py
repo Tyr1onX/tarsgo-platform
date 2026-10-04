@@ -19,7 +19,7 @@ from app.school_leave import collect_pending_school_leave
 
 TEST_EMAILS = (
     "leave-admin@example.com",
-    "leave-manager@example.com",
+    "leave-member-d@example.com",
     "leave-a@example.com",
     "leave-b@example.com",
     "leave-c@example.com",
@@ -93,11 +93,11 @@ def main() -> None:
             role="admin",
             status="active",
         )
-        manager = Member(
-            name="测试任务管理员",
+        member_d = Member(
+            name="测试成员丁",
             email=TEST_EMAILS[1],
             student_id="TEST900002",
-            role="manager",
+            role="member",
             status="active",
         )
         member_a = Member(
@@ -128,9 +128,9 @@ def main() -> None:
             role="member",
             status="active",
         )
-        db.add_all([admin, manager, member_a, member_b, member_c, missing_id])
+        db.add_all([admin, member_d, member_a, member_b, member_c, missing_id])
         db.commit()
-        for member in (admin, manager, member_a, member_b, member_c, missing_id):
+        for member in (admin, member_d, member_a, member_b, member_c, missing_id):
             db.refresh(member)
 
         def override_database():
@@ -150,7 +150,7 @@ def main() -> None:
             assert response.json()["detail"] == "请先完善学号，生成学校请假材料时需要使用。"
 
             # Task member summaries must not start exposing student ids.
-            set_actor(manager)
+            set_actor(admin)
             task_assignees = client.get("/api/tasks/assignees")
             assert task_assignees.status_code == 200, task_assignees.text
             assert all("student_id" not in row for row in task_assignees.json())
@@ -208,8 +208,8 @@ def main() -> None:
             assert c_response.status_code == 201
             c_request_id = c_response.json()["id"]
 
-            # Managers/members never gain school-leave administration permission.
-            set_actor(manager)
+            # Members never gain school-leave administration permission.
+            set_actor(member_d)
             assert client.get("/api/school-leave/admin/runs").status_code == 403
             assert client.post("/api/school-leave/admin/runs/collect").status_code == 403
             set_actor(member_a)
@@ -229,7 +229,7 @@ def main() -> None:
             ]
 
             # New document/delete endpoints remain admin-only.
-            set_actor(manager)
+            set_actor(member_d)
             assert client.get(f"/api/school-leave/admin/runs/{run_one_id}/document").status_code == 403
             assert client.delete(f"/api/school-leave/admin/runs/{run_one_id}").status_code == 403
             set_actor(member_a)
@@ -363,7 +363,7 @@ def main() -> None:
             ).status_code == 409
 
             # Deleting sent history remains admin-only.
-            set_actor(manager)
+            set_actor(member_d)
             assert client.delete(f"/api/school-leave/admin/runs/{run_two_id}").status_code == 403
             set_actor(member_a)
             assert client.delete(f"/api/school-leave/admin/runs/{run_two_id}").status_code == 403
@@ -501,7 +501,7 @@ def main() -> None:
             app.dependency_overrides.update(previous_overrides)
             test_member_ids = [
                 admin.id,
-                manager.id,
+                member_d.id,
                 member_a.id,
                 member_b.id,
                 member_c.id,

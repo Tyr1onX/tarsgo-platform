@@ -3,7 +3,8 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator, model_validator
 
-Role = Literal["admin", "manager", "member"]
+Role = Literal["admin", "member"]
+TeamGroup = Literal["electrical", "mechanical", "vision", "ai", "operations"]
 MemberStatus = Literal["invited", "active", "disabled"]
 TaskStatus = Literal["todo", "doing", "done"]
 SchoolLeaveRequestStatus = Literal["pending", "included", "withdrawn"]
@@ -56,6 +57,7 @@ class MemberOut(BaseModel):
     name: str
     email: str
     student_id: str | None = None
+    team_group: TeamGroup | None = None
     role: Role
     status: MemberStatus
     created_at: datetime
@@ -64,8 +66,6 @@ class MemberOut(BaseModel):
 class InviteCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     email: str = Field(min_length=3, max_length=255)
-    role: Role = "member"
-
     @field_validator("name")
     @classmethod
     def validate_name(cls, value: str) -> str:
@@ -96,14 +96,61 @@ class InvitationAccept(BaseModel):
     password: str = Field(min_length=8, max_length=128)
 
 
+class TeamRegistrationInfo(BaseModel):
+    expires_at: datetime
+    active: bool = True
+
+
+class TeamRegistrationWindowOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    expires_at: datetime
+    created_at: datetime
+
+
+class TeamRegistrationWindowOpenOut(TeamRegistrationWindowOut):
+    register_path: str
+
+
+class TeamRegistrationIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=100)
+    email: str = Field(min_length=3, max_length=255)
+    student_id: str = Field(min_length=1, max_length=50)
+    team_group: TeamGroup
+    password: str = Field(min_length=8, max_length=128)
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("姓名不能为空")
+        return value
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, value: str) -> str:
+        return normalize_email(value)
+
+    @field_validator("student_id")
+    @classmethod
+    def validate_student_id(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("学号不能为空")
+        return value
+
+
 class MemberSummary(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
     name: str
 
 
-class MemberStudentIDUpdate(BaseModel):
+class MemberProfileUpdate(BaseModel):
     student_id: str | None = Field(default=None, max_length=50)
+    team_group: TeamGroup | None = None
 
     @field_validator("student_id")
     @classmethod

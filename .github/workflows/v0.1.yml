@@ -159,6 +159,9 @@ jobs:
       - name: Verify school leave timer installer syntax
         run: bash -n scripts/install_school_leave_timer.sh
 
+      - name: Verify team registration and role simplification
+        run: docker compose exec -T api python -m tests.test_team_registration
+
       - name: Verify AI planner
         run: docker compose exec -T api python -m tests.test_ai_planner
 

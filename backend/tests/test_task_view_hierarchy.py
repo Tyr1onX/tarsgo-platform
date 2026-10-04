@@ -38,29 +38,28 @@ def main() -> None:
     child_ids: set[int] = set()
     with SessionLocal() as db:
         admin = db.scalar(select(Member).where(Member.email == "admin@example.com"))
-        manager = db.scalar(select(Member).where(Member.email == "manager@example.com"))
         member = db.scalar(
             select(Member)
             .where(Member.role == "member", Member.status == "active")
             .order_by(Member.id)
             .limit(1)
         )
-        assert admin and manager and member
+        assert admin and member
 
-        root_a = create_task(db, manager, title="Hierarchy claim smoke A", owner_id=manager.id)
+        root_a = create_task(db, admin, title="Hierarchy claim smoke A", owner_id=admin.id)
         root_ids.add(root_a)
-        claim_a = create_task(db, manager, title="Claimable child A1", parent_id=root_a, claimable=True)
-        claim_b = create_task(db, manager, title="Claimable child A2", parent_id=root_a, claimable=True)
-        assigned = create_task(db, manager, title="Assigned child A3", parent_id=root_a, owner_id=member.id)
+        claim_a = create_task(db, admin, title="Claimable child A1", parent_id=root_a, claimable=True)
+        claim_b = create_task(db, admin, title="Claimable child A2", parent_id=root_a, claimable=True)
+        assigned = create_task(db, admin, title="Assigned child A3", parent_id=root_a, owner_id=member.id)
         child_ids.update((claim_a, claim_b, assigned))
 
-        root_b = create_task(db, manager, title="Hierarchy claim smoke B", owner_id=admin.id)
+        root_b = create_task(db, admin, title="Hierarchy claim smoke B", owner_id=admin.id)
         root_ids.add(root_b)
-        claim_c = create_task(db, manager, title="Claimable child B1", parent_id=root_b, claimable=True)
+        claim_c = create_task(db, admin, title="Claimable child B1", parent_id=root_b, claimable=True)
         child_ids.add(claim_c)
 
         standalone_claimable_root = create_task(
-            db, manager, title="Standalone claimable root", claimable=True,
+            db, admin, title="Standalone claimable root", claimable=True,
         )
         root_ids.add(standalone_claimable_root)
         db.commit()
@@ -81,7 +80,7 @@ def main() -> None:
             assert {root_a, root_b, standalone_claimable_root, claim_a, claim_b, claim_c} <= set(claimable_by_id)
             assert assigned not in claimable_by_id
             assert sum(row["id"] == root_a for row in claimable_rows) == 1
-            assert claimable_by_id[root_a]["owner"]["id"] == manager.id
+            assert claimable_by_id[root_a]["owner"]["id"] == admin.id
             assert claimable_by_id[root_a]["owner_claimable"] is False
             assert claimable_by_id[standalone_claimable_root]["parent_id"] is None
             assert claimable_by_id[standalone_claimable_root]["owner_claimable"] is True

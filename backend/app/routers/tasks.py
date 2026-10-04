@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import and_, case, delete, or_, select, update
 from sqlalchemy.orm import Session, selectinload
 
-from ..auth import get_current_member, require_admin, require_manager
+from ..auth import get_current_member, require_admin
 from ..db import get_db
 from ..models import ItemActivity, ItemFact, Member, Task, item_fact_tasks, task_collaborators, task_dependencies
 from ..schemas import (
@@ -33,8 +33,8 @@ from ..schemas import (
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
 
-def _is_manager(member: Member) -> bool:
-    return member.role in {"admin", "manager"}
+def _is_admin(member: Member) -> bool:
+    return member.role == "admin"
 
 
 def _task_query():
@@ -62,7 +62,7 @@ def _fact_query():
 
 def _visible_facts(db: Session, root: Task, current: Member, task_id: int | None) -> list[ItemFact]:
     query = _fact_query().where(ItemFact.root_task_id == root.id, ItemFact.is_active.is_(True))
-    if _is_manager(current) or root.owner_id == current.id:
+    if _is_admin(current) or root.owner_id == current.id:
         return list(db.scalars(query.order_by(ItemFact.created_at.asc(), ItemFact.id.asc())).unique().all())
     if task_id is not None and task_id != root.id:
         is_participant = db.scalar(
@@ -200,7 +200,7 @@ def _root_for_task(db: Session, task: Task) -> Task:
 
 
 def _can_write_item(db: Session, root: Task, current: Member) -> bool:
-    if _is_manager(current) or root.owner_id == current.id:
+    if _is_admin(current) or root.owner_id == current.id:
         return True
     child_id = db.scalar(
         select(Task.id)
@@ -221,9 +221,9 @@ def _require_item_writer(db: Session, root: Task, current: Member) -> None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="只有事项参与者可以更新事项信息")
 
 
-def _require_fact_manager(root: Task, current: Member) -> None:
-    if not _is_manager(current) and root.owner_id != current.id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="只有管理者或事项负责人可以调整当前信息范围")
+def _require_fact_scope_editor(root: Task, current: Member) -> None:
+    if not _is_admin(current) and root.owner_id != current.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="只有管理员或事项负责人可以调整当前信息范围")
 
 
 def _validate_fact_tasks(db: Session, root: Task, scope: str, related_task_ids: list[int]) -> list[Task]:
@@ -271,7 +271,7 @@ def _create_item_fact(
 
     previous = None
     if supersedes_fact_id is not None:
-        _require_fact_manager(root, current)
+        _require_fact_scope_editor(root, current)
         previous = db.get(ItemFact, supersedes_fact_id)
         if previous is None or previous.root_task_id != root.id or not previous.is_active:
             raise HTTPException(status_code=409, detail="待更新的当前信息已变化，请刷新后重试")
@@ -313,7 +313,7 @@ def sync_root_status(db: Session, root_id: int) -> None:
 
 def _can_write_task_progress(task: Task, current: Member) -> bool:
     return (
-        _is_manager(current)
+        _is_admin(current)
         or task.owner_id == current.id
         or any(member.id == current.id for member in task.collaborators)
     )
@@ -458,7 +458,7 @@ def list_tasks(
 
 
 @router.get("/assignees", response_model=list[MemberSummary])
-def list_task_assignees(_: Member = Depends(require_manager), db: Session = Depends(get_db)) -> list[Member]:
+def list_task_assignees(_: Member = Depends(require_admin), db: Session = Depends(get_db)) -> list[Member]:
     return list(db.scalars(select(Member).where(Member.status == "active").order_by(Member.name.asc(), Member.id.asc())))
 
 
@@ -478,7 +478,7 @@ def _visible_activity_query(
     task_id: int | None,
 ):
     query = _activity_query().where(ItemActivity.root_task_id == root.id)
-    if not _is_manager(current) and root.owner_id != current.id:
+    if not _is_admin(current) and root.owner_id != current.id:
         related_source_ids = [value for value in db.scalars(
             select(ItemFact.source_activity_id).where(
                 ItemFact.root_task_id == root.id,
@@ -673,7 +673,7 @@ def publish_task_progress(
     if _is_task_blocked(task):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="前置分工尚未完成，暂时不能推进该任务")
     if not _can_write_task_progress(task, current):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="只有任务负责人、协作者或管理者可以发布进展")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="只有任务负责人、协作者或管理员可以发布进展")
 
     root = db.scalar(select(Task).where(Task.id == task.parent_id).with_for_update())
     if root is None:
@@ -713,7 +713,7 @@ def complete_task(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="任务不存在")
     if task.parent_id is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="事项不能通过完成分工操作结束")
-    if not _is_manager(current) and task.owner_id != current.id:
+    if not _is_admin(current) and task.owner_id != current.id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="只有任务负责人可以完成任务")
     if task.status == "done":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="任务已经完成")
@@ -813,7 +813,7 @@ def delete_context_fact(
 ) -> TaskOut:
     root = _get_root_task(db, root_task_id)
     _require_item_writer(db, root, current)
-    _require_fact_manager(root, current)
+    _require_fact_scope_editor(root, current)
     facts = list(db.scalars(select(ItemFact).where(
         ItemFact.root_task_id == root.id, ItemFact.is_active.is_(True)
     ).order_by(ItemFact.created_at.asc(), ItemFact.id.asc())).all())
@@ -860,7 +860,7 @@ def update_item_fact_scope(
 ) -> TaskOut:
     root = _get_root_task(db, root_task_id)
     _require_item_writer(db, root, current)
-    _require_fact_manager(root, current)
+    _require_fact_scope_editor(root, current)
     fact = db.get(ItemFact, fact_id)
     if fact is None or fact.root_task_id != root.id or not fact.is_active:
         raise HTTPException(status_code=404, detail="当前信息不存在")
@@ -879,7 +879,7 @@ def deactivate_item_fact(
 ) -> TaskOut:
     root = _get_root_task(db, root_task_id)
     _require_item_writer(db, root, current)
-    _require_fact_manager(root, current)
+    _require_fact_scope_editor(root, current)
     fact = db.get(ItemFact, fact_id)
     if fact is None or fact.root_task_id != root.id or not fact.is_active:
         raise HTTPException(status_code=404, detail="当前信息不存在")
@@ -924,7 +924,7 @@ def add_task_result_to_context(
 
 
 @router.post("", response_model=TaskOut, status_code=status.HTTP_201_CREATED)
-def create_task(payload: TaskCreate, current: Member = Depends(require_manager), db: Session = Depends(get_db)) -> TaskOut:
+def create_task(payload: TaskCreate, current: Member = Depends(require_admin), db: Session = Depends(get_db)) -> TaskOut:
     task = _build_task(db, payload, current)
     if task.parent_id is not None:
         sync_root_status(db, task.parent_id)
@@ -936,7 +936,7 @@ def create_task(payload: TaskCreate, current: Member = Depends(require_manager),
 @router.post("/batch", response_model=TaskBatchOut, status_code=status.HTTP_201_CREATED)
 def create_task_batch(
     payload: TaskBatchCreate,
-    current: Member = Depends(require_manager),
+    current: Member = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> TaskBatchOut:
     try:
@@ -1000,7 +1000,7 @@ def update_task(
     task = _get_task(db, task_id)
     fields = payload.model_fields_set
 
-    if not _is_manager(current):
+    if not _is_admin(current):
         if task.owner_id != current.id:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="只有负责人可以更新任务状态和执行结果")
         has_child_tasks = task.parent_id is None and db.scalar(

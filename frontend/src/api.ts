@@ -17,6 +17,11 @@ import type {
   KnowledgeDocument,
   KnowledgeSyncSummary,
   Role,
+  TeamGroup,
+  TeamRegistrationInfo,
+  TeamRegistrationPayload,
+  TeamRegistrationWindow,
+  TeamRegistrationWindowOpen,
   SchoolLeaveAdminConfig,
   SchoolLeaveRequest,
   SchoolLeaveRun,
@@ -77,8 +82,11 @@ export interface TaskPayload {
 
 export const api = {
   me: () => request<Member>("/api/auth/me"),
-  updateMeStudentId: (studentId: string | null) =>
-    request<Member>("/api/auth/me", { method: "PATCH", body: JSON.stringify({ student_id: studentId }) }),
+  updateMeProfile: (studentId: string | null, teamGroup: TeamGroup | null) =>
+    request<Member>("/api/auth/me", {
+      method: "PATCH",
+      body: JSON.stringify({ student_id: studentId, team_group: teamGroup }),
+    }),
   login: (email: string, password: string) =>
     request<Member>("/api/auth/login", { method: "POST", body: JSON.stringify({ email, password }) }),
   logout: () => request<void>("/api/auth/logout", { method: "POST" }),
@@ -91,18 +99,32 @@ export const api = {
     }),
 
   members: () => request<Member[]>("/api/members"),
-  inviteMember: (name: string, email: string, role: Role) =>
+  inviteMember: (name: string, email: string) =>
     request<InviteResult>("/api/members/invite", {
       method: "POST",
-      body: JSON.stringify({ name, email, role }),
+      body: JSON.stringify({ name, email }),
     }),
   regenerateInvite: (memberId: number) => request<InviteResult>(`/api/members/${memberId}/invite`, { method: "POST" }),
   disableMember: (memberId: number) => request<Member>(`/api/members/${memberId}/disable`, { method: "POST" }),
   enableMember: (memberId: number) => request<Member>(`/api/members/${memberId}/enable`, { method: "POST" }),
-  updateMemberStudentId: (memberId: number, studentId: string | null) =>
-    request<Member>(`/api/members/${memberId}/student-id`, {
+  updateMemberProfile: (memberId: number, studentId: string | null, teamGroup: TeamGroup | null) =>
+    request<Member>(`/api/members/${memberId}/profile`, {
       method: "PATCH",
-      body: JSON.stringify({ student_id: studentId }),
+      body: JSON.stringify({ student_id: studentId, team_group: teamGroup }),
+    }),
+
+  currentTeamRegistration: () =>
+    request<TeamRegistrationWindow | null>("/api/team-registration/admin/current"),
+  openTeamRegistration: () =>
+    request<TeamRegistrationWindowOpen>("/api/team-registration/admin/open", { method: "POST" }),
+  closeTeamRegistration: () =>
+    request<void>("/api/team-registration/admin/close", { method: "POST" }),
+  teamRegistrationInfo: (token: string) =>
+    request<TeamRegistrationInfo>(`/api/team-registration/${encodeURIComponent(token)}`),
+  registerTeamMember: (token: string, payload: TeamRegistrationPayload) =>
+    request<Member>(`/api/team-registration/${encodeURIComponent(token)}/register`, {
+      method: "POST",
+      body: JSON.stringify(payload),
     }),
 
   schoolLeaveRequests: () => request<SchoolLeaveRequest[]>("/api/school-leave/requests"),

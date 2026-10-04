@@ -66,14 +66,13 @@ def expect_http(expected: int, callback, *, detail: str | None = None) -> None:
 
 def main() -> None:
     with SessionLocal() as db:
-        manager = db.scalar(select(Member).where(Member.email == "manager@example.com"))
         member = db.scalar(
             select(Member)
             .where(Member.role == "member", Member.status == "active")
             .order_by(Member.id)
             .limit(1)
         )
-        assert manager and member
+        assert member
         admin = Member(
             name="Review 测试管理员",
             email="ai-review-admin@example.com",
@@ -123,7 +122,7 @@ def main() -> None:
             owner_id=admin.id,
             owner_claimable=False,
             collaboration_open=True,
-            collaborators=[manager],
+            collaborators=[member],
             deadline=datetime(2026, 10, 11, 18, 0),
             status="todo",
             created_by=admin.id,
@@ -255,7 +254,7 @@ def main() -> None:
         applied_update = ai_items.apply_item_review_suggestion(
             root_id,
             result.suggestions[0],
-            current=manager,
+            current=admin,
             db=db,
         )
         updated = applied_update.task
@@ -276,7 +275,7 @@ def main() -> None:
         applied_add = ai_items.apply_item_review_suggestion(
             root_id,
             result.suggestions[1],
-            current=manager,
+            current=admin,
             db=db,
         )
         new_task = applied_add.task
@@ -301,7 +300,7 @@ def main() -> None:
                 ai_items.apply_item_review_suggestion(
                     root_id,
                     atomic_candidate,
-                    current=manager,
+                    current=admin,
                     db=db,
                 )
         except RuntimeError:
@@ -325,7 +324,7 @@ def main() -> None:
             lambda: ai_items.apply_item_review_suggestion(
                 root_id,
                 done_update,
-                current=manager,
+                current=admin,
                 db=db,
             ),
         )
@@ -336,13 +335,9 @@ def main() -> None:
                 _suggestion(
                 "update_task", 99999999, title="外部任务", deliverable="不应修改。", execution_points=[]
                 ),
-                current=manager,
+                current=admin,
                 db=db,
             ),
-        )
-        expect_http(
-            403,
-            lambda: ai_items.review_item_plan(root_id, current=manager, db=db, provider=provider),
         )
         expect_http(
             403,

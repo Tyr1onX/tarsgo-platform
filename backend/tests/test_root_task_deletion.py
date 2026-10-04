@@ -58,7 +58,6 @@ def main() -> None:
 
     with SessionLocal() as db:
         admin = db.scalar(select(Member).where(Member.email == "admin@example.com"))
-        manager = db.scalar(select(Member).where(Member.email == "manager@example.com"))
         member = db.scalar(
             select(Member)
             .where(Member.role == "member", Member.status == "active")
@@ -66,7 +65,6 @@ def main() -> None:
             .limit(1)
         )
         assert admin and admin.status == "active" and admin.role == "admin"
-        assert manager and manager.status == "active" and manager.role == "manager"
         assert member and member.status == "active" and member.role == "member"
 
         target_root_id = create_task(db, admin, title="Root deletion smoke", owner_id=admin.id)
@@ -76,7 +74,7 @@ def main() -> None:
         )
         child_b_id = create_task(
             db, admin, title="Root deletion child B", parent_id=target_root_id,
-            owner_id=manager.id, collaborators=[member.id], dependencies=[child_a_id],
+            owner_id=member.id, collaborators=[admin.id], dependencies=[child_a_id],
         )
         target_children.update((child_a_id, child_b_id))
         activity = ItemActivity(
@@ -102,7 +100,7 @@ def main() -> None:
         keep_root_id = create_task(db, admin, title="Keep unrelated root", owner_id=admin.id)
         keep_roots.add(keep_root_id)
         keep_child_id = create_task(
-            db, admin, title="Keep unrelated child", parent_id=keep_root_id, owner_id=manager.id,
+            db, admin, title="Keep unrelated child", parent_id=keep_root_id, owner_id=member.id,
         )
         keep_children.add(keep_child_id)
         keep_activity = ItemActivity(
@@ -139,8 +137,6 @@ def main() -> None:
             assert client.delete("/api/tasks/2147483000").status_code == 404
             assert db.get(Task, target_root_id) is not None
 
-            app.dependency_overrides[get_current_member] = lambda: manager
-            assert client.delete(f"/api/tasks/{target_root_id}").status_code == 403
             app.dependency_overrides[get_current_member] = lambda: member
             assert client.delete(f"/api/tasks/{target_root_id}").status_code == 403
             assert db.get(Task, target_root_id) is not None

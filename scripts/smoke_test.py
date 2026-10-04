@@ -115,7 +115,7 @@ def activate(invitation):
     return password
 
 
-def create_task(manager, **overrides):
+def create_task(admin, **overrides):
     payload = {
         "title": "默认运营任务",
         "deliverable": "",
@@ -128,7 +128,7 @@ def create_task(manager, **overrides):
         "status": "todo",
     }
     payload.update(overrides)
-    return call(manager, "/api/tasks", method="POST", data=payload, expected=201)
+    return call(admin, "/api/tasks", method="POST", data=payload, expected=201)
 
 
 def run_workflow():
@@ -175,7 +175,7 @@ def run_workflow():
     assert {item["id"] for item in assignees} >= {admin_id, owner_id, second_id}
 
     call(
-        manager,
+        admin,
         "/api/tasks",
         method="POST",
         data={
@@ -193,22 +193,22 @@ def run_workflow():
     )
 
     root = create_task(
-        manager,
+        admin,
         title=ROOT_TITLE,
         deliverable="完成展示现场整体执行。",
-        owner_id=manager_id,
+        owner_id=admin_id,
         owner_claimable=False,
         collaborator_ids=[second_id],
         collaboration_open=False,
         deadline="2026-09-21T18:00:00",
     )
     assert root["parent_id"] is None
-    assert root["owner"]["id"] == manager_id
+    assert root["owner"]["id"] == admin_id
     assert root["context_facts"] == []
     assert root["result"] == ""
 
     claim_child = create_task(
-        manager,
+        admin,
         title=CLAIM_CHILD_TITLE,
         parent_id=root["id"],
         execution_points=["按清单逐项检查", "确认控制功能正常"],
@@ -226,7 +226,7 @@ def run_workflow():
     assert claim_child["cautions"] == ["备用配件一并清点"]
     assert claim_child["prerequisites"] == ["展示项目清单已确认"]
     claim_child = call(
-        manager,
+        admin,
         f"/api/tasks/{claim_child['id']}",
         method="PATCH",
         data={"cautions": ["出发前再次清点备用配件"]},
@@ -234,30 +234,30 @@ def run_workflow():
     assert claim_child["cautions"] == ["出发前再次清点备用配件"]
 
     collaboration_child = create_task(
-        manager,
+        admin,
         title=COLLAB_CHILD_TITLE,
         parent_id=root["id"],
-        owner_id=manager_id,
+        owner_id=admin_id,
         owner_claimable=False,
         collaboration_open=True,
         deadline="2026-09-21T17:00:00",
     )
     collaboration_child = call(
-        manager,
+        admin,
         f"/api/tasks/{collaboration_child['id']}",
         method="PATCH",
-        data={"result": "管理者可以记录任务执行结果。"},
+        data={"result": "管理员可以记录任务执行结果。"},
     )
-    assert collaboration_child["result"] == "管理者可以记录任务执行结果。"
+    assert collaboration_child["result"] == "管理员可以记录任务执行结果。"
 
     call(
-        manager,
+        admin,
         "/api/tasks",
         method="POST",
         data={
             "title": "不允许的二级分工",
             "deliverable": "",
-            "owner_id": manager_id,
+            "owner_id": admin_id,
             "owner_claimable": False,
             "collaborator_ids": [],
             "collaboration_open": False,
@@ -316,7 +316,7 @@ def run_workflow():
     call(second, f"/api/tasks/{collaboration_child['id']}/collaborators/leave", method="POST")
 
     reassigned = call(
-        manager,
+        admin,
         f"/api/tasks/{claim_child['id']}",
         method="PATCH",
         data={"owner_id": owner_id},
@@ -383,7 +383,7 @@ def run_workflow():
     )
     assert manual_fact["context_facts"][-1] == "活动地点已确认。"
     # A regular participant may add an item fact, but only the item owner or
-    # manager may change its scope or deactivate it. Verify both sides of that
+    # admin may change its scope or deactivate it. Verify both sides of that
     # boundary before checking that the source activity remains in history.
     call(
         owner,
@@ -392,12 +392,12 @@ def run_workflow():
         expected=403,
     )
     after_delete = call(
-        manager,
+        admin,
         f"/api/tasks/{root['id']}/context-facts/1",
         method="DELETE",
     )
     assert after_delete["context_facts"] == ["主办方要求当天提前 20 分钟完成布展。"]
-    activities_after_delete = call(manager, f"/api/tasks/{root['id']}/activities")
+    activities_after_delete = call(admin, f"/api/tasks/{root['id']}/activities")
     assert any(item["content"] == "主办方要求当天提前 20 分钟完成布展。" for item in activities_after_delete)
 
     promoted = call(
@@ -428,7 +428,7 @@ def run_workflow():
     assert call(owner, f"/api/tasks/{root['id']}")["context_facts"] == promoted["context_facts"]
 
     releasable = create_task(
-        manager,
+        admin,
         title=RELEASABLE_TITLE,
         owner_id=None,
         owner_claimable=True,
@@ -456,7 +456,7 @@ def run_workflow():
     login(SECOND_MEMBER_EMAIL, second_password, expected=403)
 
     disabled_target = create_task(
-        manager,
+        admin,
         title="停用成员不可认领",
         owner_id=None,
         owner_claimable=True,
@@ -465,7 +465,7 @@ def run_workflow():
     call(second, f"/api/tasks/{disabled_target['id']}/claim", method="POST", expected=401)
 
     root_updated = call(
-        manager,
+        admin,
         f"/api/tasks/{root['id']}",
         method="PATCH",
         data={"title": ROOT_FINAL_TITLE},
@@ -486,7 +486,6 @@ def verify_persistence():
     admin = login(ADMIN_EMAIL, os.environ["CI_ADMIN_PASSWORD"])
     members = call(admin, "/api/members")
     by_email = {member["email"]: member for member in members}
-    assert by_email[MANAGER_EMAIL]["status"] == "active"
     assert by_email[OWNER_EMAIL]["status"] == "active"
     assert by_email[SECOND_MEMBER_EMAIL]["status"] == "disabled"
 

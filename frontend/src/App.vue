@@ -94,6 +94,7 @@ const invitePassword = ref("")
 const invitePasswordConfirm = ref("")
 
 const registrationInfo = ref<TeamRegistrationInfo | null>(null)
+const registrationChecking = ref(false)
 const registrationEnded = ref(false)
 const registrationLoadError = ref("")
 const registrationName = ref("")
@@ -992,6 +993,7 @@ async function loadRoute() {
       if (!isCurrentLoad()) return
     } else if (routePath.startsWith("/register/")) {
       registrationInfo.value = null
+      registrationChecking.value = true
       registrationEnded.value = false
       registrationLoadError.value = ""
       try {
@@ -1003,6 +1005,8 @@ async function loadRoute() {
         }
         registrationLoadError.value = messageOf(reason)
         return
+      } finally {
+        registrationChecking.value = false
       }
       if (!isCurrentLoad()) return
     } else if (routePath === "/admin/tasks") {

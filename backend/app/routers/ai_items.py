@@ -16,7 +16,7 @@ from ..ai_planner import (
     PlannerTimeoutError,
     get_planner_provider,
 )
-from ..auth import get_current_member, require_manager
+from ..auth import get_current_member, require_admin
 from ..db import get_db
 from ..knowledge import knowledge_enabled, search_historical_documents
 from ..models import ItemActivity, ItemFact, Member, Task
@@ -327,7 +327,7 @@ def review_item_plan(
 def apply_item_review_suggestion(
     root_task_id: int,
     suggestion: AIItemReviewSuggestion,
-    current: Member = Depends(require_manager),
+    current: Member = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> AIItemReviewApplyOut:
     root = db.get(Task, root_task_id)

@@ -164,6 +164,7 @@ def main() -> None:
             assert first.status_code == 201, first.text
             first_id = first.json()["id"]
             assert first.json()["student_id_snapshot"] == "TEST100001"
+            assert first.json()["run_status"] is None
 
             updated = client.patch(
                 f"/api/school-leave/requests/{first_id}",
@@ -183,6 +184,7 @@ def main() -> None:
             withdrawn = client.post(f"/api/school-leave/requests/{first_id}/withdraw")
             assert withdrawn.status_code == 200
             assert withdrawn.json()["status"] == "withdrawn"
+            assert withdrawn.json()["run_status"] is None
 
             # Prepare one exact shared group plus one different group.
             a_response = client.post(
@@ -227,6 +229,16 @@ def main() -> None:
                 ("2026 年 10 月 8 日 13:00 至 17:00", 2),
                 ("2026 年 10 月 8 日 15:00 至 17:00", 1),
             ]
+
+            # Members can read only the run status attached to their own requests.
+            set_actor(member_a)
+            ready_requests = client.get("/api/school-leave/requests")
+            assert ready_requests.status_code == 200, ready_requests.text
+            ready_request = next(item for item in ready_requests.json() if item["id"] == a_request_id)
+            assert ready_request["status"] == "included"
+            assert ready_request["run_status"] == "ready"
+            assert not {"reason", "groups", "created_by", "sent_by"} & ready_request.keys()
+            assert client.get("/api/school-leave/admin/runs").status_code == 403
 
             # New document/delete endpoints remain admin-only.
             set_actor(member_d)
@@ -361,6 +373,15 @@ def main() -> None:
                 f"/api/school-leave/admin/runs/{run_two_id}/reason",
                 json={"reason": "不应允许修改"},
             ).status_code == 409
+
+            # Members see sent status on their own requests but gain no management access.
+            set_actor(member_a)
+            sent_requests = client.get("/api/school-leave/requests")
+            assert sent_requests.status_code == 200, sent_requests.text
+            sent_request = next(item for item in sent_requests.json() if item["id"] == a_request_id)
+            assert sent_request["status"] == "included"
+            assert sent_request["run_status"] == "sent"
+            assert client.get("/api/school-leave/admin/runs").status_code == 403
 
             # Deleting sent history remains admin-only.
             set_actor(member_d)

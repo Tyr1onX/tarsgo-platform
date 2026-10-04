@@ -124,10 +124,11 @@ function formatTimeSpan(startAt: string, endAt: string) {
   return formatMonthDay(start.date) + " " + start.time + " → " + formatMonthDay(end.date) + " " + end.time
 }
 
-function requestStatusLabel(status: SchoolLeaveRequest["status"]) {
-  if (status === "pending") return "待汇总"
-  if (status === "included") return "已汇总"
-  return "已撤回"
+function requestStatusLabel(item: SchoolLeaveRequest) {
+  if (item.status === "pending") return "待汇总"
+  if (item.status === "withdrawn") return "已撤回"
+  if (item.run_status === "sent") return "已发送"
+  return "已汇总"
 }
 
 function localDateTime(date: string, time: string) {
@@ -419,7 +420,7 @@ onMounted(() => {
         >
           <div class="leave-row-main">
             <strong>{{ formatRange(item) }}</strong>
-            <span>{{ requestStatusLabel(item.status) }}</span>
+            <span>{{ requestStatusLabel(item) }}</span>
           </div>
           <div v-if="item.status === 'pending'" class="row-actions leave-row-actions">
             <button type="button" @click="editRequest(item)">修改</button>

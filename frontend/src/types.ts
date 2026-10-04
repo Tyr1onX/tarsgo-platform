@@ -157,6 +157,7 @@ export interface SchoolLeaveRequest {
   student_id_snapshot: string
   status: SchoolLeaveRequestStatus
   run_id: number | null
+  run_status: SchoolLeaveRunStatus | null
   created_at: string
   updated_at: string
 }

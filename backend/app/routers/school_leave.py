@@ -21,6 +21,7 @@ from ..schemas import (
     SchoolLeaveRequestOut,
     SchoolLeaveRequestUpdate,
     SchoolLeaveRunOut,
+    SchoolLeaveRunStatus,
 )
 from ..school_leave import (
     build_school_leave_docx,
@@ -40,8 +41,14 @@ from ..school_leave import (
 router = APIRouter(prefix="/api/school-leave", tags=["school-leave"])
 
 
-def _request_out(request: SchoolLeaveRequest) -> SchoolLeaveRequestOut:
-    return SchoolLeaveRequestOut.model_validate(request)
+def _request_out(
+    request: SchoolLeaveRequest,
+    *,
+    run_status: SchoolLeaveRunStatus | None = None,
+) -> SchoolLeaveRequestOut:
+    return SchoolLeaveRequestOut.model_validate(request).model_copy(
+        update={"run_status": run_status}
+    )
 
 
 def _run_out(db: Session, run: SchoolLeaveRun) -> SchoolLeaveRunOut:
@@ -116,14 +123,16 @@ def list_my_requests(
     current: Member = Depends(get_current_member),
     db: Session = Depends(get_db),
 ) -> list[SchoolLeaveRequestOut]:
-    requests = list(
-        db.scalars(
-            select(SchoolLeaveRequest)
-            .where(SchoolLeaveRequest.member_id == current.id)
-            .order_by(SchoolLeaveRequest.created_at.desc(), SchoolLeaveRequest.id.desc())
-        )
-    )
-    return [_request_out(request) for request in requests]
+    rows = db.execute(
+        select(SchoolLeaveRequest, SchoolLeaveRun.status)
+        .outerjoin(SchoolLeaveRun, SchoolLeaveRun.id == SchoolLeaveRequest.run_id)
+        .where(SchoolLeaveRequest.member_id == current.id)
+        .order_by(SchoolLeaveRequest.created_at.desc(), SchoolLeaveRequest.id.desc())
+    ).all()
+    return [
+        _request_out(request, run_status=run_status)
+        for request, run_status in rows
+    ]
 
 
 @router.post("/requests", response_model=SchoolLeaveRequestOut, status_code=status.HTTP_201_CREATED)

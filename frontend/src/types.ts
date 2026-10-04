@@ -1,4 +1,5 @@
-export type Role = "admin" | "manager" | "member"
+export type Role = "admin" | "member"
+export type TeamGroup = "electrical" | "mechanical" | "vision" | "ai" | "operations"
 export type MemberStatus = "invited" | "active" | "disabled"
 export type TaskStatus = "todo" | "doing" | "done"
 export type TaskView = "mine" | "claimable" | "all"
@@ -9,6 +10,7 @@ export interface Member {
   name: string
   email: string
   student_id: string | null
+  team_group: TeamGroup | null
   role: Role
   status: MemberStatus
   created_at: string
@@ -118,6 +120,29 @@ export interface InvitationInfo {
   name: string
   email: string
   expires_at: string
+}
+
+export interface TeamRegistrationInfo {
+  expires_at: string
+  active: boolean
+}
+
+export interface TeamRegistrationWindow {
+  id: number
+  expires_at: string
+  created_at: string
+}
+
+export interface TeamRegistrationWindowOpen extends TeamRegistrationWindow {
+  register_path: string
+}
+
+export interface TeamRegistrationPayload {
+  name: string
+  email: string
+  student_id: string
+  team_group: TeamGroup
+  password: string
 }
 
 export type SchoolLeaveRequestStatus = "pending" | "included" | "withdrawn"

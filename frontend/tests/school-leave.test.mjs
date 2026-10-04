@@ -69,7 +69,7 @@ const readyGroups = readySection.slice(
 assert.match(readyGroups, /togglePreview\(run\.id, group\.index\)/)
 assert.match(readyGroups, /名单/)
 assert.doesNotMatch(readyGroups, /download\(|>下载</)
-assert.match(readySection, /确认已经通过微信或 QQ 私聊老师发送了这些材料？/)
+assert.match(page, /确认已经通过微信或 QQ 私聊老师发送了这些材料？/)
 assert.match(readySection, /markSent\(run\)/)
 assert.doesNotMatch(readySection, /deleteRun\(/)
 

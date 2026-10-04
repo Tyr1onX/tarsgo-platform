@@ -65,7 +65,7 @@ def expect_http(expected: int, callback) -> HTTPException:
     raise AssertionError(f"expected HTTP {expected}")
 
 
-def create_task(db, manager, *, title, parent_id=None, owner_id=None,
+def create_task(db, admin, *, title, parent_id=None, owner_id=None,
                 owner_claimable=False, collaborator_ids=None, dependencies=None):
     task = tasks_router.create_task(
         TaskCreate(
@@ -79,7 +79,7 @@ def create_task(db, manager, *, title, parent_id=None, owner_id=None,
             deadline=datetime.now() + timedelta(days=1),
             depends_on_task_ids=dependencies or [],
         ),
-        current=manager,
+        current=admin,
         db=db,
     )
     return task.id
@@ -114,16 +114,16 @@ def main() -> None:
 
     try:
         with SessionLocal() as db:
-            manager = db.scalar(select(Member).where(Member.email == "manager@example.com"))
-            assert manager is not None and manager.status == "active"
+            admin = db.scalar(select(Member).where(Member.email == "admin@example.com"))
+            assert admin is not None and admin.status == "active"
             optional_root = tasks_router.create_task(
                 TaskCreate(
                     title=f"Smoke optional deadline root {token}",
-                    owner_id=manager.id,
+                    owner_id=admin.id,
                     owner_claimable=False,
                     deadline=None,
                 ),
-                current=manager,
+                current=admin,
                 db=db,
             )
             root_ids.add(optional_root.id)
@@ -135,7 +135,7 @@ def main() -> None:
                     owner_claimable=True,
                     deadline=None,
                 ),
-                current=manager,
+                current=admin,
                 db=db,
             )
             child_ids.add(optional_child.id)
@@ -143,13 +143,13 @@ def main() -> None:
             tasks_router.update_task(
                 optional_root.id,
                 TaskUpdate(deadline=datetime.now() + timedelta(days=2)),
-                current=manager,
+                current=admin,
                 db=db,
             )
             cleared_root = tasks_router.update_task(
                 optional_root.id,
                 TaskUpdate(deadline=None),
-                current=manager,
+                current=admin,
                 db=db,
             )
             assert cleared_root.deadline is None and db.get(Task, optional_root.id).deadline is None
@@ -164,11 +164,11 @@ def main() -> None:
             db.refresh(unrelated)
             fixture_member_ids.update((owner.id, collaborator.id, unrelated.id))
 
-            root_id = create_task(db, manager, title=f"Smoke 共享事项 {token}", owner_id=manager.id)
+            root_id = create_task(db, admin, title=f"Smoke 共享事项 {token}", owner_id=admin.id)
             root_ids.add(root_id)
             first_id = create_task(
                 db,
-                manager,
+                admin,
                 title="确认来访时间与人数",
                 parent_id=root_id,
                 owner_claimable=True,
@@ -176,7 +176,7 @@ def main() -> None:
             child_ids.add(first_id)
             second_id = create_task(
                 db,
-                manager,
+                admin,
                 title="准备参观路线",
                 parent_id=root_id,
                 owner_id=collaborator.id,
@@ -185,14 +185,14 @@ def main() -> None:
             child_ids.add(second_id)
             third_id = create_task(
                 db,
-                manager,
+                admin,
                 title="准备展示设备",
                 parent_id=root_id,
                 owner_id=owner.id,
             )
             child_ids.add(third_id)
 
-            detail_context = tasks_router.get_task_context(first_id, current=manager, db=db)
+            detail_context = tasks_router.get_task_context(first_id, current=admin, db=db)
             assert detail_context.root.id == root_id
             assert {task.id for task in detail_context.tasks} == {first_id, second_id, third_id}
             assert detail_context.activity_page.items == []
@@ -226,20 +226,20 @@ def main() -> None:
             db.rollback()
 
             # Dependencies are limited to siblings, cannot self-reference, and cannot cycle.
-            foreign_root_id = create_task(db, manager, title=f"Smoke 另一事项 {token}", owner_id=manager.id)
+            foreign_root_id = create_task(db, admin, title=f"Smoke 另一事项 {token}", owner_id=admin.id)
             root_ids.add(foreign_root_id)
             foreign_child_id = create_task(
-                db, manager, title="另一事项分工", parent_id=foreign_root_id, owner_id=owner.id
+                db, admin, title="另一事项分工", parent_id=foreign_root_id, owner_id=owner.id
             )
             child_ids.add(foreign_child_id)
-            empty_root_id = create_task(db, manager, title=f"Smoke 无分工事项 {token}", owner_id=manager.id)
+            empty_root_id = create_task(db, admin, title=f"Smoke 无分工事项 {token}", owner_id=admin.id)
             root_ids.add(empty_root_id)
-            tasks_router.update_task(empty_root_id, TaskUpdate(status="doing"), current=manager, db=db)
+            tasks_router.update_task(empty_root_id, TaskUpdate(status="doing"), current=admin, db=db)
             tasks_router.sync_root_status(db, empty_root_id)
             assert db.get(Task, empty_root_id).status == "doing"
 
             standalone_member_task_id = create_task(
-                db, manager, title="成员独立任务状态兼容", owner_id=owner.id
+                db, admin, title="成员独立任务状态兼容", owner_id=owner.id
             )
             root_ids.add(standalone_member_task_id)
             tasks_router.update_task(
@@ -256,7 +256,7 @@ def main() -> None:
                 lambda: tasks_router.update_task(
                     second_id,
                     TaskUpdate(depends_on_task_ids=[foreign_child_id]),
-                    current=manager,
+                    current=admin,
                     db=db,
                 ),
             )
@@ -266,7 +266,7 @@ def main() -> None:
                 lambda: tasks_router.update_task(
                     first_id,
                     TaskUpdate(depends_on_task_ids=[first_id]),
-                    current=manager,
+                    current=admin,
                     db=db,
                 ),
             )
@@ -276,7 +276,7 @@ def main() -> None:
                 lambda: tasks_router.update_task(
                     first_id,
                     TaskUpdate(depends_on_task_ids=[second_id]),
-                    current=manager,
+                    current=admin,
                     db=db,
                 ),
             )
@@ -341,20 +341,20 @@ def main() -> None:
                 for index in range(6):
                     db.add(ItemActivity(
                         root_task_id=root_id,
-                        author_id=manager.id,
+                        author_id=admin.id,
                         content=f"分页测试动态 {index}",
                     ))
                 db.commit()
-                paged_context = tasks_router.get_task_context(first_id, current=manager, db=db)
+                paged_context = tasks_router.get_task_context(first_id, current=admin, db=db)
                 assert len(paged_context.activity_page.items) == 5
                 assert paged_context.activity_page.has_more
                 assert paged_context.activity_page.next_before_id == paged_context.activity_page.items[-1].id
                 first_page = tasks_router.list_item_activities_page(
-                    root_id, limit=3, current=manager, db=db,
+                    root_id, limit=3, current=admin, db=db,
                 )
                 assert len(first_page.items) == 3 and first_page.has_more
                 second_page = tasks_router.list_item_activities_page(
-                    root_id, limit=3, before_id=first_page.next_before_id, current=manager, db=db,
+                    root_id, limit=3, before_id=first_page.next_before_id, current=admin, db=db,
                 )
                 assert len(second_page.items) == 3
                 assert not ({activity.id for activity in first_page.items} & {activity.id for activity in second_page.items})
@@ -566,7 +566,7 @@ def main() -> None:
             db.rollback()
 
             # Completion overflow rolls back result, status, activity and root facts together.
-            overflow_id = create_task(db, manager, title="原子完成校验", parent_id=root_id, owner_id=owner.id)
+            overflow_id = create_task(db, admin, title="原子完成校验", parent_id=root_id, owner_id=owner.id)
             child_ids.add(overflow_id)
             replace_fixture_facts(db, root_id, owner, [f"上限事实 {index}" for index in range(30)])
             before_activity_ids = {activity.id for activity in tasks_router.list_item_activities(root_id, current=owner, db=db)}
@@ -608,10 +608,10 @@ def main() -> None:
             db.expire_all()
             assert db.get(Task, root_id).status == "done"
 
-            # Manager status corrections are supported and always recompute root status.
-            tasks_router.update_task(first_id, TaskUpdate(status="doing"), current=manager, db=db)
+            # Admin status corrections are supported and always recompute root status.
+            tasks_router.update_task(first_id, TaskUpdate(status="doing"), current=admin, db=db)
             assert db.get(Task, root_id).status == "doing"
-            tasks_router.update_task(first_id, TaskUpdate(status="done"), current=manager, db=db)
+            tasks_router.update_task(first_id, TaskUpdate(status="done"), current=admin, db=db)
             assert db.get(Task, root_id).status == "done"
             expect_http(
                 403,

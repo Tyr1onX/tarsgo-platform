@@ -168,6 +168,23 @@ def run_workflow():
     call(owner, "/api/knowledge/999999", method="DELETE", expected=403)
     upload_markdown(owner, expected=403)
     call(owner, "/api/tasks/assignees", expected=403)
+    call(
+        owner,
+        "/api/tasks",
+        method="POST",
+        data={
+            "title": "成员不能创建事项",
+            "deliverable": "",
+            "owner_id": owner_id,
+            "owner_claimable": False,
+            "collaborator_ids": [],
+            "collaboration_open": False,
+            "parent_id": None,
+            "deadline": None,
+            "status": "todo",
+        },
+        expected=403,
+    )
 
     admin_profile = call(admin, "/api/auth/me")
     admin_id = admin_profile["id"]

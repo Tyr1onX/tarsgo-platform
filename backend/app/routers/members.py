@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from ..auth import hash_token, new_token, require_admin, utcnow
 from ..db import get_db
 from ..models import Invitation, LoginSession, Member
-from ..schemas import InviteCreate, InviteOut, MemberOut, MemberStudentIDUpdate
+from ..schemas import InviteCreate, InviteOut, MemberOut, MemberProfileUpdate
 
 router = APIRouter(prefix="/api/members", tags=["members"])
 INVITATION_TTL = timedelta(days=7)
@@ -45,7 +45,7 @@ def invite_member(
     if db.scalar(select(Member.id).where(Member.email == payload.email)) is not None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="该邮箱已存在")
 
-    member = Member(name=payload.name, email=payload.email, role=payload.role, status="invited")
+    member = Member(name=payload.name, email=payload.email, role="member", status="invited")
     db.add(member)
     db.flush()
     return _create_invitation(db, member)
@@ -65,17 +65,21 @@ def regenerate_invitation(
     return _create_invitation(db, member)
 
 
-@router.patch("/{member_id}/student-id", response_model=MemberOut)
-def update_member_student_id(
+@router.patch("/{member_id}/profile", response_model=MemberOut)
+def update_member_profile(
     member_id: int,
-    payload: MemberStudentIDUpdate,
+    payload: MemberProfileUpdate,
     _: Member = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> Member:
     member = db.get(Member, member_id)
     if not member:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="成员不存在")
-    member.student_id = payload.student_id
+    fields = payload.model_fields_set
+    if "student_id" in fields:
+        member.student_id = payload.student_id
+    if "team_group" in fields:
+        member.team_group = payload.team_group
     try:
         db.commit()
     except IntegrityError as exc:

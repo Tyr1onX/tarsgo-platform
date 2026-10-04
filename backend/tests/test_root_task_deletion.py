@@ -74,7 +74,7 @@ def main() -> None:
         )
         child_b_id = create_task(
             db, admin, title="Root deletion child B", parent_id=target_root_id,
-            owner_id=member.id, collaborators=[member.id], dependencies=[child_a_id],
+            owner_id=member.id, collaborators=[admin.id], dependencies=[child_a_id],
         )
         target_children.update((child_a_id, child_b_id))
         activity = ItemActivity(

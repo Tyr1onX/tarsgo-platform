@@ -158,21 +158,21 @@ def run_workflow():
     second_id = second_invite["member"]["id"]
     second_password = activate(second_invite)
 
-    manager = login(MANAGER_EMAIL, manager_password)
     owner = login(OWNER_EMAIL, owner_password)
     second = login(SECOND_MEMBER_EMAIL, second_password)
 
-    call(manager, "/api/members", expected=403)
-    call(manager, "/api/knowledge", expected=403)
-    call(manager, "/api/knowledge/search?q=fixture", expected=403)
-    call(manager, "/api/knowledge/sync/github", method="POST", expected=403)
-    call(manager, "/api/knowledge/999999", method="DELETE", expected=403)
-    upload_markdown(manager, expected=403)
     call(owner, "/api/members", expected=403)
+    call(owner, "/api/knowledge", expected=403)
+    call(owner, "/api/knowledge/search?q=fixture", expected=403)
+    call(owner, "/api/knowledge/sync/github", method="POST", expected=403)
+    call(owner, "/api/knowledge/999999", method="DELETE", expected=403)
+    upload_markdown(owner, expected=403)
     call(owner, "/api/tasks/assignees", expected=403)
 
-    assignees = call(manager, "/api/tasks/assignees")
-    assert {item["id"] for item in assignees} >= {manager_id, owner_id, second_id}
+    admin_profile = call(admin, "/api/auth/me")
+    admin_id = admin_profile["id"]
+    assignees = call(admin, "/api/tasks/assignees")
+    assert {item["id"] for item in assignees} >= {admin_id, owner_id, second_id}
 
     call(
         manager,

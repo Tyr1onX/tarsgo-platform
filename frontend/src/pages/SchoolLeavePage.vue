@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from "vue"
 
 import { api } from "../api"
+import FileDropzone from "../components/FileDropzone.vue"
 import type {
   Member,
   SchoolLeaveAdminConfig,
@@ -24,6 +25,9 @@ const summary = ref<SchoolLeaveAdminSummary | null>(null)
 const loading = ref(true)
 const saving = ref(false)
 const actionRunId = ref<number | null>(null)
+const uploadingResultKeys = ref<Record<string, boolean>>({})
+const resultUploadErrors = ref<Record<string, string>>({})
+const reuploadDropzones = ref<Record<string, boolean>>({})
 const error = ref("")
 const notice = ref("")
 const editingRequestId = ref<number | null>(null)
@@ -33,6 +37,9 @@ const pendingPreviewKey = ref("")
 const editingReasonRunId = ref<number | null>(null)
 const historyExpanded = ref(false)
 const activeView = ref<"mine" | "admin">("mine")
+
+const SCHOOL_LEAVE_RESULT_ACCEPT = "image/jpeg,image/png,application/pdf,.jpg,.jpeg,.png,.pdf"
+const SCHOOL_LEAVE_RESULT_MAX_SIZE = 15 * 1024 * 1024
 
 function shanghaiToday() {
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -344,22 +351,45 @@ async function downloadRunDocument(run: SchoolLeaveRun) {
   }
 }
 
-async function uploadResult(run: SchoolLeaveRun, groupIndex: number, event: Event) {
-  const input = event.target as HTMLInputElement
-  const file = input.files?.[0]
-  input.value = ""
-  if (!file) return
-  actionRunId.value = run.id
+function resultUploadKey(runId: number, groupIndex: number) {
+  return `${runId}:${groupIndex}`
+}
+
+function isResultUploading(runId: number, groupIndex: number) {
+  return Boolean(uploadingResultKeys.value[resultUploadKey(runId, groupIndex)])
+}
+
+function resultUploadError(runId: number, groupIndex: number) {
+  return resultUploadErrors.value[resultUploadKey(runId, groupIndex)] ?? ""
+}
+
+function isReuploadDropzoneOpen(runId: number, groupIndex: number) {
+  return Boolean(reuploadDropzones.value[resultUploadKey(runId, groupIndex)])
+}
+
+function showReuploadDropzone(runId: number, groupIndex: number) {
+  const key = resultUploadKey(runId, groupIndex)
+  reuploadDropzones.value = { ...reuploadDropzones.value, [key]: true }
+  resultUploadErrors.value = { ...resultUploadErrors.value, [key]: "" }
+}
+
+async function uploadResult(run: SchoolLeaveRun, groupIndex: number, file: File) {
+  const key = resultUploadKey(run.id, groupIndex)
+  if (uploadingResultKeys.value[key]) return
+
+  uploadingResultKeys.value = { ...uploadingResultKeys.value, [key]: true }
+  resultUploadErrors.value = { ...resultUploadErrors.value, [key]: "" }
   error.value = ""
   notice.value = ""
   try {
     await api.uploadSchoolLeaveResult(run.id, groupIndex, file)
+    reuploadDropzones.value = { ...reuploadDropzones.value, [key]: false }
     notice.value = "盖章结果已上传。"
     await load()
   } catch (reason) {
-    error.value = messageOf(reason)
+    resultUploadErrors.value = { ...resultUploadErrors.value, [key]: messageOf(reason) }
   } finally {
-    actionRunId.value = null
+    uploadingResultKeys.value = { ...uploadingResultKeys.value, [key]: false }
   }
 }
 
@@ -587,17 +617,31 @@ onMounted(() => {
                 >
                   查看
                 </button>
-                <label class="secondary leave-upload-action">
-                  {{ group.result?.available ? "重新上传" : "上传盖章结果" }}
-                  <input
-                    type="file"
-                    accept=".jpg,.jpeg,.png,.pdf,image/jpeg,image/png,application/pdf"
-                    :disabled="actionRunId === run.id"
-                    @change="uploadResult(run, group.index, $event)"
-                  />
-                </label>
+                <button
+                  v-if="group.result?.available && !isReuploadDropzoneOpen(run.id, group.index)"
+                  class="secondary"
+                  type="button"
+                  :disabled="actionRunId === run.id"
+                  @click="showReuploadDropzone(run.id, group.index)"
+                >
+                  重新上传
+                </button>
               </div>
             </div>
+            <FileDropzone
+              v-if="!group.result?.available || isReuploadDropzoneOpen(run.id, group.index)"
+              class="leave-result-dropzone"
+              :accept="SCHOOL_LEAVE_RESULT_ACCEPT"
+              :max-size="SCHOOL_LEAVE_RESULT_MAX_SIZE"
+              :disabled="actionRunId === run.id"
+              :uploading="isResultUploading(run.id, group.index)"
+              label="将文件拖到这里，或点击选择文件"
+              hint="JPG / PNG / PDF · 最大 15 MB"
+              @file-selected="uploadResult(run, group.index, $event)"
+            />
+            <p v-if="resultUploadError(run.id, group.index)" class="leave-upload-error">
+              {{ resultUploadError(run.id, group.index) }}
+            </p>
             <div v-if="previewKey === run.id + ':' + group.index" class="leave-preview">
               <div v-for="member in group.members" :key="member.member_id" class="leave-preview-row">
                 <span>{{ member.name }}</span><span>{{ member.student_id }}</span>
@@ -686,16 +730,30 @@ onMounted(() => {
                 >
                   查看
                 </button>
-                <label class="secondary leave-upload-action">
+                <button
+                  v-if="!isReuploadDropzoneOpen(run.id, group.index)"
+                  class="secondary"
+                  type="button"
+                  :disabled="actionRunId === run.id"
+                  @click="showReuploadDropzone(run.id, group.index)"
+                >
                   重新上传
-                  <input
-                    type="file"
-                    accept=".jpg,.jpeg,.png,.pdf,image/jpeg,image/png,application/pdf"
-                    :disabled="actionRunId === run.id"
-                    @change="uploadResult(run, group.index, $event)"
-                  />
-                </label>
+                </button>
               </div>
+              <FileDropzone
+                v-if="isReuploadDropzoneOpen(run.id, group.index)"
+                class="leave-result-dropzone"
+                :accept="SCHOOL_LEAVE_RESULT_ACCEPT"
+                :max-size="SCHOOL_LEAVE_RESULT_MAX_SIZE"
+                :disabled="actionRunId === run.id"
+                :uploading="isResultUploading(run.id, group.index)"
+                label="将文件拖到这里，或点击选择文件"
+                hint="JPG / PNG / PDF · 最大 15 MB"
+                @file-selected="uploadResult(run, group.index, $event)"
+              />
+              <p v-if="resultUploadError(run.id, group.index)" class="leave-upload-error">
+                {{ resultUploadError(run.id, group.index) }}
+              </p>
             </div>
             <div class="leave-history-actions">
               <button
@@ -765,8 +823,8 @@ onMounted(() => {
 .leave-row-actions { flex: 0 0 auto; }
 .leave-group-actions { flex: 0 0 auto; display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
 .leave-group-actions button { white-space: nowrap; }
-.leave-upload-action { display: inline-flex; align-items: center; width: fit-content; white-space: nowrap; cursor: pointer; }
-.leave-upload-action input { display: none; }
+.leave-result-dropzone { margin-top: 9px; }
+.leave-upload-error { margin: 6px 0 0; color: var(--danger); font-size: 12px; line-height: 1.45; }
 .leave-result-action { flex: 0 0 auto; white-space: nowrap; }
 
 .leave-admin-heading { margin: 0 0 22px; }
@@ -825,8 +883,9 @@ onMounted(() => {
 .leave-history-chevron { flex: 0 0 auto; color: var(--faint); font-size: 18px; transition: transform 120ms ease; }
 .leave-history-run[open] .leave-history-chevron { transform: rotate(90deg); }
 .leave-history-detail { border-top: 1px solid var(--line); padding: 0 12px 10px; }
-.leave-history-group { padding: 9px 0; }
+.leave-history-group { padding: 9px 0; flex-wrap: wrap; }
 .leave-history-group + .leave-history-group { border-top: 1px solid var(--line); }
+.leave-history-group > .leave-result-dropzone, .leave-history-group > .leave-upload-error { flex: 0 0 100%; }
 .leave-history-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
 
 @media (max-width: 768px) {

@@ -38,7 +38,8 @@ assert.match(app, /if \(action === "unclaim"\)[\s\S]*?else if \(action === "edit
 assert.doesNotMatch(app.match(/function handleTaskMenuAction\([\s\S]*?\n}/)?.[0] ?? "", /loadRoute\s*\(/)
 
 assert.match(taskMenu, /<ActionMenu/)
-assert.match(taskMenu, /aria-label="任务更多操作"/)
+assert.match(taskMenu, /ariaLabel: "任务更多操作"/)
+assert.match(taskMenu, /:aria-label="ariaLabel"/)
 assert.match(menu, /:aria-label="ariaLabel"/)
 assert.match(menu, /aria-haspopup="menu"/)
 assert.match(menu, /role="menu"/)

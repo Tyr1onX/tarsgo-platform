@@ -59,7 +59,7 @@ assert.match(dialog, /@media \(max-width: 400px\)/)
 assert.match(dialog, /max-width: calc\(100vw - 20px\)/)
 assert.doesNotMatch(dialog, /min-width:\s*(?:4\d\d|[5-9]\d\d|\d{4,})px/)
 
-// App owns one confirmation state for its four existing actions.
+// App owns one confirmation state for shared application confirmations.
 assert.match(app, /import ConfirmDialog from "\.\/components\/ConfirmDialog\.vue"/)
 assert.match(app, /const appConfirm = ref<ConfirmRequest \| null>\(null\)/)
 assert.match(app, /<ConfirmDialog[\s\S]*?:open="appConfirm !== null"/)
@@ -125,7 +125,7 @@ assert.match(deleteRun, /api\.deleteSchoolLeaveRun\(run\.id\)/)
 // No business code falls back to the browser-native confirm.
 assert.doesNotMatch(app, /window\.confirm/)
 assert.doesNotMatch(leave, /window\.confirm/)
-assert.equal((app.match(/requestAppConfirmation\(\{/g) ?? []).length, 4)
+assert.equal((app.match(/requestAppConfirmation\(\{/g) ?? []).length, 5)
 assert.equal((leave.match(/requestLeaveConfirmation\(\{/g) ?? []).length, 3)
 
-console.log("Unified ConfirmDialog behavior, focus, danger semantics, and seven business migrations passed")
+console.log("Unified ConfirmDialog behavior, focus, danger semantics, and eight business migrations passed")

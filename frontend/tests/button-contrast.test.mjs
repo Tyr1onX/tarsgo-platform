@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 
 const css = readFileSync(new URL("../src/style.css", import.meta.url), "utf8")
+const confirmDialog = readFileSync(new URL("../src/components/ConfirmDialog.vue", import.meta.url), "utf8")
 
 function blockFor(pattern) {
   const match = css.match(pattern)
@@ -54,8 +55,8 @@ for (const [name, theme] of [["light", lightTheme], ["dark", darkTheme]]) {
   }
 }
 
-assert.match(css, /\.task-actions button:not\(\.primary\):not\(\.danger-action\),\s*\.breakdown-heading button\s*\{/)
-assert.match(css, /\.task-actions button:not\(\.primary\):not\(\.danger-action\):hover:not\(:disabled\)/)
+assert.match(css, /\.task-actions button:not\(\.primary\),\s*\.breakdown-heading button\s*\{/)
+assert.match(css, /\.task-actions button:not\(\.primary\):hover:not\(:disabled\)/)
 assert.doesNotMatch(css, /\.task-actions button\s*\{/, "generic task-actions rule must not match primary buttons")
 
 const taskPrimary = blockFor(/\.task-actions \.primary\s*\{([^}]+)\}/)
@@ -67,8 +68,8 @@ assert.match(css, /\.task-actions \.primary:disabled\s*\{[^}]*background:\s*var\
 assert.match(css, /\.primary:active,[\s\S]*?transform:\s*translateY\(1px\)/)
 assert.match(css, /\.task-actions\s*\{[^}]*flex-wrap:\s*wrap/s, "mobile task actions must wrap rather than clip")
 assert.doesNotMatch(css, /button:disabled\s*\{[^}]*opacity:/s, "disabled text must not rely on opacity for its contrast")
-assert.doesNotMatch(css, /\.danger-action:disabled,[\s\S]*?opacity:/)
-assert.match(css, /\.danger-action:hover:not\(:disabled\)\s*\{[^}]*background:\s*var\(--danger\)[^}]*color:\s*var\(--surface\)/s)
+assert.match(confirmDialog, /\.confirm-dialog-confirm\.danger\s*\{[^}]*color:\s*var\(--danger\)/s)
+assert.match(confirmDialog, /\.confirm-dialog-confirm\.danger:hover:not\(:disabled\)\s*\{[^}]*background:\s*var\(--hover\)/s)
 assert.match(css, /\.task-actions \.primary\.small-action\s*\{[^}]*padding:\s*6px 10px/s)
 
-console.log("Primary, task-action, disabled, and danger button contrast passed for light and dark themes")
+console.log("Primary, task-action, disabled, and confirmation danger button contrast passed for light and dark themes")

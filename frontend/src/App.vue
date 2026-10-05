@@ -134,6 +134,9 @@ const itemActivities = ref<ItemActivity[]>([])
 const detailActivitiesHasMore = ref(false)
 const detailActivitiesNextBeforeId = ref<number | null>(null)
 const loadingEarlierActivities = ref(false)
+const detailActivitiesExpanded = ref(false)
+const detailFactsExpanded = ref(false)
+const detailChildrenExpanded = ref(false)
 const detailContextLoading = ref(false)
 const members = ref<Member[]>([])
 const taskMembers = ref<MemberSummary[]>([])
@@ -145,12 +148,9 @@ const taskView = ref<TaskView>("mine")
 const tasksLoadedScope = ref<TaskView | null>(null)
 const taskListLoading = ref(false)
 const taskListLoadError = ref(false)
-const deleteRootItemModalOpen = ref(false)
 const deletingRootItem = ref(false)
 const deleteTargetRootId = ref<number | null>(null)
 const deleteRootOrigin = ref<"detail" | "list">("detail")
-const deleteTargetActivityCount = ref<number | null>(null)
-const deleteTargetActivityLoading = ref(false)
 const expandedRootIds = ref(new Set<number>())
 const claimableCount = ref(0)
 const aiPlannerAvailable = ref(false)
@@ -183,12 +183,6 @@ const knowledgeSyncing = ref(false)
 const knowledgeSyncSummary = ref<KnowledgeSyncSummary | null>(null)
 
 const itemActivityDraft = ref("")
-const itemActivityAddToFacts = ref(false)
-const itemActivityFactScope = ref<ItemFactScope>("global")
-const itemActivityRelatedTaskIds = ref<number[]>([])
-const itemFactDraft = ref("")
-const itemFactScope = ref<ItemFactScope>("global")
-const itemFactRelatedTaskIds = ref<number[]>([])
 const editingFactScopeId = ref<number | null>(null)
 const editingFactScope = ref<ItemFactScope>("global")
 const editingFactTaskIds = ref<number[]>([])
@@ -301,8 +295,15 @@ const detailRoot = computed(() => {
 const detailChildren = computed(() =>
   detailRoot.value ? tasks.value.filter((task) => task.parent_id === detailRoot.value?.id) : [],
 )
+const visibleDetailChildren = computed(() =>
+  detailChildrenExpanded.value ? detailChildren.value : detailChildren.value.slice(0, 3),
+)
 const detailProgress = computed(() => executionSummary(detailChildren.value))
 const recentItemFacts = computed(() => [...(detailTask.value?.item_facts ?? [])].slice(-4).reverse())
+const visibleDetailFacts = computed(() => {
+  const facts = [...(detailRoot.value?.item_facts ?? [])].reverse()
+  return detailFactsExpanded.value ? facts : facts.slice(0, 3)
+})
 const detailTaskActivities = computed(() =>
   itemActivities.value,
 )
@@ -353,9 +354,6 @@ const homeTaskCards = computed(() => {
 const rootTasks = computed(() => rootsForView(tasks.value, taskView.value, user.value?.id ?? 0))
 const deleteTargetRoot = computed(() =>
   tasks.value.find((task) => task.id === deleteTargetRootId.value && task.parent_id === null) ?? null,
-)
-const deleteTargetChildren = computed(() =>
-  deleteTargetRoot.value ? tasks.value.filter((task) => task.parent_id === deleteTargetRoot.value?.id) : [],
 )
 
 const statusLabels: Record<TaskStatus, string> = {
@@ -492,17 +490,9 @@ function factScopeDescription(fact: ItemFact) {
   return `相关工作 · ${fact.related_tasks.map((task) => task.title).join("、")}`
 }
 
-function toggleActivityFactScope(scope: ItemFactScope) {
-  itemActivityFactScope.value = scope
-  itemActivityRelatedTaskIds.value = ensureFactRelatedSelection(scope, itemActivityRelatedTaskIds.value)
-}
-
-function toggleNewFactScope(scope: ItemFactScope) {
-  itemFactScope.value = scope
-  itemFactRelatedTaskIds.value = ensureFactRelatedSelection(scope, itemFactRelatedTaskIds.value)
-}
-
-const visibleDetailActivities = computed(() => detailTaskActivities.value)
+const visibleDetailActivities = computed(() =>
+  detailActivitiesExpanded.value ? detailTaskActivities.value : detailTaskActivities.value.slice(0, 3),
+)
 
 function navigate(nextPath: string, options: { replace?: boolean } = {}) {
   const nextRoute = nextPath.split("?")[0]
@@ -683,11 +673,12 @@ async function reviewCurrentItemPlan() {
   try {
     const result = await api.reviewItemPlan(root.id)
     if (epoch !== itemReviewEpoch) return
-    itemReviewSummary.value = result.summary
     itemReviewSuggestions.value = result.suggestions.map((suggestion, index) => ({
       key: `${Date.now()}-${index}-${Math.random().toString(36).slice(2)}`,
       suggestion,
     }))
+    if (itemReviewSuggestions.value.length) itemReviewSummary.value = result.summary
+    else notice.value = "方案检查完成，暂未发现调整建议"
   } catch (reason) {
     error.value = messageOf(reason)
   } finally {
@@ -697,6 +688,7 @@ async function reviewCurrentItemPlan() {
 
 function dismissItemReviewSuggestion(key: string) {
   itemReviewSuggestions.value = removeItemReviewSuggestion(itemReviewSuggestions.value, key)
+  if (!itemReviewSuggestions.value.length) itemReviewSummary.value = ""
 }
 
 function changesForReviewSuggestion(suggestion: AIItemReviewSuggestion) {
@@ -714,6 +706,7 @@ async function applyItemReviewSuggestion(entry: { key: string; suggestion: AIIte
     replaceTaskInState(applied.task)
     itemActivities.value = prependUniqueActivity(itemActivities.value, applied.activity)
     itemReviewSuggestions.value = removeItemReviewSuggestion(itemReviewSuggestions.value, entry.key)
+    if (!itemReviewSuggestions.value.length) itemReviewSummary.value = ""
     notice.value = "已应用这条方案调整"
   } catch (reason) {
     error.value = messageOf(reason)
@@ -745,32 +738,14 @@ function openDeleteRootItemModal(root = detailRoot.value, origin: "detail" | "li
   if (!isAdmin.value || !root || root.parent_id !== null) return
   deleteTargetRootId.value = root.id
   deleteRootOrigin.value = origin
-  const detailHasCompleteRootActivityList = origin === "detail" && detailTask.value?.parent_id === null && !detailActivitiesHasMore.value
-  const activityCountNeedsFetch = origin === "list" || (origin === "detail" && !detailHasCompleteRootActivityList)
-  deleteTargetActivityCount.value = detailHasCompleteRootActivityList
-    ? itemActivities.value.length
-    : null
-  deleteTargetActivityLoading.value = activityCountNeedsFetch
-  deleteRootItemModalOpen.value = true
-  if (activityCountNeedsFetch) {
-    void api.itemActivities(root.id).then((activities) => {
-      if (deleteRootItemModalOpen.value && deleteTargetRootId.value === root.id) {
-        deleteTargetActivityCount.value = activities.length
-      }
-    }).catch(() => {
-      if (deleteTargetRootId.value === root.id) deleteTargetActivityCount.value = null
-    }).finally(() => {
-      if (deleteTargetRootId.value === root.id) deleteTargetActivityLoading.value = false
-    })
-  }
-}
-
-function closeDeleteRootItemModal() {
-  if (deletingRootItem.value) return
-  deleteRootItemModalOpen.value = false
-  deleteTargetRootId.value = null
-  deleteTargetActivityCount.value = null
-  deleteTargetActivityLoading.value = false
+  const childCount = tasks.value.filter((task) => task.parent_id === root.id).length
+  requestAppConfirmation({
+    title: "删除事项？",
+    description: `将同时删除此事项下的 ${childCount} 项分工、进展记录和当前信息，此操作不可恢复。`,
+    confirmLabel: "删除事项",
+    danger: true,
+    action: confirmDeleteRootItem,
+  })
 }
 
 async function confirmDeleteRootItem() {
@@ -788,16 +763,10 @@ async function confirmDeleteRootItem() {
     expandedRootIds.value = nextExpanded
     itemActivities.value = []
     itemActivityDraft.value = ""
-    itemFactDraft.value = ""
-    itemFactRelatedTaskIds.value = []
-    itemActivityRelatedTaskIds.value = []
     editingFactScopeId.value = null
     clearFactSuggestions()
     clearItemReview()
-    deleteRootItemModalOpen.value = false
     deleteTargetRootId.value = null
-    deleteTargetActivityCount.value = null
-    deleteTargetActivityLoading.value = false
     if (origin === "detail") {
       navigateTasks("all")
     } else {
@@ -1125,9 +1094,10 @@ async function loadRoute() {
         return
       }
       taskResultDraft.value = selected.result ?? ""
-      itemFactDraft.value = ""
       itemActivityDraft.value = ""
-      itemActivityAddToFacts.value = false
+      detailFactsExpanded.value = false
+      detailChildrenExpanded.value = false
+      detailActivitiesExpanded.value = false
       itemActivities.value = context.activity_page.items
       detailActivitiesHasMore.value = context.activity_page.has_more
       detailActivitiesNextBeforeId.value = context.activity_page.next_before_id
@@ -1589,6 +1559,35 @@ function handleRootTaskMenuAction(task: Task, action: string) {
   handleTaskMenuAction(task, action)
 }
 
+function detailRootTaskMenuActions(task: Task): TaskActionMenuItem[] {
+  const actions = rootTaskMenuActions(task)
+  if (task.parent_id === null && aiPlannerAvailable.value) {
+    const deleteIndex = actions.findIndex((action) => action.key === "delete")
+    actions.splice(deleteIndex < 0 ? actions.length : deleteIndex, 0, {
+      key: "review",
+      label: "检查当前方案",
+      disabled: itemReviewLoading.value,
+    })
+  }
+  return actions
+}
+
+function handleDetailRootTaskMenuAction(task: Task, action: string) {
+  if (action === "review") {
+    void reviewCurrentItemPlan()
+    return
+  }
+  if (action === "delete" && isAdmin.value) {
+    openDeleteRootItemModal(task, "detail")
+    return
+  }
+  if (action === "edit" && isAdmin.value) {
+    editTaskFromDetail(task)
+    return
+  }
+  handleRootTaskMenuAction(task, action)
+}
+
 
 async function planFromBase() {
   if (plannerDescription.value.trim().length < 10) {
@@ -1722,27 +1721,6 @@ async function completeDetailTask() {
   }
 }
 
-async function addCurrentFact() {
-  const root = detailRoot.value
-  const content = itemFactDraft.value.trim()
-  if (!root || !content || !canWriteDetailItem.value) return
-  error.value = ""
-  try {
-    const updatedRoot = await api.addScopedFactsBatch(root.id, [{
-      content,
-      scope: itemFactScope.value,
-      related_task_ids: itemFactScope.value === "related" ? itemFactRelatedTaskIds.value : [],
-    }])
-    replaceRootFactsInState(updatedRoot)
-    clearItemReview()
-    itemFactDraft.value = ""
-    itemFactScope.value = "global"
-    itemFactRelatedTaskIds.value = []
-  } catch (reason) {
-    error.value = messageOf(reason)
-  }
-}
-
 async function removeCurrentFact(factId: number) {
   const root = detailRoot.value
   if (!root || !canManageFactScope.value) return
@@ -1800,31 +1778,13 @@ async function recordItemActivity() {
   const root = detailRoot.value
   const content = itemActivityDraft.value.trim()
   if (!root || !content || !canWriteDetailItem.value) return
-  if (itemActivityAddToFacts.value && content.length > 500) {
-    error.value = "加入当前信息时，单条最多 500 字。"
-    return
-  }
-  if (itemActivityAddToFacts.value && itemActivityFactScope.value === "related" && !itemActivityRelatedTaskIds.value.length) {
-    error.value = "请选择至少一个相关分工"
-    return
-  }
   error.value = ""
-  const addToContext = itemActivityAddToFacts.value
   try {
-    const activity = await api.addItemActivity(
-      root.id,
-      content,
-      itemActivityAddToFacts.value,
-      itemActivityFactScope.value,
-      itemActivityFactScope.value === "related" ? itemActivityRelatedTaskIds.value : [],
-    )
+    const activity = await api.addItemActivity(root.id, content, false, "global", [])
     itemActivities.value = prependUniqueActivity(itemActivities.value, activity)
     clearItemReview()
     itemActivityDraft.value = ""
-    itemActivityAddToFacts.value = false
-    itemActivityFactScope.value = "global"
-    itemActivityRelatedTaskIds.value = []
-    if (addToContext) void refreshExecutionScene(true)
+    notice.value = "进展已发布"
   } catch (reason) {
     error.value = messageOf(reason)
   }
@@ -2379,30 +2339,6 @@ onBeforeUnmount(() => {
     @cancel="cancelAppConfirmation"
     @confirm="confirmAppConfirmation"
   />
-
-  <div
-    v-if="deleteRootItemModalOpen && isAdmin && deleteTargetRoot"
-    class="danger-modal-backdrop"
-    @click.self="closeDeleteRootItemModal"
-    @keydown.esc="closeDeleteRootItemModal"
-  >
-    <section class="danger-modal" role="dialog" aria-modal="true" aria-labelledby="delete-item-title" aria-describedby="delete-item-description">
-      <p class="eyebrow">不可恢复的操作</p>
-      <h2 id="delete-item-title">删除事项？</h2>
-      <p id="delete-item-description">将同时删除此事项下的所有分工、进展记录和当前信息，此操作不可恢复。</p>
-      <dl class="danger-modal-summary">
-        <div><dt>事项</dt><dd>{{ deleteTargetRoot.title }}</dd></div>
-        <div><dt>分工</dt><dd>{{ deleteTargetChildren.length }} 项</dd></div>
-        <div><dt>动态</dt><dd>{{ deleteTargetActivityLoading ? "读取中…" : deleteTargetActivityCount === null ? "暂不可用" : `${deleteTargetActivityCount} 条` }}</dd></div>
-      </dl>
-      <div class="danger-modal-actions">
-        <button type="button" :disabled="deletingRootItem" @click="closeDeleteRootItemModal">取消</button>
-        <button class="danger-action" type="button" :disabled="deletingRootItem" @click="confirmDeleteRootItem">
-          {{ deletingRootItem ? "正在删除…" : "删除事项" }}
-        </button>
-      </div>
-    </section>
-  </div>
 
   <main v-if="path === '/login'" class="auth-shell">
     <form class="auth-form" @submit.prevent="submitLogin">
@@ -3221,7 +3157,15 @@ onBeforeUnmount(() => {
             <span class="state">{{ detailTask.parent_id ? detailRoot.title : "事项执行" }}</span>
             <h1>{{ detailTask.title }}</h1>
           </div>
-          <button v-if="isAdmin" type="button" @click="editTaskFromDetail(detailTask)">编辑</button>
+          <TaskActionMenu
+            v-if="detailTask.parent_id === null"
+            :task-id="`detail-root-${detailTask.id}`"
+            aria-label="事项更多操作"
+            :actions="detailRootTaskMenuActions(detailTask)"
+            :disabled="Boolean(pendingTaskAction(detailTask.id))"
+            @select="handleDetailRootTaskMenuAction(detailTask, $event)"
+          />
+          <button v-else-if="isAdmin" type="button" @click="editTaskFromDetail(detailTask)">编辑</button>
         </div>
 
         <template v-if="detailTask.parent_id === null">
@@ -3256,7 +3200,7 @@ onBeforeUnmount(() => {
               <div class="review-section-title"><h2>当前信息</h2><span>{{ detailRoot.item_facts.length }} 条</span></div>
             </div>
             <div v-if="detailRoot.item_facts.length" class="fact-list">
-              <article v-for="fact in detailRoot.item_facts" :key="fact.id" class="fact-row fact-row-scoped">
+              <article v-for="fact in visibleDetailFacts" :key="fact.id" class="fact-row fact-row-scoped">
                 <div class="fact-row-content">
                   <p>{{ fact.content }}</p>
                   <small>{{ factScopeDescription(fact) }}</small>
@@ -3288,27 +3232,13 @@ onBeforeUnmount(() => {
                 <span v-else class="fact-scope-label">{{ fact.scope === 'global' ? '整个事项' : '与你的工作相关' }}</span>
               </article>
             </div>
-            <form v-if="canWriteDetailItem" class="scoped-fact-form" @submit.prevent="addCurrentFact">
-              <label>
-                新增一条当前信息
-                <input v-model="itemFactDraft" maxlength="500" placeholder="写下已经确认、后续执行需要知道的内容" />
-              </label>
-              <label>
-                同步范围
-                <select :value="itemFactScope" @change="toggleNewFactScope(($event.target as HTMLSelectElement).value as ItemFactScope)">
-                  <option value="global">整个事项都需要知道</option>
-                  <option value="related">只与部分分工相关</option>
-                </select>
-              </label>
-              <fieldset v-if="itemFactScope === 'related'" class="fact-task-picker">
-                <legend>相关分工</legend>
-                <label v-for="task in detailChildren" :key="task.id" class="check-row">
-                  <input v-model="itemFactRelatedTaskIds" type="checkbox" :value="task.id" />
-                  {{ task.title }}
-                </label>
-              </fieldset>
-              <button type="submit" :disabled="!itemFactDraft.trim() || (itemFactScope === 'related' && !itemFactRelatedTaskIds.length)">＋ 添加信息</button>
-            </form>
+            <p v-else class="muted">暂无当前信息。</p>
+            <button
+              v-if="detailRoot.item_facts.length > 3"
+              class="text-action"
+              type="button"
+              @click="detailFactsExpanded = !detailFactsExpanded"
+            >{{ detailFactsExpanded ? "收起" : `展开全部 ${detailRoot.item_facts.length} 条` }}</button>
           </section>
 
           <section class="execution-section">
@@ -3317,7 +3247,7 @@ onBeforeUnmount(() => {
               <button v-if="isAdmin" type="button" @click="startNewTask(detailRoot)">＋ 添加分工</button>
             </div>
             <div v-if="detailChildren.length" class="detail-task-list child-task-list">
-              <article v-for="task in detailChildren" :key="task.id" class="child-task-row detail-child-task-row">
+              <article v-for="task in visibleDetailChildren" :key="task.id" class="child-task-row detail-child-task-row">
                 <div class="child-task-heading">
                   <TaskStatusIndicator :status="task.status" :task-id="task.id" :editable="isAdmin" :pending="Boolean(pendingTaskAction(task.id)?.startsWith('status:'))" @update-status="updateOwnTaskStatus(task, $event)" />
                   <small class="child-task-owner">{{ task.owner?.name ?? "待认领" }}</small>
@@ -3353,6 +3283,12 @@ onBeforeUnmount(() => {
               </article>
             </div>
             <div v-else class="empty compact-empty"><p>还没有执行分工。</p></div>
+            <button
+              v-if="detailChildren.length > 3"
+              class="text-action"
+              type="button"
+              @click="detailChildrenExpanded = !detailChildrenExpanded"
+            >{{ detailChildrenExpanded ? "收起" : `展开全部 ${detailChildren.length} 项` }}</button>
           </section>
 
           <section class="execution-section">
@@ -3367,82 +3303,53 @@ onBeforeUnmount(() => {
                 <p>{{ activity.content }}</p>
               </article>
             </div>
-            <button v-if="detailActivitiesHasMore" type="button" class="text-action activity-more" :disabled="loadingEarlierActivities" @click="loadEarlierDetailActivities">
+            <button
+              v-if="detailTaskActivities.length > 3 || detailActivitiesHasMore"
+              type="button"
+              class="text-action activity-more"
+              @click="detailActivitiesExpanded = !detailActivitiesExpanded"
+            >{{ detailActivitiesExpanded ? "收起" : "查看全部进展" }}</button>
+            <button v-if="detailActivitiesExpanded && detailActivitiesHasMore" type="button" class="text-action activity-more" :disabled="loadingEarlierActivities" @click="loadEarlierDetailActivities">
               {{ loadingEarlierActivities ? '正在加载…' : '查看更早进展' }}
             </button>
             <form v-if="canWriteDetailItem" class="activity-entry" @submit.prevent="recordItemActivity">
-              <textarea
-                v-model="itemActivityDraft"
-                :maxlength="itemActivityAddToFacts ? 500 : 2000"
-                rows="3"
-                placeholder="记录新动态"
-              />
+              <textarea v-model="itemActivityDraft" maxlength="2000" rows="3" placeholder="记录新动态" />
               <div class="activity-entry-actions">
-                <label class="check-row">
-                  <input v-model="itemActivityAddToFacts" type="checkbox" />
-                  同时加入当前信息
-                </label>
-                <label v-if="itemActivityAddToFacts" class="fact-scope-select">
-                  同步范围
-                  <select :value="itemActivityFactScope" @change="toggleActivityFactScope(($event.target as HTMLSelectElement).value as ItemFactScope)">
-                    <option value="global">整个事项都需要知道</option>
-                    <option value="related">只与部分分工相关</option>
-                  </select>
-                </label>
-                <button class="primary" type="submit" :disabled="!itemActivityDraft.trim() || (itemActivityAddToFacts && itemActivityFactScope === 'related' && !itemActivityRelatedTaskIds.length)">发布更新</button>
+                <button class="primary" type="submit" :disabled="!itemActivityDraft.trim()">发布更新</button>
               </div>
-              <fieldset v-if="itemActivityAddToFacts && itemActivityFactScope === 'related'" class="fact-task-picker">
-                <legend>相关分工</legend>
-                <label v-for="task in detailChildren" :key="task.id" class="check-row">
-                  <input v-model="itemActivityRelatedTaskIds" type="checkbox" :value="task.id" />
-                  {{ task.title }}
-                </label>
-              </fieldset>
             </form>
           </section>
 
-          <section v-if="aiPlannerAvailable" class="execution-section ai-review-section">
-            <div class="section-heading">
-              <h2>方案检查</h2>
-              <button class="review-trigger" type="button" :disabled="itemReviewLoading" @click="reviewCurrentItemPlan">
-                {{ itemReviewLoading ? "正在检查…" : "让 AI 检查方案" }}
-              </button>
-            </div>
-            <section v-if="itemReviewSummary" class="ai-review-panel" aria-live="polite">
-              <div class="ai-review-heading">
-                <div><span class="eyebrow">AI 检查结果</span><p>{{ itemReviewSummary }}</p></div>
-                <span class="ai-review-count">{{ itemReviewSuggestions.length }} 条建议</span>
-              </div>
-              <p v-if="!itemReviewSuggestions.length" class="ai-review-empty">当前方案暂未发现需要调整的地方</p>
-              <article v-for="entry in itemReviewSuggestions" :key="entry.key" class="ai-review-card">
-                <div class="ai-review-card-heading">
-                  <span class="eyebrow">{{ entry.suggestion.kind === "add_task" ? "新增任务" : "调整现有任务" }}</span>
-                  <h3>{{ entry.suggestion.kind === "add_task" ? entry.suggestion.proposed_task.title : detailChildren.find((task) => task.id === entry.suggestion.target_task_id)?.title ?? entry.suggestion.proposed_task.title }}</h3>
+          <section v-if="itemReviewLoading || itemReviewSuggestions.length" class="execution-section ai-review-section">
+            <div class="ai-review-panel" aria-live="polite">
+              <p v-if="itemReviewLoading" class="muted">正在检查当前方案…</p>
+              <template v-else>
+                <div class="ai-review-heading">
+                  <div><span class="eyebrow">AI 检查结果</span><p>{{ itemReviewSummary }}</p></div>
+                  <span class="ai-review-count">{{ itemReviewSuggestions.length }} 条建议</span>
                 </div>
-                <p class="ai-review-reason"><strong>原因</strong>{{ entry.suggestion.reason }}</p>
-                <div v-if="entry.suggestion.kind === 'update_task'" class="ai-review-diffs">
-                  <div v-for="change in changesForReviewSuggestion(entry.suggestion)" :key="change.field" class="ai-review-diff">
-                    <strong>{{ change.label }}</strong><div class="ai-review-values"><p class="ai-review-before">{{ change.before }}</p><span aria-hidden="true">→</span><p>{{ change.after }}</p></div>
+                <article v-for="entry in itemReviewSuggestions" :key="entry.key" class="ai-review-card">
+                  <div class="ai-review-card-heading">
+                    <span class="eyebrow">{{ entry.suggestion.kind === "add_task" ? "新增任务" : "调整现有任务" }}</span>
+                    <h3>{{ entry.suggestion.kind === "add_task" ? entry.suggestion.proposed_task.title : detailChildren.find((task) => task.id === entry.suggestion.target_task_id)?.title ?? entry.suggestion.proposed_task.title }}</h3>
                   </div>
-                </div>
-                <div v-else class="ai-review-proposal">
-                  <div v-if="entry.suggestion.proposed_task.deliverable"><strong>做到什么算完成</strong><p>{{ entry.suggestion.proposed_task.deliverable }}</p></div>
-                  <div v-for="section in reviewProposalSections" :key="section.field"><template v-if="entry.suggestion.proposed_task[section.field].length"><strong>{{ section.label }}</strong><ul><li v-for="value in entry.suggestion.proposed_task[section.field]" :key="value">{{ value }}</li></ul></template></div>
-                </div>
-                <div class="ai-review-actions">
-                  <button type="button" @click="dismissItemReviewSuggestion(entry.key)">忽略</button>
-                  <button v-if="isAdmin" class="primary small-action" type="button" :disabled="Boolean(itemReviewApplyingKey)" @click="applyItemReviewSuggestion(entry)">{{ itemReviewApplyingKey === entry.key ? "正在应用…" : "应用" }}</button>
-                </div>
-              </article>
-            </section>
-          </section>
-
-          <section v-if="isAdmin" class="execution-section danger-zone" aria-labelledby="item-danger-zone-title">
-            <div>
-              <h2 id="item-danger-zone-title">危险操作</h2>
-              <p>删除事项会同时移除其分工、进展记录和当前信息。</p>
+                  <p class="ai-review-reason"><strong>原因</strong>{{ entry.suggestion.reason }}</p>
+                  <div v-if="entry.suggestion.kind === 'update_task'" class="ai-review-diffs">
+                    <div v-for="change in changesForReviewSuggestion(entry.suggestion)" :key="change.field" class="ai-review-diff">
+                      <strong>{{ change.label }}</strong><div class="ai-review-values"><p class="ai-review-before">{{ change.before }}</p><span aria-hidden="true">→</span><p>{{ change.after }}</p></div>
+                    </div>
+                  </div>
+                  <div v-else class="ai-review-proposal">
+                    <div v-if="entry.suggestion.proposed_task.deliverable"><strong>做到什么算完成</strong><p>{{ entry.suggestion.proposed_task.deliverable }}</p></div>
+                    <div v-for="section in reviewProposalSections" :key="section.field"><template v-if="entry.suggestion.proposed_task[section.field].length"><strong>{{ section.label }}</strong><ul><li v-for="value in entry.suggestion.proposed_task[section.field]" :key="value">{{ value }}</li></ul></template></div>
+                  </div>
+                  <div class="ai-review-actions">
+                    <button type="button" @click="dismissItemReviewSuggestion(entry.key)">忽略</button>
+                    <button v-if="isAdmin" class="primary small-action" type="button" :disabled="Boolean(itemReviewApplyingKey)" @click="applyItemReviewSuggestion(entry)">{{ itemReviewApplyingKey === entry.key ? "正在应用…" : "应用" }}</button>
+                  </div>
+                </article>
+              </template>
             </div>
-            <button class="danger-action" type="button" @click="openDeleteRootItemModal">删除事项</button>
           </section>
         </template>
 
@@ -3574,7 +3481,13 @@ onBeforeUnmount(() => {
                 <p>{{ activity.content }}</p>
               </article>
             </div>
-            <button v-if="detailActivitiesHasMore" type="button" class="text-action activity-more" :disabled="loadingEarlierActivities" @click="loadEarlierDetailActivities">
+            <button
+              v-if="detailTaskActivities.length > 3 || detailActivitiesHasMore"
+              type="button"
+              class="text-action activity-more"
+              @click="detailActivitiesExpanded = !detailActivitiesExpanded"
+            >{{ detailActivitiesExpanded ? "收起" : "查看全部进展" }}</button>
+            <button v-if="detailActivitiesExpanded && detailActivitiesHasMore" type="button" class="text-action activity-more" :disabled="loadingEarlierActivities" @click="loadEarlierDetailActivities">
               {{ loadingEarlierActivities ? '正在加载…' : '查看更早进展' }}
             </button>
           </section>

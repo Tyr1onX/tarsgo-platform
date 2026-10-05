@@ -8,11 +8,14 @@ export interface TaskActionMenuItem {
   danger?: boolean
 }
 
-defineProps<{
+withDefaults(defineProps<{
   taskId: number | string
   actions: TaskActionMenuItem[]
   disabled?: boolean
-}>()
+  ariaLabel?: string
+}>(), {
+  ariaLabel: "任务更多操作",
+})
 
 const emit = defineEmits<{ select: [key: string] }>()
 </script>
@@ -22,7 +25,7 @@ const emit = defineEmits<{ select: [key: string] }>()
     :id="`task-${taskId}`"
     :actions="actions"
     :disabled="disabled"
-    aria-label="任务更多操作"
+    :aria-label="ariaLabel"
     @select="emit('select', $event)"
   />
 </template>

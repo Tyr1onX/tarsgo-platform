@@ -75,9 +75,9 @@ assert.deepEqual(
   removeItemReviewSuggestion([{ key: "one" }, { key: "two" }], "one").map((item) => item.key),
   ["two"],
 )
-assert.match(appSource, /让 AI 检查方案/)
-assert.match(appSource, /正在检查…/)
-assert.match(appSource, /当前方案暂未发现需要调整的地方/)
+assert.match(appSource, /label: "检查当前方案"/)
+assert.match(appSource, /itemReviewLoading\.value/)
+assert.match(appSource, /方案检查完成，暂未发现调整建议/)
 assert.match(appSource, /reviewItemPlan\(root\.id\)/)
 assert.match(appSource, /applyItemReview\(root\.id, entry\.suggestion\)/)
 assert.match(appSource, /removeItemReviewSuggestion\(itemReviewSuggestions\.value, entry\.key\)/)
@@ -95,7 +95,6 @@ const functionSource = (name) => {
 }
 for (const mutation of [
   "saveTaskResult",
-  "addCurrentFact",
   "removeCurrentFact",
   "recordItemActivity",
   "addResultToContext",

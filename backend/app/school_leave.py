@@ -5,7 +5,7 @@ import os
 import re
 from copy import deepcopy
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -257,6 +257,21 @@ def school_leave_document_filename(group: SchoolLeaveGroup) -> str:
     return f"请假条_{start}-{end}.docx"
 
 
-def school_leave_run_document_filename(run: SchoolLeaveRun) -> str:
+def school_leave_run_document_filename(db: Session, run: SchoolLeaveRun) -> str:
     date_text = run.collected_at.strftime("%Y-%m-%d")
-    return f"学校请假材料_{date_text}_批次{run.id}.docx"
+    day_start = run.collected_at.replace(hour=0, minute=0, second=0, microsecond=0)
+    day_end = day_start + timedelta(days=1)
+    valid_run_ids = list(
+        db.scalars(
+            select(SchoolLeaveRun.id)
+            .where(
+                SchoolLeaveRun.status != "cancelled",
+                SchoolLeaveRun.collected_at >= day_start,
+                SchoolLeaveRun.collected_at < day_end,
+            )
+            .order_by(SchoolLeaveRun.collected_at, SchoolLeaveRun.id)
+        )
+    )
+    supplement_index = valid_run_ids.index(run.id)
+    supplement_suffix = "" if supplement_index == 0 else f"_补充{supplement_index}"
+    return f"吉甲大师请假条_{date_text}{supplement_suffix}.docx"

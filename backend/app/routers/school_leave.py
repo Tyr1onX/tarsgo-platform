@@ -403,7 +403,7 @@ def download_run_document(
         groups,
         contact_phone=get_leave_contact_phone(),
     )
-    filename = school_leave_run_document_filename(run)
+    filename = school_leave_run_document_filename(db, run)
     return StreamingResponse(
         io.BytesIO(content),
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",

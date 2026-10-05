@@ -6,6 +6,7 @@ import { revealInvalidField } from "./formFeedback.js"
 import { filterIgnoredPlannerSuggestions, ignorePlannerSuggestion, plannerSuggestionJoinInstruction } from "./plannerSuggestions.js"
 import { itemReviewChanges, removeItemReviewSuggestion } from "./itemReview.js"
 import { isExpandedRoot, removeRootAndChildren, toggleExpandedRoot } from "./rootItemList.js"
+import { parseTaskEditorRoute, taskEditorCancelPath, taskEditorSuccessPath, taskEditorTitle } from "./taskRoutes.js"
 import TaskStatusIndicator from "./TaskStatusIndicator.vue"
 import TaskActionMenu, { type TaskActionMenuItem } from "./TaskActionMenu.vue"
 import ConfirmDialog from "./components/ConfirmDialog.vue"
@@ -54,6 +55,10 @@ import type {
 } from "./types"
 
 const path = ref(window.location.pathname)
+const taskEditor = computed(() => parseTaskEditorRoute(path.value))
+const isTaskEditorRoute = computed(() => taskEditor.value !== null)
+const taskEditorLoading = ref(false)
+let initializedTaskEditorPath = ""
 const TeamPage = defineAsyncComponent({
   loader: () => import("./pages/TeamPage.vue"),
   loadingComponent: LocalPageLoading,
@@ -211,9 +216,7 @@ let lastCollaborationRefreshAt = 0
 let routeLoadSequence = 0
 let taskMembersRequest: Promise<MemberSummary[]> | null = null
 
-const taskFormOpen = ref(false)
-const editingTaskId = ref<number | null>(null)
-const parentTaskId = ref<number | null>(null)
+const taskSaving = ref(false)
 const taskTitle = ref("")
 const taskDeliverable = ref("")
 const taskExecutionPointsText = ref("")
@@ -239,15 +242,26 @@ const registerToken = computed(() =>
 )
 const activeMembers = computed(() => taskMembers.value)
 const activeMemberIds = computed(() => new Set(activeMembers.value.map((member) => member.id)))
-const editingTask = computed(
-  () => tasks.value.find((task) => task.id === editingTaskId.value) ?? null,
+const editingTaskId = computed(() => taskEditor.value?.kind === "edit" ? taskEditor.value.taskId : null)
+const editingTask = computed(() =>
+  editingTaskId.value === null ? null : tasks.value.find((task) => task.id === editingTaskId.value) ?? null,
 )
 const plannerSelectedTask = computed(() => {
   const index = plannerSelectedTaskIndex.value
   return index === null ? null : plannerDraft.value?.tasks[index] ?? null
 })
-const parentTask = computed(
-  () => tasks.value.find((task) => task.id === parentTaskId.value) ?? null,
+const parentTaskId = computed(() => {
+  if (taskEditor.value?.kind === "new-child") return taskEditor.value.parentId
+  if (taskEditor.value?.kind === "edit" && editingTask.value?.parent_id !== null) {
+    return editingTask.value?.parent_id ?? null
+  }
+  return null
+})
+const parentTask = computed(() =>
+  parentTaskId.value === null ? null : tasks.value.find((task) => task.id === parentTaskId.value) ?? null,
+)
+const taskEditorHeading = computed(() =>
+  taskEditorTitle(taskEditor.value, editingTask.value?.parent_id !== null && editingTask.value !== null),
 )
 const ownerOptions = computed(() => {
   const options = [...activeMembers.value]
@@ -490,8 +504,9 @@ function toggleNewFactScope(scope: ItemFactScope) {
 
 const visibleDetailActivities = computed(() => detailTaskActivities.value)
 
-function navigate(nextPath: string) {
+function navigate(nextPath: string, options: { replace?: boolean } = {}) {
   const nextRoute = nextPath.split("?")[0]
+  if (path.value !== nextRoute && isTaskEditorRoute.value) initializedTaskEditorPath = ""
   const wasTaskDetail = /^\/tasks\/\d+$/.test(path.value)
   const isNextTaskDetail = /^\/tasks\/\d+$/.test(nextRoute)
   if (path.value !== nextRoute && (wasTaskDetail || isNextTaskDetail)) {
@@ -502,7 +517,8 @@ function navigate(nextPath: string) {
   }
   if (taskDetailId.value !== null && nextRoute !== path.value) clearItemReview()
   if (window.location.pathname + window.location.search !== nextPath) {
-    window.history.pushState({}, "", nextPath)
+    if (options.replace) window.history.replaceState({}, "", nextPath)
+    else window.history.pushState({}, "", nextPath)
   }
   path.value = window.location.pathname
   syncCollaborationRefreshTimer()
@@ -869,8 +885,6 @@ function isCollaborator(task: Task) {
 }
 
 function resetTaskForm() {
-  editingTaskId.value = null
-  parentTaskId.value = null
   taskTitle.value = ""
   taskDeliverable.value = ""
   taskExecutionPointsText.value = ""
@@ -888,9 +902,24 @@ function resetTaskForm() {
   taskDependencyIds.value = []
 }
 
-function closeTaskForm() {
-  taskFormOpen.value = false
-  resetTaskForm()
+function fillTaskForm(task: Task) {
+  taskTitle.value = task.title
+  taskDeliverable.value = task.deliverable
+  taskExecutionPointsText.value = (task.execution_points ?? []).join("\n")
+  taskCautionsText.value = (task.cautions ?? []).join("\n")
+  taskPrerequisitesText.value = (task.prerequisites ?? []).join("\n")
+  taskCautionsOpen.value = Boolean(taskCautionsText.value.trim())
+  taskPrerequisitesOpen.value = Boolean(taskPrerequisitesText.value.trim())
+  taskOwnerMode.value = task.owner ? "assigned" : "claimable"
+  taskOwnerId.value = task.owner?.id ?? activeMembers.value[0]?.id ?? null
+  taskOwnerClaimable.value = task.owner_claimable
+  taskCollaboratorIds.value = task.collaborators
+    .filter((member) => activeMemberIds.value.has(member.id))
+    .map((member) => member.id)
+  taskCollaborationOpen.value = task.collaboration_open
+  taskDeadline.value = toLocalInput(task.deadline)
+  taskStatus.value = task.status
+  taskDependencyIds.value = task.depends_on_tasks.map((dependency) => dependency.id)
 }
 
 async function ensureTaskAssignees() {
@@ -915,16 +944,7 @@ async function startNewTask(parent?: Task) {
     error.value = messageOf(reason)
     return
   }
-  resetTaskForm()
-  if (parent) {
-    parentTaskId.value = parent.id
-  }
-  taskFormOpen.value = true
-  if (path.value !== "/tasks" || taskView.value !== "all") {
-    navigateTasks("all")
-  } else {
-    window.scrollTo({ top: 0, behavior: "smooth" })
-  }
+  navigate(parent ? `/tasks/${parent.id}/new-child` : "/tasks/new")
 }
 
 async function editTask(task: Task) {
@@ -934,27 +954,12 @@ async function editTask(task: Task) {
     error.value = messageOf(reason)
     return
   }
-  taskFormOpen.value = true
-  editingTaskId.value = task.id
-  parentTaskId.value = task.parent_id
-  taskTitle.value = task.title
-  taskDeliverable.value = task.deliverable
-  taskExecutionPointsText.value = (task.execution_points ?? []).join("\n")
-  taskCautionsText.value = (task.cautions ?? []).join("\n")
-  taskPrerequisitesText.value = (task.prerequisites ?? []).join("\n")
-  taskCautionsOpen.value = Boolean(taskCautionsText.value.trim())
-  taskPrerequisitesOpen.value = Boolean(taskPrerequisitesText.value.trim())
-  taskOwnerMode.value = task.owner ? "assigned" : "claimable"
-  taskOwnerId.value = task.owner?.id ?? activeMembers.value[0]?.id ?? null
-  taskOwnerClaimable.value = task.owner_claimable
-  taskCollaboratorIds.value = task.collaborators
-    .filter((member) => activeMemberIds.value.has(member.id))
-    .map((member) => member.id)
-  taskCollaborationOpen.value = task.collaboration_open
-  taskDeadline.value = toLocalInput(task.deadline)
-  taskStatus.value = task.status
-  taskDependencyIds.value = task.depends_on_tasks.map((dependency) => dependency.id)
-  window.scrollTo({ top: 0, behavior: "smooth" })
+  navigate(`/tasks/${task.id}/edit`)
+}
+
+function cancelTaskForm() {
+  const destination = taskEditorCancelPath(taskEditor.value)
+  navigate(destination, { replace: true })
 }
 
 function sameIds(left: number[], right: number[]) {
@@ -1010,8 +1015,10 @@ async function loadRoute() {
   const loadId = ++routeLoadSequence
   const routePath = path.value
   const routeSearch = window.location.search
+  const editorRoute = parseTaskEditorRoute(routePath)
   const isCurrentLoad = () => loadId === routeLoadSequence && routePath === path.value && routeSearch === window.location.search
   loading.value = !initialRouteResolved.value
+  taskEditorLoading.value = editorRoute !== null
   routeNotFound.value = false
   error.value = ""
   detailContextLoading.value = taskDetailId.value !== null
@@ -1070,6 +1077,43 @@ async function loadRoute() {
         task.owner?.id === user.value?.id || task.collaborators.some((member) => member.id === user.value?.id),
       )
       claimableCount.value = all.filter(claimableTask).length
+    } else if (editorRoute) {
+      if (!isAdmin.value) {
+        navigate("/")
+        return
+      }
+      await ensureTaskAssignees()
+      if (!isCurrentLoad()) return
+      const contextTaskId = editorRoute.kind === "new-child"
+        ? editorRoute.parentId
+        : editorRoute.kind === "edit"
+          ? editorRoute.taskId
+          : null
+      if (contextTaskId !== null) {
+        const context = await api.taskContext(contextTaskId)
+        if (!isCurrentLoad()) return
+        tasks.value = [context.root, ...context.tasks]
+      }
+      if (editorRoute.kind === "new-child") {
+        const parent = tasks.value.find((task) => task.id === editorRoute.parentId)
+        if (!parent || parent.parent_id !== null) {
+          routeNotFound.value = true
+          return
+        }
+      }
+      if (initializedTaskEditorPath !== routePath) {
+        if (editorRoute.kind === "edit") {
+          const selected = tasks.value.find((task) => task.id === editorRoute.taskId)
+          if (!selected) {
+            routeNotFound.value = true
+            return
+          }
+          fillTaskForm(selected)
+        } else {
+          resetTaskForm()
+        }
+        initializedTaskEditorPath = routePath
+      }
     } else if (taskDetailId.value !== null) {
       const selectedId = taskDetailId.value
       const context = await api.taskContext(selectedId)
@@ -1156,7 +1200,7 @@ async function loadRoute() {
       navigate("/login")
       return
     }
-    if (reason instanceof ApiError && reason.status === 404 && taskDetailId.value !== null) {
+    if (reason instanceof ApiError && reason.status === 404 && (taskDetailId.value !== null || editorRoute !== null)) {
       routeNotFound.value = true
       return
     }
@@ -1165,6 +1209,7 @@ async function loadRoute() {
     if (isCurrentLoad()) {
       loading.value = false
       initialRouteResolved.value = true
+      taskEditorLoading.value = false
       detailContextLoading.value = false
       if (routePath === "/tasks") taskListLoading.value = false
     }
@@ -1366,6 +1411,7 @@ async function saveMyProfile() {
 }
 
 async function submitTask() {
+  if (taskSaving.value) return
   error.value = ""
   fieldErrors.value = {}
   const desiredOwnerId = taskOwnerMode.value === "assigned" ? taskOwnerId.value : null
@@ -1391,6 +1437,7 @@ async function submitTask() {
   const cautions = parseTaskLines(taskCautionsText.value)
   const prerequisites = parseTaskLines(taskPrerequisitesText.value)
 
+  taskSaving.value = true
   try {
     let updatedTask: Task
     if (editingTaskId.value) {
@@ -1448,15 +1495,12 @@ async function submitTask() {
 
     replaceTaskInState(updatedTask)
     clearItemReview()
-    closeTaskForm()
-    taskView.value = "all"
-    if (window.location.search !== "?view=all") {
-      window.history.replaceState({}, "", "/tasks?view=all")
-    }
     tasksLoadedScope.value = null
-    void refreshTaskList("all")
+    navigate(taskEditorSuccessPath(taskEditor.value, updatedTask.id), { replace: true })
   } catch (reason) {
     error.value = messageOf(reason)
+  } finally {
+    taskSaving.value = false
   }
 }
 
@@ -1510,7 +1554,7 @@ function taskMenuActions(task: Task): TaskActionMenuItem[] {
   if (task.collaboration_open && isCollaborator(task) && task.status !== "done") {
     actions.push({ key: "leave", label: pendingTaskAction(task.id) === "leave" ? "退出中…" : "退出协作", disabled: pending })
   }
-  if (isAdmin.value) actions.push({ key: "edit", label: "编辑任务", disabled: pending })
+  if (isAdmin.value) actions.push({ key: "edit", label: task.parent_id === null ? "编辑事项" : "编辑分工", disabled: pending })
   return actions
 }
 
@@ -1803,10 +1847,7 @@ async function addResultToContext() {
 function editTaskFromDetail(task: Task) {
   if (!isAdmin.value) return
   clearItemReview()
-  taskView.value = "all"
-  window.history.pushState({}, "", "/tasks?view=all")
-  path.value = "/tasks"
-  editTask(task)
+  void editTask(task)
 }
 
 function startAIPlanner() {
@@ -2280,6 +2321,7 @@ async function logout() {
 
 function handlePopState() {
   const nextPath = window.location.pathname
+  if (path.value !== nextPath && isTaskEditorRoute.value) initializedTaskEditorPath = ""
   if (path.value !== nextPath && (/^\/tasks\/\d+$/.test(path.value) || /^\/tasks\/\d+$/.test(nextPath))) {
     clearFactSuggestions()
     taskProgressDraft.value = ""
@@ -2598,6 +2640,152 @@ onBeforeUnmount(() => {
         <h1>正在加载事项</h1>
         <p>正在读取事项分工和最近进展…</p>
       </section>
+
+      <template v-else-if="isTaskEditorRoute">
+        <div class="page-title task-editor-heading">
+          <div>
+            <button class="task-editor-back" type="button" @click="cancelTaskForm">← 返回</button>
+            <small v-if="parentTask" class="form-context">分工属于：{{ parentTask.title }}</small>
+            <h1>{{ taskEditorHeading }}</h1>
+          </div>
+        </div>
+
+        <section v-if="taskEditorLoading" class="system-state" role="status" aria-live="polite">
+          <span class="loading-dot" aria-hidden="true"></span>
+          正在加载事项信息…
+        </section>
+
+        <form v-else-if="isAdmin" class="task-editor-form" @submit.prevent="submitTask">
+          <label>
+            要做什么？
+            <input
+              v-model="taskTitle"
+              data-validation-field="task-title"
+              :aria-invalid="Boolean(fieldErrors['task-title'])"
+              maxlength="200"
+              placeholder="例如：现场摄影"
+              @input="clearFieldError('task-title')"
+            />
+            <small v-if="fieldErrors['task-title']" class="field-error">{{ fieldErrors['task-title'] }}</small>
+          </label>
+
+          <fieldset>
+            <legend>负责人</legend>
+            <div class="choice-row">
+              <label class="choice-option">
+                <input v-model="taskOwnerMode" type="radio" value="assigned" />
+                指定负责人
+              </label>
+              <label class="choice-option">
+                <input v-model="taskOwnerMode" type="radio" value="claimable" />
+                待认领
+              </label>
+            </div>
+            <select
+              v-if="taskOwnerMode === 'assigned'"
+              v-model="taskOwnerId"
+              data-validation-field="task-owner"
+              :aria-invalid="Boolean(fieldErrors['task-owner'])"
+              @change="clearFieldError('task-owner')"
+            >
+              <option v-for="member in ownerOptions" :key="member.id" :value="member.id">
+                {{ member.name }}{{ activeMemberIds.has(member.id) ? "" : "（已停用）" }}
+              </option>
+            </select>
+            <small v-if="fieldErrors['task-owner']" class="field-error">{{ fieldErrors['task-owner'] }}</small>
+          </fieldset>
+
+          <label>
+            截止时间（可选）
+            <input v-model="taskDeadline" type="datetime-local" />
+            <small>没有明确时间可以留空。</small>
+          </label>
+
+          <details class="advanced-fields">
+            <summary>{{ parentTaskId === null ? "协作设置" : "执行说明与协作设置" }}</summary>
+            <div class="advanced-grid">
+              <label v-if="parentTaskId !== null">
+                做到什么算完成
+                <textarea
+                  v-model="taskDeliverable"
+                  maxlength="5000"
+                  rows="3"
+                  placeholder="写清楚看到什么结果即可判定完成"
+                />
+              </label>
+
+              <section v-if="parentTaskId !== null" class="task-edit-hints">
+                <h3>执行提示</h3>
+                <label>
+                  怎么做（每行一条，最多 6 条）
+                  <textarea v-model="taskExecutionPointsText" data-validation-field="task-execution-points" rows="2" placeholder="写完成责任所需的关键步骤" />
+                  <small v-if="fieldErrors['task-execution-points']" class="field-error">{{ fieldErrors['task-execution-points'] }}</small>
+                </label>
+                <label v-if="taskCautionsText.trim() || taskCautionsOpen">
+                  注意（每行一条，最多 5 条）
+                  <textarea v-model="taskCautionsText" data-validation-field="task-cautions" rows="2" placeholder="只写与当前任务直接相关的提醒" />
+                  <small v-if="fieldErrors['task-cautions']" class="field-error">{{ fieldErrors['task-cautions'] }}</small>
+                </label>
+                <button v-else class="planner-add-detail" type="button" @click="taskCautionsOpen = true">＋ 添加注意</button>
+              </section>
+
+              <section v-if="parentTaskId !== null" class="task-edit-prerequisites">
+                <label v-if="taskPrerequisitesText.trim() || taskPrerequisitesOpen">
+                  开始前需要（每行一条，最多 4 条）
+                  <textarea v-model="taskPrerequisitesText" data-validation-field="task-prerequisites" rows="2" placeholder="只有缺少时任务就不能合理开始的条件" />
+                  <small v-if="fieldErrors['task-prerequisites']" class="field-error">{{ fieldErrors['task-prerequisites'] }}</small>
+                </label>
+                <button v-else class="planner-add-detail" type="button" @click="taskPrerequisitesOpen = true">＋ 添加开始条件</button>
+              </section>
+
+              <fieldset v-if="parentTaskId !== null" class="dependency-edit-list">
+                <legend>等待哪些分工（可选）</legend>
+                <label v-for="dependency in availableDependencyTasks" :key="dependency.id" class="check-row">
+                  <input v-model="taskDependencyIds" type="checkbox" :value="dependency.id" />
+                  {{ dependency.title }} · {{ statusLabels[dependency.status] }}
+                </label>
+                <small v-if="!availableDependencyTasks.length" class="muted">同一事项下还没有其他分工。</small>
+              </fieldset>
+
+              <fieldset>
+                <legend>协作者</legend>
+                <label
+                  v-for="member in activeMembers.filter((item) => item.id !== taskOwnerId)"
+                  :key="member.id"
+                  class="check-row"
+                >
+                  <input v-model="taskCollaboratorIds" type="checkbox" :value="member.id" />
+                  {{ member.name }}
+                </label>
+                <span v-if="activeMembers.length <= 1" class="muted">暂无其他可选成员</span>
+              </fieldset>
+
+              <label class="check-row">
+                <input v-model="taskCollaborationOpen" type="checkbox" />
+                允许成员自行加入 / 退出协作
+              </label>
+
+              <label v-if="taskOwnerMode === 'assigned'" class="check-row">
+                <input v-model="taskOwnerClaimable" type="checkbox" />
+                允许负责人取消后重新开放认领
+              </label>
+
+              <label>
+                状态
+                <select v-model="taskStatus">
+                  <option value="todo">待开始</option>
+                  <option value="doing">进行中</option>
+                  <option value="done">已完成</option>
+                </select>
+              </label>
+            </div>
+          </details>
+
+          <button class="primary task-editor-save" type="submit" :disabled="taskSaving">
+            {{ taskSaving ? "正在保存…" : editingTaskId !== null ? "保存修改" : parentTaskId !== null ? "添加分工" : "发布事项" }}
+          </button>
+        </form>
+      </template>
 
       <template v-else-if="path === '/'">
         <section class="base-entry">
@@ -3471,147 +3659,7 @@ onBeforeUnmount(() => {
           </button>
         </div>
 
-        <form v-if="isAdmin && taskFormOpen" class="management-form task-form" @submit.prevent="submitTask">
-          <div class="form-title">
-            <div>
-              <small v-if="parentTask" class="form-context">分工属于：{{ parentTask.title }}</small>
-              <h2>{{ editingTaskId ? "修改任务" : parentTaskId ? "添加分工" : "新建事项" }}</h2>
-            </div>
-            <button type="button" @click="closeTaskForm">关闭</button>
-          </div>
 
-          <label>
-            要做什么？
-            <input
-              v-model="taskTitle"
-              data-validation-field="task-title"
-              :aria-invalid="Boolean(fieldErrors['task-title'])"
-              maxlength="200"
-              placeholder="例如：现场摄影"
-              @input="clearFieldError('task-title')"
-            />
-            <small v-if="fieldErrors['task-title']" class="field-error">{{ fieldErrors['task-title'] }}</small>
-          </label>
-
-          <fieldset>
-            <legend>负责人</legend>
-            <div class="choice-row">
-              <label class="choice-option">
-                <input v-model="taskOwnerMode" type="radio" value="assigned" />
-                指定负责人
-              </label>
-              <label class="choice-option">
-                <input v-model="taskOwnerMode" type="radio" value="claimable" />
-                待认领
-              </label>
-            </div>
-            <select
-              v-if="taskOwnerMode === 'assigned'"
-              v-model="taskOwnerId"
-              data-validation-field="task-owner"
-              :aria-invalid="Boolean(fieldErrors['task-owner'])"
-              @change="clearFieldError('task-owner')"
-            >
-              <option v-for="member in ownerOptions" :key="member.id" :value="member.id">
-                {{ member.name }}{{ activeMemberIds.has(member.id) ? "" : "（已停用）" }}
-              </option>
-            </select>
-            <small v-if="fieldErrors['task-owner']" class="field-error">{{ fieldErrors['task-owner'] }}</small>
-          </fieldset>
-
-          <label>
-            截止时间（可选）
-            <input
-              v-model="taskDeadline"
-              type="datetime-local"
-            />
-            <small>没有明确时间可以留空。</small>
-          </label>
-
-          <details class="advanced-fields">
-            <summary>{{ parentTaskId === null ? "协作设置" : "执行说明与协作设置" }}</summary>
-            <div class="advanced-grid">
-              <label v-if="parentTaskId !== null">
-                做到什么算完成
-                <textarea
-                  v-model="taskDeliverable"
-                  maxlength="5000"
-                  rows="3"
-                  placeholder="写清楚看到什么结果即可判定完成"
-                />
-              </label>
-
-              <section v-if="parentTaskId !== null" class="task-edit-hints">
-                <h3>执行提示</h3>
-                <label>
-                  怎么做（每行一条，最多 6 条）
-                  <textarea v-model="taskExecutionPointsText" data-validation-field="task-execution-points" rows="2" placeholder="写完成责任所需的关键步骤" />
-                  <small v-if="fieldErrors['task-execution-points']" class="field-error">{{ fieldErrors['task-execution-points'] }}</small>
-                </label>
-                <label v-if="taskCautionsText.trim() || taskCautionsOpen">
-                  注意（每行一条，最多 5 条）
-                  <textarea v-model="taskCautionsText" data-validation-field="task-cautions" rows="2" placeholder="只写与当前任务直接相关的提醒" />
-                  <small v-if="fieldErrors['task-cautions']" class="field-error">{{ fieldErrors['task-cautions'] }}</small>
-                </label>
-                <button v-else class="planner-add-detail" type="button" @click="taskCautionsOpen = true">＋ 添加注意</button>
-              </section>
-
-              <section v-if="parentTaskId !== null" class="task-edit-prerequisites">
-                <label v-if="taskPrerequisitesText.trim() || taskPrerequisitesOpen">
-                  开始前需要（每行一条，最多 4 条）
-                  <textarea v-model="taskPrerequisitesText" data-validation-field="task-prerequisites" rows="2" placeholder="只有缺少时任务就不能合理开始的条件" />
-                  <small v-if="fieldErrors['task-prerequisites']" class="field-error">{{ fieldErrors['task-prerequisites'] }}</small>
-                </label>
-                <button v-else class="planner-add-detail" type="button" @click="taskPrerequisitesOpen = true">＋ 添加开始条件</button>
-              </section>
-
-              <fieldset v-if="parentTaskId !== null" class="dependency-edit-list">
-                <legend>等待哪些分工（可选）</legend>
-                <label v-for="dependency in availableDependencyTasks" :key="dependency.id" class="check-row">
-                  <input v-model="taskDependencyIds" type="checkbox" :value="dependency.id" />
-                  {{ dependency.title }} · {{ statusLabels[dependency.status] }}
-                </label>
-                <small v-if="!availableDependencyTasks.length" class="muted">同一事项下还没有其他分工。</small>
-              </fieldset>
-
-              <fieldset>
-                <legend>协作者</legend>
-                <label
-                  v-for="member in activeMembers.filter((item) => item.id !== taskOwnerId)"
-                  :key="member.id"
-                  class="check-row"
-                >
-                  <input v-model="taskCollaboratorIds" type="checkbox" :value="member.id" />
-                  {{ member.name }}
-                </label>
-                <span v-if="activeMembers.length <= 1" class="muted">暂无其他可选成员</span>
-              </fieldset>
-
-              <label class="check-row">
-                <input v-model="taskCollaborationOpen" type="checkbox" />
-                允许成员自行加入 / 退出协作
-              </label>
-
-              <label v-if="taskOwnerMode === 'assigned'" class="check-row">
-                <input v-model="taskOwnerClaimable" type="checkbox" />
-                允许负责人取消后重新开放认领
-              </label>
-
-              <label>
-                状态
-                <select v-model="taskStatus">
-                  <option value="todo">待开始</option>
-                  <option value="doing">进行中</option>
-                  <option value="done">已完成</option>
-                </select>
-              </label>
-            </div>
-          </details>
-
-          <button class="primary" type="submit">
-            {{ editingTaskId ? "保存修改" : parentTaskId ? "添加分工" : "发布事项" }}
-          </button>
-        </form>
 
         <section class="task-board">
           <div v-if="taskListLoading" class="local-route-loading" role="status" aria-live="polite">

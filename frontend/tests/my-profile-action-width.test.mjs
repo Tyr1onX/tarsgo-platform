@@ -60,7 +60,7 @@ assert.match(css, /\.profile-logout\s*\{[^}]*width:\s*fit-content/s)
 assert.match(css, /\.profile-save\s*\{[^}]*width:\s*fit-content/s)
 assert.match(css, /@media \(max-width: 520px\)[\s\S]*?\.profile-student-edit-form\s*\{[^}]*flex-direction:\s*column/s)
 assert.ok(team.includes('class="primary team-registration-action"'))
-assert.match(app, /<form v-if="isAdmin && taskFormOpen" class="management-form task-form"[\s\S]*?<button class="primary" type="submit">/)
+assert.doesNotMatch(app, /taskFormOpen|class="management-form task-form"/)
 assert.match(css, /\.auth-form\s*\{[^}]*width:\s*min\(100%, 380px\)/s)
 assert.doesNotMatch(
   css.match(/\.profile-field-row[\s\S]*?\.management-form/)?.[0] ?? "",

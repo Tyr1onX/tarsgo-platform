@@ -1318,11 +1318,43 @@ textarea[aria-invalid="true"] {
   content: "";
 }
 
-.task-form {
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface);
-  padding: 18px;
+.task-editor-form {
+  min-width: 0;
+  display: grid;
+  gap: 16px;
+  width: min(100%, 680px);
+  margin: 0;
+  padding: 0 0 40px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.task-editor-form > *,
+.task-editor-form label,
+.task-editor-form fieldset,
+.task-editor-form input,
+.task-editor-form textarea,
+.task-editor-form select {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.task-editor-save {
+  width: fit-content;
+  min-width: 128px;
+  justify-self: start;
+}
+
+.task-editor-heading > div {
+  min-width: 0;
+  display: grid;
+  justify-items: start;
+  gap: 4px;
+}
+
+.task-editor-heading .task-editor-back {
+  min-height: 36px;
 }
 
 .form-context {
@@ -1636,17 +1668,9 @@ textarea[aria-invalid="true"] {
   .management-form label:has(textarea),
   .management-form fieldset,
   .management-form .primary,
-  .advanced-fields,
-  .task-form .form-title,
-  .task-form > fieldset,
-  .task-form > .primary {
+  .advanced-fields {
     grid-column: 1 / -1;
   }
-
-  .task-form {
-    padding: 20px;
-  }
-
 }
 
 @media (max-width: 860px) {
@@ -1781,6 +1805,21 @@ textarea[aria-invalid="true"] {
 
   .management-form {
     gap: 14px;
+  }
+
+  .task-editor-form {
+    gap: 14px;
+    padding-bottom: calc(96px + env(safe-area-inset-bottom));
+  }
+
+  .task-editor-form input,
+  .task-editor-form textarea,
+  .task-editor-form select {
+    scroll-margin-block-end: calc(104px + env(safe-area-inset-bottom));
+  }
+
+  .task-editor-save {
+    min-height: 42px;
   }
 
   .member-row {

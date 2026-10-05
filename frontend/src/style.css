@@ -2181,37 +2181,128 @@ textarea[aria-invalid="true"] {
   gap: 10px;
 }
 
+.base-home-section {
+  min-width: 0;
+}
+
+.base-home-section .section-heading {
+  margin-bottom: 7px;
+}
+
 .home-task-card {
   position: relative;
   display: grid;
   width: 100%;
-  gap: 5px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--surface);
-  padding: 15px 42px 15px 16px;
+  min-width: 0;
+  gap: 4px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+  padding: 12px 36px 12px 0;
   color: inherit;
   text-align: left;
 }
 
+.home-task-cards {
+  gap: 0;
+  border-top: 1px solid var(--line);
+}
+
+.home-task-card:last-child {
+  border-bottom: 0;
+}
+
 .home-task-card:hover {
-  border-color: var(--line-strong);
+  background: var(--hover);
 }
 
 .home-task-card strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
   font-size: 15.5px;
   font-weight: 570;
 }
 
-.home-task-deliverable {
-  color: var(--secondary);
-  font-size: 13px;
-  line-height: 1.55;
+.home-task-card .state {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .home-task-meta {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  flex-wrap: wrap;
   color: var(--faint);
   font-size: 12px;
+}
+
+.base-home-more,
+.base-claimable-link {
+  margin-top: 10px;
+}
+
+.base-home-more {
+  border: 0;
+  background: transparent;
+  padding: 3px 0;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 540;
+}
+
+.base-home-more:hover,
+.base-claimable-link:hover {
+  color: var(--text);
+}
+
+.base-change-list {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--line);
+  list-style: none;
+}
+
+.base-change-row {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  gap: 3px 12px;
+  padding: 11px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.base-change-row:last-child {
+  border-bottom: 0;
+}
+
+.base-change-context {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.base-change-row p {
+  grid-column: 1 / -1;
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+
+.base-change-row time {
+  color: var(--faint);
+  font-size: 11px;
+  white-space: nowrap;
 }
 
 .detail-task-list {

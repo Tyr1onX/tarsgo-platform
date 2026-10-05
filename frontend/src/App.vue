@@ -2,6 +2,7 @@
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 
 import { ApiError, api } from "./api"
+import { recentBaseChanges } from "./baseHome.js"
 import { revealInvalidField } from "./formFeedback.js"
 import { filterIgnoredPlannerSuggestions, ignorePlannerSuggestion, plannerSuggestionJoinInstruction } from "./plannerSuggestions.js"
 import { itemReviewChanges, removeItemReviewSuggestion } from "./itemReview.js"
@@ -130,6 +131,7 @@ const schoolLeaveTodoCount = ref(0)
 const tasks = ref<Task[]>([])
 const homeMineTasks = ref<Task[]>([])
 const homeAllTasks = ref<Task[]>([])
+const baseRecentActivities = ref<ItemActivity[]>([])
 const itemActivities = ref<ItemActivity[]>([])
 const detailActivitiesHasMore = ref(false)
 const detailActivitiesNextBeforeId = ref<number | null>(null)
@@ -351,6 +353,13 @@ const homeTaskCards = computed(() => {
   )
   return [...children, ...standaloneRoots].sort(compareTaskDeadlines)
 })
+const visibleHomeTaskCards = computed(() => homeTaskCards.value.slice(0, 3))
+const homeRecentChanges = computed(() => recentBaseChanges(
+  homeAllTasks.value,
+  homeMineTasks.value,
+  baseRecentActivities.value,
+  user.value?.id ?? 0,
+))
 const rootTasks = computed(() => rootsForView(tasks.value, taskView.value, user.value?.id ?? 0))
 const deleteTargetRoot = computed(() =>
   tasks.value.find((task) => task.id === deleteTargetRootId.value && task.parent_id === null) ?? null,
@@ -815,6 +824,23 @@ function homeRoot(task: Task) {
   return homeAllTasks.value.find((candidate) => candidate.id === task.parent_id) ?? null
 }
 
+async function loadHomeRecentActivities(relatedTasks: Task[], loadId: number) {
+  const memberId = user.value?.id
+  const rootIds = [...new Set(relatedTasks.map((task) => task.parent_id ?? task.id))]
+  const activities: ItemActivity[] = []
+  baseRecentActivities.value = []
+
+  for (let index = 0; index < rootIds.length; index += 4) {
+    const batch = rootIds.slice(index, index + 4)
+    const pages = await Promise.allSettled(batch.map((rootId) => api.itemActivityPage(rootId, undefined, 5)))
+    if (loadId !== routeLoadSequence || path.value !== "/" || user.value?.id !== memberId) return
+    for (const page of pages) {
+      if (page.status === "fulfilled") activities.push(...page.value.items)
+    }
+    baseRecentActivities.value = [...activities]
+  }
+}
+
 function openTaskDetail(task: Task) {
   navigate(`/tasks/${task.id}`)
 }
@@ -1039,6 +1065,10 @@ async function loadRoute() {
       navigate("/team")
       return
     } else if (routePath === "/") {
+      baseRecentActivities.value = []
+      homeAllTasks.value = []
+      homeMineTasks.value = []
+      claimableCount.value = 0
       const all = await api.tasks("all")
       if (!isCurrentLoad()) return
       homeAllTasks.value = all
@@ -1046,6 +1076,7 @@ async function loadRoute() {
         task.owner?.id === user.value?.id || task.collaborators.some((member) => member.id === user.value?.id),
       )
       claimableCount.value = all.filter(claimableTask).length
+      void loadHomeRecentActivities(homeMineTasks.value, loadId)
     } else if (editorRoute) {
       if (!isAdmin.value) {
         navigate("/")
@@ -2726,10 +2757,10 @@ onBeforeUnmount(() => {
       <template v-else-if="path === '/'">
         <section class="base-entry">
           <p class="base-kicker">TARS BASE</p>
-          <h1>现在要处理什么？</h1>
+          <h1>{{ isAdmin ? "现在要处理什么？" : "现在要处理" }}</h1>
 
           <div
-            v-if="aiPlannerAvailable"
+            v-if="isAdmin && aiPlannerAvailable"
             class="planner-composer base-composer"
             :class="{ 'is-drag-active': plannerDragActive, 'is-uploading': plannerUploading }"
             @dragenter.prevent="onPlannerDragOver"
@@ -2775,27 +2806,17 @@ onBeforeUnmount(() => {
               </button>
             </div>
           </div>
-          <p v-if="plannerAttachmentMessage" class="planner-composer-message" role="status">{{ plannerAttachmentMessage }}</p>
+          <p v-if="isAdmin && plannerAttachmentMessage" class="planner-composer-message" role="status">{{ plannerAttachmentMessage }}</p>
           <button v-if="isAdmin" class="base-manual-create" type="button" @click="startNewTask()">或手动创建任务</button>
         </section>
 
-        <button
-          v-if="claimableCount"
-          class="claimable-link"
-          type="button"
-          @click="navigateTasks('claimable')"
-        >
-          <span>还有 {{ claimableCount }} 项待认领 →</span>
-        </button>
-
-        <section>
+        <section v-if="homeTaskCards.length" class="base-home-section">
           <div class="section-heading">
-            <h2>我现在要处理</h2>
-            <span>{{ homeTaskCards.length }} 项</span>
+            <h2>现在要处理</h2>
           </div>
-          <div v-if="homeTaskCards.length" class="home-task-cards">
+          <div class="home-task-cards">
             <button
-              v-for="task in homeTaskCards"
+              v-for="task in visibleHomeTaskCards"
               :key="task.id"
               class="home-task-card"
               type="button"
@@ -2804,7 +2825,6 @@ onBeforeUnmount(() => {
               <span v-if="task.parent_id" class="state">{{ homeRoot(task)?.title || "事项" }}</span>
               <span v-else class="state">事项</span>
               <strong>{{ task.title }}</strong>
-              <span v-if="task.parent_id !== null && task.deliverable" class="home-task-deliverable">{{ task.deliverable }}</span>
               <span class="home-task-meta">
                 <TaskStatusIndicator :status="task.status" :task-id="task.id" />
                 <template v-if="task.deadline"> · {{ formatDate(task.deadline) }}</template>
@@ -2812,11 +2832,30 @@ onBeforeUnmount(() => {
               <span class="home-task-arrow" aria-hidden="true">›</span>
             </button>
           </div>
-          <div v-else class="empty empty-action empty-state">
-            <span class="empty-code">BASE / CLEAR</span>
-            <h3>当前没有待处理任务</h3>
-          </div>
+          <button v-if="homeTaskCards.length > 3" class="base-home-more" type="button" @click="navigateTasks('mine')">查看全部任务 →</button>
         </section>
+
+        <section v-if="homeRecentChanges.length" class="base-home-section">
+          <div class="section-heading">
+            <h2>最近与你有关</h2>
+          </div>
+          <ul class="base-change-list">
+            <li v-for="change in homeRecentChanges" :key="change.id" class="base-change-row">
+              <span class="base-change-context">{{ change.context }}</span>
+              <p>{{ change.content }}</p>
+              <time>{{ formatDate(change.created_at) }}</time>
+            </li>
+          </ul>
+        </section>
+
+        <button
+          v-if="claimableCount"
+          class="claimable-link base-claimable-link"
+          type="button"
+          @click="navigateTasks('claimable')"
+        >
+          <span>还有 {{ claimableCount }} 项可以认领 →</span>
+        </button>
       </template>
 
       <template v-else-if="path === '/ai-planner'">

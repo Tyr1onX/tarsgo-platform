@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import os
 import re
+import secrets
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -13,12 +14,20 @@ from docx import Document
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .models import SchoolLeaveRequest, SchoolLeaveRun
+from .models import SchoolLeaveGroupResult, SchoolLeaveRequest, SchoolLeaveRun
 
 
 DEFAULT_SCHOOL_LEAVE_REASON = "参加吉林大学吉甲大师机器人战队相关创新实践活动及工作安排"
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 SCHOOL_LEAVE_TEMPLATE_PATH = Path(__file__).with_name("templates") / "school_leave.docx"
+SCHOOL_LEAVE_RESULT_MAX_BYTES = 15 * 1024 * 1024
+SCHOOL_LEAVE_RESULT_TTL = timedelta(hours=72)
+SCHOOL_LEAVE_RESULT_MIME_BY_SUFFIX = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".pdf": "application/pdf",
+}
 _CUTOFF_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
 
 
@@ -43,6 +52,98 @@ def get_leave_daily_cutoff() -> str:
     if not _CUTOFF_RE.fullmatch(value):
         raise ValueError("LEAVE_DAILY_CUTOFF 必须配置为 HH:MM 24 小时格式")
     return value
+
+
+def get_school_leave_result_storage_dir() -> Path:
+    return Path(
+        os.getenv(
+            "SCHOOL_LEAVE_RESULT_STORAGE_DIR",
+            "/opt/tarsgo-data/school-leave-results",
+        )
+    )
+
+
+def validate_school_leave_result_upload(
+    filename: str | None,
+    content_type: str | None,
+    content: bytes,
+) -> tuple[str, str]:
+    original_filename = (filename or "").replace("\\", "/").split("/")[-1].strip()
+    suffix = Path(original_filename).suffix.lower()
+    expected_mime = SCHOOL_LEAVE_RESULT_MIME_BY_SUFFIX.get(suffix)
+    if not original_filename or expected_mime is None or content_type != expected_mime:
+        raise ValueError("仅支持 JPG、JPEG、PNG、PDF，且文件类型必须与扩展名一致")
+    if len(content) > SCHOOL_LEAVE_RESULT_MAX_BYTES:
+        raise OverflowError("盖章材料不能超过 15 MiB")
+    return original_filename[:255], suffix
+
+
+def store_school_leave_result_file(
+    content: bytes,
+    suffix: str,
+    *,
+    storage_dir: Path | None = None,
+) -> str:
+    directory = storage_dir or get_school_leave_result_storage_dir()
+    directory.mkdir(parents=True, exist_ok=True)
+    stored_name = f"{secrets.token_hex(24)}{suffix}"
+    (directory / stored_name).write_bytes(content)
+    return stored_name
+
+
+def school_leave_result_file_path(
+    stored_name: str,
+    *,
+    storage_dir: Path | None = None,
+) -> Path:
+    directory = storage_dir or get_school_leave_result_storage_dir()
+    safe_name = Path(stored_name).name
+    if safe_name != stored_name:
+        raise ValueError("invalid stored school leave result name")
+    return directory / safe_name
+
+
+def delete_school_leave_result_file(
+    stored_name: str,
+    *,
+    storage_dir: Path | None = None,
+) -> None:
+    school_leave_result_file_path(stored_name, storage_dir=storage_dir).unlink(missing_ok=True)
+
+
+def school_leave_result_download_filename(run: SchoolLeaveRun, mime_type: str) -> str:
+    extension = {
+        "image/jpeg": ".jpg",
+        "image/png": ".png",
+        "application/pdf": ".pdf",
+    }[mime_type]
+    return f"吉甲大师请假条_{run.collected_at:%Y-%m-%d}_盖章{extension}"
+
+
+def cleanup_expired_school_leave_results(
+    db: Session,
+    *,
+    now: datetime | None = None,
+    storage_dir: Path | None = None,
+) -> int:
+    cleanup_at = now or school_leave_now()
+    results = list(
+        db.scalars(
+            select(SchoolLeaveGroupResult)
+            .where(
+                SchoolLeaveGroupResult.expires_at <= cleanup_at,
+                SchoolLeaveGroupResult.deleted_at.is_(None),
+            )
+            .order_by(SchoolLeaveGroupResult.id)
+        )
+    )
+    cleaned = 0
+    for result in results:
+        delete_school_leave_result_file(result.stored_name, storage_dir=storage_dir)
+        result.deleted_at = cleanup_at
+        db.commit()
+        cleaned += 1
+    return cleaned
 
 
 def collect_pending_school_leave(

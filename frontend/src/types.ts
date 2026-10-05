@@ -146,7 +146,8 @@ export interface TeamRegistrationPayload {
 }
 
 export type SchoolLeaveRequestStatus = "pending" | "included" | "withdrawn"
-export type SchoolLeaveRunStatus = "ready" | "sent" | "cancelled"
+export type SchoolLeaveRunStatus = "ready" | "awaiting_return" | "completed" | "cancelled"
+export type SchoolLeaveResultState = "available" | "cleared"
 
 export interface SchoolLeaveRequest {
   id: number
@@ -158,6 +159,8 @@ export interface SchoolLeaveRequest {
   status: SchoolLeaveRequestStatus
   run_id: number | null
   run_status: SchoolLeaveRunStatus | null
+  group_index: number | null
+  result_state: SchoolLeaveResultState | null
   created_at: string
   updated_at: string
 }
@@ -168,6 +171,16 @@ export interface SchoolLeaveGroupMember {
   student_id: string
 }
 
+export interface SchoolLeaveGroupResult {
+  original_filename: string
+  mime_type: string
+  size_bytes: number
+  uploaded_at: string
+  expires_at: string
+  deleted_at: string | null
+  available: boolean
+}
+
 export interface SchoolLeaveGroup {
   index: number
   start_at: string
@@ -175,6 +188,7 @@ export interface SchoolLeaveGroup {
   time_text: string
   count: number
   members: SchoolLeaveGroupMember[]
+  result: SchoolLeaveGroupResult | null
 }
 
 export interface SchoolLeaveRun {
@@ -183,8 +197,8 @@ export interface SchoolLeaveRun {
   created_by: MemberSummary | null
   reason: string
   status: SchoolLeaveRunStatus
-  sent_at: string | null
-  sent_by: MemberSummary | null
+  downloaded_at: string | null
+  downloaded_by: MemberSummary | null
   request_count: number
   member_count: number
   groups: SchoolLeaveGroup[]
@@ -194,6 +208,12 @@ export interface SchoolLeaveRun {
 export interface SchoolLeaveAdminConfig {
   daily_cutoff: string
   contact_phone_configured: boolean
+}
+
+export interface SchoolLeaveAdminSummary {
+  ready_count: number
+  awaiting_return_count: number
+  todo_count: number
 }
 
 export interface AIPlannerAccess { available: boolean }

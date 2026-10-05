@@ -3,19 +3,21 @@ from __future__ import annotations
 import io
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.responses import StreamingResponse
-from sqlalchemy import delete, select
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi.responses import FileResponse, StreamingResponse
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from ..auth import get_current_member, require_admin
 from ..db import get_db
-from ..models import Member, SchoolLeaveRequest, SchoolLeaveRun
+from ..models import Member, SchoolLeaveGroupResult, SchoolLeaveRequest, SchoolLeaveRun
 from ..schemas import (
     MemberSummary,
     SchoolLeaveAdminConfigOut,
+    SchoolLeaveAdminSummaryOut,
     SchoolLeaveGroupMemberOut,
     SchoolLeaveGroupOut,
+    SchoolLeaveGroupResultOut,
     SchoolLeaveReasonUpdate,
     SchoolLeaveRequestCreate,
     SchoolLeaveRequestOut,
@@ -24,38 +26,74 @@ from ..schemas import (
     SchoolLeaveRunStatus,
 )
 from ..school_leave import (
+    SCHOOL_LEAVE_RESULT_MAX_BYTES,
+    SCHOOL_LEAVE_RESULT_TTL,
     build_school_leave_docx,
     build_school_leave_run_docx,
     collect_pending_school_leave,
+    delete_school_leave_result_file,
     format_school_leave_time,
     get_leave_contact_phone,
     get_leave_daily_cutoff,
     group_school_leave_requests,
     requests_for_run,
     school_leave_document_filename,
+    school_leave_result_download_filename,
+    school_leave_result_file_path,
     school_leave_run_document_filename,
     school_leave_now,
+    store_school_leave_result_file,
+    validate_school_leave_result_upload,
 )
 
 
 router = APIRouter(prefix="/api/school-leave", tags=["school-leave"])
 
 
+def _result_out(result: SchoolLeaveGroupResult) -> SchoolLeaveGroupResultOut:
+    now = school_leave_now()
+    return SchoolLeaveGroupResultOut(
+        original_filename=result.original_filename,
+        mime_type=result.mime_type,
+        size_bytes=result.size_bytes,
+        uploaded_at=result.uploaded_at,
+        expires_at=result.expires_at,
+        deleted_at=result.deleted_at,
+        available=result.deleted_at is None and result.expires_at > now,
+    )
+
+
 def _request_out(
     request: SchoolLeaveRequest,
     *,
     run_status: SchoolLeaveRunStatus | None = None,
+    group_index: int | None = None,
+    result_state: str | None = None,
 ) -> SchoolLeaveRequestOut:
     return SchoolLeaveRequestOut.model_validate(request).model_copy(
-        update={"run_status": run_status}
+        update={
+            "run_status": run_status,
+            "group_index": group_index,
+            "result_state": result_state,
+        }
     )
+
+
+def _run_groups(db: Session, run: SchoolLeaveRun):
+    return group_school_leave_requests(requests_for_run(db, run.id))
 
 
 def _run_out(db: Session, run: SchoolLeaveRun) -> SchoolLeaveRunOut:
     requests = requests_for_run(db, run.id)
     groups = group_school_leave_requests(requests)
     creator = db.get(Member, run.created_by) if run.created_by is not None else None
-    sender = db.get(Member, run.sent_by) if run.sent_by is not None else None
+    downloader = db.get(Member, run.downloaded_by) if run.downloaded_by is not None else None
+    results = {
+        result.group_index: result
+        for result in db.scalars(
+            select(SchoolLeaveGroupResult).where(SchoolLeaveGroupResult.run_id == run.id)
+        )
+    }
     group_outputs = [
         SchoolLeaveGroupOut(
             index=group.index,
@@ -71,6 +109,7 @@ def _run_out(db: Session, run: SchoolLeaveRun) -> SchoolLeaveRunOut:
                 )
                 for request in group.requests
             ],
+            result=_result_out(results[group.index]) if group.index in results else None,
         )
         for group in groups
     ]
@@ -80,8 +119,8 @@ def _run_out(db: Session, run: SchoolLeaveRun) -> SchoolLeaveRunOut:
         created_by=MemberSummary.model_validate(creator) if creator else None,
         reason=run.reason,
         status=run.status,
-        sent_at=run.sent_at,
-        sent_by=MemberSummary.model_validate(sender) if sender else None,
+        downloaded_at=run.downloaded_at,
+        downloaded_by=MemberSummary.model_validate(downloader) if downloader else None,
         request_count=len(requests),
         member_count=len({request.member_id for request in requests}),
         groups=group_outputs,
@@ -124,15 +163,43 @@ def list_my_requests(
     db: Session = Depends(get_db),
 ) -> list[SchoolLeaveRequestOut]:
     rows = db.execute(
-        select(SchoolLeaveRequest, SchoolLeaveRun.status)
+        select(SchoolLeaveRequest, SchoolLeaveRun)
         .outerjoin(SchoolLeaveRun, SchoolLeaveRun.id == SchoolLeaveRequest.run_id)
         .where(SchoolLeaveRequest.member_id == current.id)
         .order_by(SchoolLeaveRequest.created_at.desc(), SchoolLeaveRequest.id.desc())
     ).all()
-    return [
-        _request_out(request, run_status=run_status)
-        for request, run_status in rows
-    ]
+    outputs: list[SchoolLeaveRequestOut] = []
+    now = school_leave_now()
+    for request, run in rows:
+        group_index = None
+        result_state = None
+        if run is not None and request.status == "included":
+            for group in _run_groups(db, run):
+                if any(item.id == request.id for item in group.requests):
+                    group_index = group.index
+                    break
+            if run.status == "completed" and group_index is not None:
+                result = db.scalar(
+                    select(SchoolLeaveGroupResult).where(
+                        SchoolLeaveGroupResult.run_id == run.id,
+                        SchoolLeaveGroupResult.group_index == group_index,
+                    )
+                )
+                if result is not None:
+                    result_state = (
+                        "available"
+                        if result.deleted_at is None and result.expires_at > now
+                        else "cleared"
+                    )
+        outputs.append(
+            _request_out(
+                request,
+                run_status=run.status if run is not None else None,
+                group_index=group_index,
+                result_state=result_state,
+            )
+        )
+    return outputs
 
 
 @router.post("/requests", response_model=SchoolLeaveRequestOut, status_code=status.HTTP_201_CREATED)
@@ -206,6 +273,27 @@ def admin_config(
     )
 
 
+@router.get("/admin/summary", response_model=SchoolLeaveAdminSummaryOut)
+def admin_summary(
+    _: Member = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> SchoolLeaveAdminSummaryOut:
+    counts = dict(
+        db.execute(
+            select(SchoolLeaveRun.status, func.count(SchoolLeaveRun.id))
+            .where(SchoolLeaveRun.status.in_(("ready", "awaiting_return")))
+            .group_by(SchoolLeaveRun.status)
+        ).all()
+    )
+    ready_count = int(counts.get("ready", 0))
+    awaiting_return_count = int(counts.get("awaiting_return", 0))
+    return SchoolLeaveAdminSummaryOut(
+        ready_count=ready_count,
+        awaiting_return_count=awaiting_return_count,
+        todo_count=ready_count + awaiting_return_count,
+    )
+
+
 @router.get("/admin/requests", response_model=list[SchoolLeaveRequestOut])
 def admin_list_requests(
     _: Member = Depends(require_admin),
@@ -257,7 +345,7 @@ def update_run_reason(
     run = _get_admin_run(db, run_id, lock=True)
     if run.status != "ready":
         db.rollback()
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="只有待发送批次可以修改事由")
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="只有待下载批次可以修改事由")
     run.reason = payload.reason
     db.commit()
     db.refresh(run)
@@ -274,7 +362,7 @@ def cancel_run(
         run = _get_admin_run(db, run_id, lock=True)
         if run.status != "ready":
             db.rollback()
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="只有待发送批次可以取消")
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="只有待下载批次可以取消")
         requests = list(
             db.scalars(
                 select(SchoolLeaveRequest)
@@ -300,24 +388,6 @@ def cancel_run(
         raise
 
 
-@router.post("/admin/runs/{run_id}/sent", response_model=SchoolLeaveRunOut)
-def mark_run_sent(
-    run_id: int,
-    current: Member = Depends(require_admin),
-    db: Session = Depends(get_db),
-) -> SchoolLeaveRunOut:
-    run = _get_admin_run(db, run_id, lock=True)
-    if run.status != "ready":
-        db.rollback()
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="只有待发送批次可以标记已发送")
-    run.status = "sent"
-    run.sent_at = school_leave_now()
-    run.sent_by = current.id
-    db.commit()
-    db.refresh(run)
-    return _run_out(db, run)
-
-
 @router.delete("/admin/runs/{run_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_run_history(
     run_id: int,
@@ -326,12 +396,20 @@ def delete_run_history(
 ) -> None:
     try:
         run = _get_admin_run(db, run_id, lock=True)
-        if run.status == "ready":
+        if run.status not in {"completed", "cancelled"}:
             db.rollback()
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="待发送批次不能直接删除，请先取消本次汇总",
+                detail="只有已完成或已取消记录可以删除",
             )
+        results = list(
+            db.scalars(
+                select(SchoolLeaveGroupResult)
+                .where(SchoolLeaveGroupResult.run_id == run.id)
+                .order_by(SchoolLeaveGroupResult.id)
+                .with_for_update()
+            )
+        )
         linked_requests = list(
             db.scalars(
                 select(SchoolLeaveRequest)
@@ -340,11 +418,22 @@ def delete_run_history(
                 .with_for_update()
             )
         )
+        if results:
+            db.execute(
+                delete(SchoolLeaveGroupResult).where(
+                    SchoolLeaveGroupResult.id.in_([result.id for result in results])
+                )
+            )
         if linked_requests:
-            request_ids = [request.id for request in linked_requests]
-            db.execute(delete(SchoolLeaveRequest).where(SchoolLeaveRequest.id.in_(request_ids)))
+            db.execute(
+                delete(SchoolLeaveRequest).where(
+                    SchoolLeaveRequest.id.in_([request.id for request in linked_requests])
+                )
+            )
         db.delete(run)
         db.commit()
+        for result in results:
+            delete_school_leave_result_file(result.stored_name)
     except HTTPException:
         raise
     except Exception:
@@ -394,7 +483,7 @@ def download_document(
 @router.get("/admin/runs/{run_id}/document")
 def download_run_document(
     run_id: int,
-    _: Member = Depends(require_admin),
+    current: Member = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> StreamingResponse:
     run, groups = _document_context(db, run_id)
@@ -404,8 +493,141 @@ def download_run_document(
         contact_phone=get_leave_contact_phone(),
     )
     filename = school_leave_run_document_filename(db, run)
+    if run.status == "ready":
+        run.status = "awaiting_return"
+        run.downloaded_at = school_leave_now()
+        run.downloaded_by = current.id
+        db.commit()
     return StreamingResponse(
         io.BytesIO(content),
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
+    )
+
+
+@router.post(
+    "/admin/runs/{run_id}/groups/{group_index}/result",
+    response_model=SchoolLeaveGroupResultOut,
+)
+async def upload_group_result(
+    run_id: int,
+    group_index: int,
+    file: UploadFile = File(...),
+    current: Member = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> SchoolLeaveGroupResultOut:
+    run = _get_admin_run(db, run_id, lock=True)
+    if run.status not in {"awaiting_return", "completed"}:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="请先下载请假材料，再上传盖章结果",
+        )
+    groups = _run_groups(db, run)
+    if not any(group.index == group_index for group in groups):
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="时间组不存在")
+
+    content = await file.read(SCHOOL_LEAVE_RESULT_MAX_BYTES + 1)
+    try:
+        original_filename, suffix = validate_school_leave_result_upload(
+            file.filename,
+            file.content_type,
+            content,
+        )
+    except OverflowError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=str(exc)) from exc
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    stored_name = store_school_leave_result_file(content, suffix)
+    previous_stored_name: str | None = None
+    try:
+        result = db.scalar(
+            select(SchoolLeaveGroupResult)
+            .where(
+                SchoolLeaveGroupResult.run_id == run.id,
+                SchoolLeaveGroupResult.group_index == group_index,
+            )
+            .with_for_update()
+        )
+        now = school_leave_now()
+        if result is None:
+            result = SchoolLeaveGroupResult(run_id=run.id, group_index=group_index)
+            db.add(result)
+        else:
+            previous_stored_name = result.stored_name
+
+        result.stored_name = stored_name
+        result.original_filename = original_filename
+        result.mime_type = file.content_type or ""
+        result.size_bytes = len(content)
+        result.uploaded_by = current.id
+        result.uploaded_at = now
+        result.expires_at = now + SCHOOL_LEAVE_RESULT_TTL
+        result.deleted_at = None
+        db.flush()
+
+        if run.status == "awaiting_return":
+            available_group_indexes = set(
+                db.scalars(
+                    select(SchoolLeaveGroupResult.group_index).where(
+                        SchoolLeaveGroupResult.run_id == run.id,
+                        SchoolLeaveGroupResult.deleted_at.is_(None),
+                        SchoolLeaveGroupResult.expires_at > now,
+                    )
+                )
+            )
+            if available_group_indexes == {group.index for group in groups}:
+                run.status = "completed"
+
+        db.commit()
+        db.refresh(result)
+    except Exception:
+        db.rollback()
+        delete_school_leave_result_file(stored_name)
+        raise
+
+    if previous_stored_name and previous_stored_name != stored_name:
+        delete_school_leave_result_file(previous_stored_name)
+    return _result_out(result)
+
+
+@router.get("/runs/{run_id}/groups/{group_index}/result")
+def download_group_result(
+    run_id: int,
+    group_index: int,
+    current: Member = Depends(get_current_member),
+    db: Session = Depends(get_db),
+) -> FileResponse:
+    run = _get_admin_run(db, run_id)
+    group = next((item for item in _run_groups(db, run) if item.index == group_index), None)
+    if group is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="盖章材料不存在")
+    if current.role != "admin" and not any(
+        request.member_id == current.id for request in group.requests
+    ):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="盖章材料不存在")
+
+    result = db.scalar(
+        select(SchoolLeaveGroupResult).where(
+            SchoolLeaveGroupResult.run_id == run.id,
+            SchoolLeaveGroupResult.group_index == group_index,
+        )
+    )
+    if result is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="盖章材料不存在")
+    if result.deleted_at is not None or result.expires_at <= school_leave_now():
+        raise HTTPException(status_code=status.HTTP_410_GONE, detail="盖章材料已清理")
+
+    path = school_leave_result_file_path(result.stored_name)
+    if not path.is_file():
+        raise HTTPException(status_code=status.HTTP_410_GONE, detail="盖章材料已清理")
+    filename = school_leave_result_download_filename(run, result.mime_type)
+    return FileResponse(
+        path,
+        media_type=result.mime_type,
+        headers={"Content-Disposition": f"inline; filename*=UTF-8''{quote(filename)}"},
     )

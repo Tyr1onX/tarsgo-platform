@@ -5,17 +5,22 @@ import { api } from "../api"
 import type {
   Member,
   SchoolLeaveAdminConfig,
+  SchoolLeaveAdminSummary,
   SchoolLeaveRequest,
   SchoolLeaveRun,
 } from "../types"
 
 const props = defineProps<{ currentUser: Member }>()
-const emit = defineEmits<{ navigate: [path: string] }>()
+const emit = defineEmits<{
+  navigate: [path: string]
+  todoCount: [count: number]
+}>()
 
 const requests = ref<SchoolLeaveRequest[]>([])
 const adminRequests = ref<SchoolLeaveRequest[]>([])
 const runs = ref<SchoolLeaveRun[]>([])
 const config = ref<SchoolLeaveAdminConfig | null>(null)
+const summary = ref<SchoolLeaveAdminSummary | null>(null)
 const loading = ref(true)
 const saving = ref(false)
 const actionRunId = ref<number | null>(null)
@@ -48,8 +53,11 @@ const isAdmin = computed(() => props.currentUser.role === "admin")
 const pendingAdminRequests = computed(() => adminRequests.value.filter((item) => item.status === "pending"))
 const pendingMemberCount = computed(() => new Set(pendingAdminRequests.value.map((item) => item.member_id)).size)
 const readyRuns = computed(() => runs.value.filter((item) => item.status === "ready"))
-const sentRuns = computed(() => runs.value.filter((item) => item.status === "sent"))
-const visibleSentRuns = computed(() => historyExpanded.value ? sentRuns.value : sentRuns.value.slice(0, 3))
+const awaitingReturnRuns = computed(() => runs.value.filter((item) => item.status === "awaiting_return"))
+const completedRuns = computed(() => runs.value.filter((item) => item.status === "completed"))
+const visibleCompletedRuns = computed(() =>
+  historyExpanded.value ? completedRuns.value : completedRuns.value.slice(0, 3),
+)
 const pendingPreviewDays = computed(() => {
   const days = new Map<string, Map<string, {
     key: string
@@ -127,7 +135,9 @@ function formatTimeSpan(startAt: string, endAt: string) {
 function requestStatusLabel(item: SchoolLeaveRequest) {
   if (item.status === "pending") return "待汇总"
   if (item.status === "withdrawn") return "已撤回"
-  if (item.run_status === "sent") return "已发送"
+  if (item.run_status === "awaiting_return") return "办理中"
+  if (item.run_status === "completed" && item.result_state === "cleared") return "已完成 · 材料已清理"
+  if (item.run_status === "completed") return "已完成"
   return "已汇总"
 }
 
@@ -141,15 +151,18 @@ async function load() {
   try {
     requests.value = await api.schoolLeaveRequests()
     if (isAdmin.value) {
-      const [nextConfig, nextAdminRequests, nextRuns] = await Promise.all([
+      const [nextConfig, nextSummary, nextAdminRequests, nextRuns] = await Promise.all([
         api.schoolLeaveAdminConfig(),
+        api.schoolLeaveAdminSummary(),
         api.schoolLeaveAdminRequests(),
         api.schoolLeaveRuns(),
       ])
       config.value = nextConfig
+      summary.value = nextSummary
       adminRequests.value = nextAdminRequests
       runs.value = nextRuns
       reasonDrafts.value = Object.fromEntries(nextRuns.map((run) => [run.id, run.reason]))
+      emit("todoCount", nextSummary.todo_count)
     }
   } catch (reason) {
     error.value = messageOf(reason)
@@ -283,27 +296,11 @@ async function cancelRun(run: SchoolLeaveRun, event?: Event) {
   }
 }
 
-async function markSent(run: SchoolLeaveRun) {
-  if (!window.confirm("确认已经通过微信或 QQ 私聊老师发送了这些材料？")) return
-  actionRunId.value = run.id
-  error.value = ""
-  notice.value = ""
-  try {
-    await api.markSchoolLeaveRunSent(run.id)
-    notice.value = "已记录为发送完成。"
-    await load()
-  } catch (reason) {
-    error.value = messageOf(reason)
-  } finally {
-    actionRunId.value = null
-  }
-}
-
 async function deleteRun(run: SchoolLeaveRun, event?: Event) {
   closeOverflow(event)
   const confirmed = window.confirm(
-    "删除这条发送记录？\n\n" +
-    "将同时删除该批次下的 " + run.request_count + " 条请假申请和历史记录。\n" +
+    "删除这条已完成记录？\n\n" +
+    "将同时删除该批次下的 " + run.request_count + " 条请假申请和盖章材料。\n" +
     "此操作不可恢复。",
   )
   if (!confirmed) return
@@ -313,7 +310,7 @@ async function deleteRun(run: SchoolLeaveRun, event?: Event) {
   try {
     await api.deleteSchoolLeaveRun(run.id)
     runs.value = runs.value.filter((item) => item.id !== run.id)
-    notice.value = "发送记录已删除。"
+    notice.value = "历史记录已删除。"
     await load()
   } catch (reason) {
     error.value = messageOf(reason)
@@ -322,13 +319,56 @@ async function deleteRun(run: SchoolLeaveRun, event?: Event) {
   }
 }
 
-function download(url: string) {
+function saveBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob)
   const anchor = document.createElement("a")
   anchor.href = url
-  anchor.rel = "noopener"
+  anchor.download = filename
   document.body.appendChild(anchor)
   anchor.click()
   anchor.remove()
+  URL.revokeObjectURL(url)
+}
+
+async function downloadRunDocument(run: SchoolLeaveRun) {
+  actionRunId.value = run.id
+  error.value = ""
+  try {
+    const file = await api.downloadSchoolLeaveRunDocument(run.id)
+    saveBlob(file.blob, file.filename)
+    await load()
+  } catch (reason) {
+    error.value = messageOf(reason)
+  } finally {
+    actionRunId.value = null
+  }
+}
+
+async function uploadResult(run: SchoolLeaveRun, groupIndex: number, event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ""
+  if (!file) return
+  actionRunId.value = run.id
+  error.value = ""
+  notice.value = ""
+  try {
+    await api.uploadSchoolLeaveResult(run.id, groupIndex, file)
+    notice.value = "盖章结果已上传。"
+    await load()
+  } catch (reason) {
+    error.value = messageOf(reason)
+  } finally {
+    actionRunId.value = null
+  }
+}
+
+function resultUrl(runId: number, groupIndex: number) {
+  return api.schoolLeaveResultUrl(runId, groupIndex)
+}
+
+function openResult(runId: number, groupIndex: number) {
+  window.open(resultUrl(runId, groupIndex), "_blank", "noopener")
 }
 
 function togglePreview(runId: number, groupIndex: number) {
@@ -343,10 +383,6 @@ function togglePendingPreview(key: string) {
 function closeOverflow(event?: Event) {
   const details = (event?.currentTarget as HTMLElement | null)?.closest("details")
   details?.removeAttribute("open")
-}
-
-function runDocumentUrl(runId: number) {
-  return "/api/school-leave/admin/runs/" + runId + "/document"
 }
 
 function dayKey(value: string) {
@@ -427,6 +463,19 @@ onMounted(() => {
             <button type="button" @click="editRequest(item)">修改</button>
             <button class="danger-text" type="button" @click="withdrawRequest(item)">撤回</button>
           </div>
+          <button
+            v-else-if="
+              item.run_status === 'completed' &&
+              item.result_state === 'available' &&
+              item.run_id !== null &&
+              item.group_index !== null
+            "
+            class="secondary leave-result-action"
+            type="button"
+            @click="openResult(item.run_id, item.group_index)"
+          >
+            下载盖章材料
+          </button>
         </div>
       </div>
     </section>
@@ -436,6 +485,9 @@ onMounted(() => {
     <section class="leave-admin-heading">
       <h2>汇总管理</h2>
       <p v-if="config">每天 {{ config.daily_cutoff }} 自动汇总 · Asia/Shanghai</p>
+      <p v-if="summary && summary.todo_count" class="leave-admin-todo">
+        待处理 · 待下载 {{ summary.ready_count }} · 待回传 {{ summary.awaiting_return_count }}
+      </p>
     </section>
 
     <p v-if="config && !config.contact_phone_configured" class="leave-feedback leave-error">
@@ -443,7 +495,7 @@ onMounted(() => {
     </p>
 
     <section v-if="readyRuns.length" class="leave-ready-section">
-      <div class="section-heading"><h2>待发送 <span>· {{ readyRuns.length }}</span></h2></div>
+      <div class="section-heading"><h2>待下载 <span>· {{ readyRuns.length }}</span></h2></div>
       <article v-for="run in readyRuns" :key="run.id" class="leave-ready-run">
         <header class="leave-run-heading">
           <div>
@@ -490,14 +542,79 @@ onMounted(() => {
 
         <footer class="leave-run-actions">
           <button
-            class="secondary leave-run-download"
+            class="primary leave-run-download"
             type="button"
-            :disabled="!run.document_ready"
-            @click="download(runDocumentUrl(run.id))"
+            :disabled="!run.document_ready || actionRunId === run.id"
+            @click="downloadRunDocument(run)"
           >
             下载请假材料
           </button>
-          <button class="primary leave-mark-sent" type="button" :disabled="actionRunId === run.id" @click="markSent(run)">标记已发送</button>
+        </footer>
+      </article>
+    </section>
+
+    <section v-if="awaitingReturnRuns.length" class="leave-awaiting-section">
+      <div class="section-heading"><h2>待老师回传 <span>· {{ awaitingReturnRuns.length }}</span></h2></div>
+      <article v-for="run in awaitingReturnRuns" :key="run.id" class="leave-ready-run">
+        <header class="leave-run-heading">
+          <div>
+            <strong>{{ formatCollectedAt(run.collected_at) }}</strong>
+            <span>{{ run.member_count }} 人 · {{ run.groups.length }} 个时间组</span>
+            <span v-if="run.downloaded_at">
+              {{ run.downloaded_by?.name || "管理员" }} · {{ formatDateTime(run.downloaded_at) }} 下载
+            </span>
+          </div>
+          <span v-if="isSupplementRun(run)" class="leave-run-note">补充批次</span>
+        </header>
+
+        <div class="leave-run-groups">
+          <div v-for="group in run.groups" :key="group.index" class="leave-group">
+            <div class="leave-group-heading">
+              <div>
+                <strong>{{ group.time_text }}</strong>
+                <span>{{ group.count }} 人</span>
+                <span v-if="group.result?.available">已上传</span>
+                <span v-else-if="group.result">材料已清理</span>
+              </div>
+              <div class="leave-group-actions">
+                <button type="button" @click="togglePreview(run.id, group.index)">
+                  {{ previewKey === run.id + ':' + group.index ? "收起名单" : "名单" }}
+                </button>
+                <button
+                  v-if="group.result?.available"
+                  type="button"
+                  @click="openResult(run.id, group.index)"
+                >
+                  查看
+                </button>
+                <label class="secondary leave-upload-action">
+                  {{ group.result?.available ? "重新上传" : "上传盖章结果" }}
+                  <input
+                    type="file"
+                    accept=".jpg,.jpeg,.png,.pdf,image/jpeg,image/png,application/pdf"
+                    :disabled="actionRunId === run.id"
+                    @change="uploadResult(run, group.index, $event)"
+                  />
+                </label>
+              </div>
+            </div>
+            <div v-if="previewKey === run.id + ':' + group.index" class="leave-preview">
+              <div v-for="member in group.members" :key="member.member_id" class="leave-preview-row">
+                <span>{{ member.name }}</span><span>{{ member.student_id }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <footer class="leave-run-actions">
+          <button
+            class="secondary leave-run-download"
+            type="button"
+            :disabled="!run.document_ready || actionRunId === run.id"
+            @click="downloadRunDocument(run)"
+          >
+            重新下载请假材料
+          </button>
         </footer>
       </article>
     </section>
@@ -530,38 +647,62 @@ onMounted(() => {
       </div>
     </section>
 
-    <section v-if="!loading && readyRuns.length === 0 && pendingAdminRequests.length === 0" class="leave-current-empty">
+    <section
+      v-if="!loading && readyRuns.length === 0 && awaitingReturnRuns.length === 0 && pendingAdminRequests.length === 0"
+      class="leave-current-empty"
+    >
       <span>当前没有需要处理的请假。</span>
       <button type="button" :disabled="actionRunId !== null" @click="collectNow">立即汇总</button>
     </section>
 
     <section class="leave-history-section">
       <div class="section-heading">
-        <h2>发送历史</h2>
-        <button v-if="sentRuns.length > 3" type="button" @click="historyExpanded = !historyExpanded">
+        <h2>已完成</h2>
+        <button v-if="completedRuns.length > 3" type="button" @click="historyExpanded = !historyExpanded">
           {{ historyExpanded ? "收起" : "查看全部历史" }}
         </button>
       </div>
-      <div v-if="sentRuns.length === 0" class="leave-empty">暂无记录</div>
+      <div v-if="completedRuns.length === 0" class="leave-empty">暂无记录</div>
       <div v-else class="leave-history-list">
-        <details v-for="run in visibleSentRuns" :key="run.id" class="leave-history-run">
+        <details v-for="run in visibleCompletedRuns" :key="run.id" class="leave-history-run">
           <summary>
             <div>
-              <strong>{{ formatDateTime(run.sent_at || run.collected_at) }} · {{ run.member_count }} 人 · {{ run.groups.length }} 个时间组</strong>
-              <span>{{ run.sent_by?.name || "管理员" }}已标记发送<span v-if="isSupplementRun(run)"> · 补充批次</span></span>
+              <strong>{{ formatDateTime(run.downloaded_at || run.collected_at) }} · {{ run.member_count }} 人 · {{ run.groups.length }} 个时间组</strong>
+              <span>已完成<span v-if="isSupplementRun(run)"> · 补充批次</span></span>
             </div>
             <span class="leave-history-chevron" aria-hidden="true">›</span>
           </summary>
           <div class="leave-history-detail">
             <div v-for="group in run.groups" :key="group.index" class="leave-history-group">
-              <div><strong>{{ group.time_text }}</strong><span>{{ group.count }} 人</span></div>
+              <div>
+                <strong>{{ group.time_text }}</strong>
+                <span>{{ group.count }} 人 · {{ group.result?.available ? "盖章材料可用" : "材料已清理" }}</span>
+              </div>
+              <div class="leave-group-actions">
+                <button
+                  v-if="group.result?.available"
+                  type="button"
+                  @click="openResult(run.id, group.index)"
+                >
+                  查看
+                </button>
+                <label class="secondary leave-upload-action">
+                  重新上传
+                  <input
+                    type="file"
+                    accept=".jpg,.jpeg,.png,.pdf,image/jpeg,image/png,application/pdf"
+                    :disabled="actionRunId === run.id"
+                    @change="uploadResult(run, group.index, $event)"
+                  />
+                </label>
+              </div>
             </div>
             <div class="leave-history-actions">
               <button
                 class="secondary leave-history-download"
                 type="button"
-                :disabled="!run.document_ready"
-                @click="download(runDocumentUrl(run.id))"
+                :disabled="!run.document_ready || actionRunId === run.id"
+                @click="downloadRunDocument(run)"
               >
                 下载请假材料
               </button>
@@ -593,14 +734,14 @@ onMounted(() => {
 .leave-view-tabs button:hover, .leave-view-tabs button.active { color: var(--text); }
 .leave-view-tabs button.active { border-bottom-color: var(--text); }
 
-.leave-submit-section, .leave-my-requests, .leave-ready-section, .leave-pending-section, .leave-history-section { margin-bottom: 30px; }
+.leave-submit-section, .leave-my-requests, .leave-ready-section, .leave-awaiting-section, .leave-pending-section, .leave-history-section { margin-bottom: 30px; }
 .leave-request-form { display: grid; gap: 9px; padding-bottom: 26px; border-bottom: 1px solid var(--line); }
 .leave-form-controls { display: grid; grid-template-columns: minmax(150px, 1.1fr) minmax(250px, 1.6fr) auto; align-items: end; gap: 12px; }
 .leave-form-controls label, .leave-time-pair label { min-width: 0; display: grid; gap: 6px; color: var(--muted); font-size: 12.5px; }
 .leave-form-controls input { width: 100%; min-width: 0; }
 .leave-time-pair { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: end; gap: 9px; }
 .leave-time-arrow { padding-bottom: 9px; color: var(--faint); }
-.leave-submit, .leave-collect, .leave-mark-sent { width: fit-content; white-space: nowrap; }
+.leave-submit, .leave-collect { width: fit-content; white-space: nowrap; }
 .leave-help, .leave-empty, .leave-admin-heading p, .leave-pending-heading small, .leave-row span, .leave-run-heading span, .leave-group-heading span, .leave-history-run span { color: var(--muted); font-size: 13px; }
 .leave-help { margin: 0; line-height: 1.55; }
 .leave-empty { padding: 10px 0; }
@@ -621,7 +762,12 @@ onMounted(() => {
 .leave-row-main { min-width: 0; display: grid; gap: 3px; }
 .leave-row-main strong { overflow-wrap: anywhere; }
 .leave-row-muted { opacity: 0.58; }
-.leave-row-actions, .leave-group-actions { flex: 0 0 auto; }
+.leave-row-actions { flex: 0 0 auto; }
+.leave-group-actions { flex: 0 0 auto; display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+.leave-group-actions button { white-space: nowrap; }
+.leave-upload-action { display: inline-flex; align-items: center; width: fit-content; white-space: nowrap; cursor: pointer; }
+.leave-upload-action input { display: none; }
+.leave-result-action { flex: 0 0 auto; white-space: nowrap; }
 
 .leave-admin-heading { margin: 0 0 22px; }
 .leave-admin-heading h2, .leave-admin-heading p { margin: 0; }
@@ -694,6 +840,7 @@ onMounted(() => {
   .leave-inline-notice, .leave-current-empty, .leave-pending-heading, .leave-run-actions { align-items: flex-start; flex-direction: column; }
   .leave-history-actions { align-items: flex-start; }
   .leave-row, .leave-run-heading, .leave-group-heading, .leave-history-group { align-items: flex-start; }
+  .leave-group-actions { justify-content: flex-start; }
   .leave-preview-row { gap: 10px; }
   .leave-preview-row span:last-child { text-align: right; }
   .leave-more-menu { width: min(190px, calc(100vw - 32px)); }

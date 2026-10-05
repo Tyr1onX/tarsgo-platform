@@ -29,7 +29,7 @@ TEAM_GROUP_VALUES = ("electrical", "mechanical", "vision", "ai", "operations")
 MEMBER_STATUS_VALUES = ("invited", "active", "disabled")
 TASK_STATUS_VALUES = ("todo", "doing", "done")
 SCHOOL_LEAVE_REQUEST_STATUS_VALUES = ("pending", "included", "withdrawn")
-SCHOOL_LEAVE_RUN_STATUS_VALUES = ("ready", "sent", "cancelled")
+SCHOOL_LEAVE_RUN_STATUS_VALUES = ("ready", "awaiting_return", "completed", "cancelled")
 
 
 task_collaborators = Table(
@@ -123,7 +123,10 @@ class LoginSession(Base):
 class SchoolLeaveRun(Base):
     __tablename__ = "school_leave_runs"
     __table_args__ = (
-        CheckConstraint("status IN ('ready','sent','cancelled')", name="ck_school_leave_runs_status"),
+        CheckConstraint(
+            "status IN ('ready','awaiting_return','completed','cancelled')",
+            name="ck_school_leave_runs_status",
+        ),
         Index("ix_school_leave_runs_status_collected", "status", "collected_at"),
     )
 
@@ -134,17 +137,49 @@ class SchoolLeaveRun(Base):
     )
     reason: Mapped[str] = mapped_column(Text(), nullable=False)
     status: Mapped[str] = mapped_column(String(20), default="ready", nullable=False)
-    sent_at: Mapped[datetime | None] = mapped_column(DateTime(), nullable=True)
-    sent_by: Mapped[int | None] = mapped_column(
+    downloaded_at: Mapped[datetime | None] = mapped_column(DateTime(), nullable=True)
+    downloaded_by: Mapped[int | None] = mapped_column(
         ForeignKey("members.id", ondelete="SET NULL"), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(), server_default=func.now(), nullable=False)
 
     creator: Mapped[Member | None] = relationship(foreign_keys=[created_by])
-    sender: Mapped[Member | None] = relationship(foreign_keys=[sent_by])
+    downloader: Mapped[Member | None] = relationship(foreign_keys=[downloaded_by])
     requests: Mapped[list["SchoolLeaveRequest"]] = relationship(
         back_populates="run", order_by="SchoolLeaveRequest.id"
     )
+    results: Mapped[list["SchoolLeaveGroupResult"]] = relationship(
+        back_populates="run",
+        order_by="SchoolLeaveGroupResult.group_index",
+        cascade="all, delete-orphan",
+    )
+
+
+class SchoolLeaveGroupResult(Base):
+    __tablename__ = "school_leave_group_results"
+    __table_args__ = (
+        UniqueConstraint("run_id", "group_index", name="uq_school_leave_group_results_run_group"),
+        Index("ix_school_leave_group_results_cleanup", "expires_at", "deleted_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[int] = mapped_column(
+        ForeignKey("school_leave_runs.id", ondelete="CASCADE"), nullable=False
+    )
+    group_index: Mapped[int] = mapped_column(Integer(), nullable=False)
+    stored_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    mime_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(BigInteger(), nullable=False)
+    uploaded_by: Mapped[int | None] = mapped_column(
+        ForeignKey("members.id", ondelete="SET NULL"), nullable=True
+    )
+    uploaded_at: Mapped[datetime] = mapped_column(DateTime(), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(), nullable=False)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(), nullable=True)
+
+    run: Mapped[SchoolLeaveRun] = relationship(back_populates="results")
+    uploader: Mapped[Member | None] = relationship(foreign_keys=[uploaded_by])
 
 
 class SchoolLeaveRequest(Base):

@@ -243,7 +243,7 @@ def main() -> None:
             ready_request = next(item for item in ready_requests.json() if item["id"] == a_request_id)
             assert ready_request["status"] == "included"
             assert ready_request["run_status"] == "ready"
-            assert not {"reason", "groups", "created_by", "sent_by"} & ready_request.keys()
+            assert not {"reason", "groups", "created_by", "downloaded_by"} & ready_request.keys()
             assert client.get("/api/school-leave/admin/runs").status_code == 403
 
             # New document/delete endpoints remain admin-only.
@@ -389,29 +389,38 @@ def main() -> None:
             assert len(open_docx(group_doc.content).tables) == 1
             assert client.get(f"/api/school-leave/admin/runs/{run_two_id}/documents.zip").status_code == 404
 
-            # Marking sent records actor/time; sent history freezes reason/cancel operations.
-            marked = client.post(f"/api/school-leave/admin/runs/{run_two_id}/sent")
-            assert marked.status_code == 200, marked.text
-            assert marked.json()["status"] == "sent"
-            assert marked.json()["sent_by"]["id"] == admin.id
-            assert marked.json()["sent_at"]
+            # A successful first download starts processing automatically; no manual sent action remains.
+            db.expire_all()
+            downloaded_run = db.get(SchoolLeaveRun, run_two_id)
+            assert downloaded_run is not None
+            assert downloaded_run.status == "awaiting_return"
+            assert downloaded_run.downloaded_by == admin.id
+            assert downloaded_run.downloaded_at is not None
+            first_downloaded_at = downloaded_run.downloaded_at
+            assert client.post(f"/api/school-leave/admin/runs/{run_two_id}/sent").status_code == 404
             assert client.get(f"/api/school-leave/admin/runs/{run_two_id}/document").status_code == 200
+            db.expire_all()
+            downloaded_run = db.get(SchoolLeaveRun, run_two_id)
+            assert downloaded_run is not None
+            assert downloaded_run.status == "awaiting_return"
+            assert downloaded_run.downloaded_at == first_downloaded_at
             assert client.post(f"/api/school-leave/admin/runs/{run_two_id}/cancel").status_code == 409
             assert client.patch(
                 f"/api/school-leave/admin/runs/{run_two_id}/reason",
                 json={"reason": "不应允许修改"},
             ).status_code == 409
 
-            # Members see sent status on their own requests but gain no management access.
+            # Members see processing status on their own requests but gain no management access.
             set_actor(member_a)
-            sent_requests = client.get("/api/school-leave/requests")
-            assert sent_requests.status_code == 200, sent_requests.text
-            sent_request = next(item for item in sent_requests.json() if item["id"] == a_request_id)
-            assert sent_request["status"] == "included"
-            assert sent_request["run_status"] == "sent"
+            processing_requests = client.get("/api/school-leave/requests")
+            assert processing_requests.status_code == 200, processing_requests.text
+            processing_request = next(item for item in processing_requests.json() if item["id"] == a_request_id)
+            assert processing_request["status"] == "included"
+            assert processing_request["run_status"] == "awaiting_return"
+            assert processing_request["result_state"] is None
             assert client.get("/api/school-leave/admin/runs").status_code == 403
 
-            # Deleting sent history remains admin-only.
+            # Deleting processing history remains admin-only.
             set_actor(member_d)
             assert client.delete(f"/api/school-leave/admin/runs/{run_two_id}").status_code == 403
             set_actor(member_a)
@@ -441,7 +450,7 @@ def main() -> None:
                 )
             }
             assert supplement_id not in sent_request_ids
-            assert db.get(SchoolLeaveRun, run_two_id).status == "sent"
+            assert db.get(SchoolLeaveRun, run_two_id).status == "awaiting_return"
 
             # One-group run produces one DOCX with no page break.
             single_doc = client.get(f"/api/school-leave/admin/runs/{run_three_id}/document")
@@ -454,7 +463,11 @@ def main() -> None:
             assert "测试乙" in table_text(single_document, 0)
             assert client.delete(f"/api/school-leave/admin/runs/{run_three_id}").status_code == 409
 
-            # Successful sent deletion removes the run and every linked request, never orphaning included rows.
+            # Completed history deletion removes the run and every linked request, never orphaning included rows.
+            run_two_row = db.get(SchoolLeaveRun, run_two_id)
+            assert run_two_row is not None
+            run_two_row.status = "completed"
+            db.commit()
             run_two_request_ids = list(
                 db.scalars(select(SchoolLeaveRequest.id).where(SchoolLeaveRequest.run_id == run_two_id))
             )
@@ -476,8 +489,10 @@ def main() -> None:
             assert client.delete(f"/api/school-leave/admin/runs/{run_two_id}").status_code == 404
 
             # Deletion is atomic: a commit failure rolls back request and run deletion together.
-            marked_three = client.post(f"/api/school-leave/admin/runs/{run_three_id}/sent")
-            assert marked_three.status_code == 200
+            run_three_row = db.get(SchoolLeaveRun, run_three_id)
+            assert run_three_row is not None
+            run_three_row.status = "completed"
+            db.commit()
             original_commit = db.commit
 
             def failing_commit() -> None:
@@ -496,7 +511,7 @@ def main() -> None:
             assert supplement_row.status == "included"
             assert supplement_row.run_id == run_three_id
 
-            # After restoring the transaction, the same sent history can be deleted normally.
+            # After restoring the transaction, the same completed history can be deleted normally.
             deleted_three = client.delete(f"/api/school-leave/admin/runs/{run_three_id}")
             assert deleted_three.status_code == 204
             db.expire_all()
@@ -537,7 +552,7 @@ def main() -> None:
                     collected_at=datetime(2030, 1, 2, 9, 0),
                     created_by=admin.id,
                     reason="文件名测试",
-                    status="sent",
+                    status="completed",
                 ),
                 SchoolLeaveRun(
                     collected_at=datetime(2030, 1, 2, 10, 0),
@@ -555,7 +570,7 @@ def main() -> None:
                     collected_at=datetime(2030, 1, 2, 12, 0),
                     created_by=admin.id,
                     reason="文件名测试",
-                    status="sent",
+                    status="completed",
                 ),
                 SchoolLeaveRun(
                     collected_at=datetime(2030, 1, 3, 9, 0),

@@ -8,7 +8,8 @@ TeamGroup = Literal["electrical", "mechanical", "vision", "ai", "operations"]
 MemberStatus = Literal["invited", "active", "disabled"]
 TaskStatus = Literal["todo", "doing", "done"]
 SchoolLeaveRequestStatus = Literal["pending", "included", "withdrawn"]
-SchoolLeaveRunStatus = Literal["ready", "sent", "cancelled"]
+SchoolLeaveRunStatus = Literal["ready", "awaiting_return", "completed", "cancelled"]
+SchoolLeaveResultState = Literal["available", "cleared"]
 ItemFactScope = Literal["global", "related"]
 TaskDetailText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=240)]
 ContextFactText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)]
@@ -201,6 +202,8 @@ class SchoolLeaveRequestOut(BaseModel):
     status: SchoolLeaveRequestStatus
     run_id: int | None
     run_status: SchoolLeaveRunStatus | None = None
+    group_index: int | None = None
+    result_state: SchoolLeaveResultState | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -223,6 +226,16 @@ class SchoolLeaveGroupMemberOut(BaseModel):
     student_id: str
 
 
+class SchoolLeaveGroupResultOut(BaseModel):
+    original_filename: str
+    mime_type: str
+    size_bytes: int
+    uploaded_at: datetime
+    expires_at: datetime
+    deleted_at: datetime | None
+    available: bool
+
+
 class SchoolLeaveGroupOut(BaseModel):
     index: int
     start_at: datetime
@@ -230,6 +243,7 @@ class SchoolLeaveGroupOut(BaseModel):
     time_text: str
     count: int
     members: list[SchoolLeaveGroupMemberOut]
+    result: SchoolLeaveGroupResultOut | None = None
 
 
 class SchoolLeaveRunOut(BaseModel):
@@ -238,8 +252,8 @@ class SchoolLeaveRunOut(BaseModel):
     created_by: MemberSummary | None
     reason: str
     status: SchoolLeaveRunStatus
-    sent_at: datetime | None
-    sent_by: MemberSummary | None
+    downloaded_at: datetime | None
+    downloaded_by: MemberSummary | None
     request_count: int
     member_count: int
     groups: list[SchoolLeaveGroupOut]
@@ -249,6 +263,12 @@ class SchoolLeaveRunOut(BaseModel):
 class SchoolLeaveAdminConfigOut(BaseModel):
     daily_cutoff: str
     contact_phone_configured: bool
+
+
+class SchoolLeaveAdminSummaryOut(BaseModel):
+    ready_count: int
+    awaiting_return_count: int
+    todo_count: int
 
 
 class TaskCreate(BaseModel):

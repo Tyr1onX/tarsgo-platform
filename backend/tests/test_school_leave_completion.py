@@ -6,6 +6,7 @@ import os
 import tempfile
 from datetime import timedelta
 from pathlib import Path
+from urllib.parse import unquote
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
@@ -224,8 +225,11 @@ def main() -> None:
                 allowed = client.get(f"/api/school-leave/runs/{run_id}/groups/0/result")
                 assert allowed.status_code == 200, (key, allowed.text)
                 assert allowed.headers["content-type"].startswith("image/jpeg")
-                assert str(run_id) not in allowed.headers["content-disposition"]
-                assert "group" not in allowed.headers["content-disposition"].lower()
+                disposition = unquote(allowed.headers["content-disposition"])
+                assert disposition.endswith(
+                    f"吉甲大师请假条_{run.collected_at:%Y-%m-%d}_盖章.jpg"
+                )
+                assert "_批次" not in disposition and "_补充" not in disposition
             for key in ("c", "d"):
                 set_actor(key)
                 assert client.get(f"/api/school-leave/runs/{run_id}/groups/0/result").status_code == 404
@@ -282,7 +286,7 @@ def main() -> None:
             pdf_get = client.get(f"/api/school-leave/runs/{run_id}/groups/0/result")
             assert pdf_get.status_code == 200
             assert pdf_get.headers["content-type"].startswith("application/pdf")
-            assert "盖章.pdf" in pdf_get.headers["content-disposition"]
+            assert "盖章.pdf" in unquote(pdf_get.headers["content-disposition"])
 
             # Expiration deletes files only, retains metadata and the completed business history.
             result1 = db.scalar(

@@ -120,7 +120,7 @@ assert.match(api, /taskContext: \(taskId: number\) => request<TaskDetailContext>
 assert.match(api, /itemActivityPage:/)
 assert.match(app, /loader: \(\) => import\("\.\/pages\/TeamPage\.vue"\)/)
 assert.match(app, /loader: \(\) => import\("\.\/pages\/KnowledgePage\.vue"\)/)
-assert.match(knowledgePage, /emit\("upload", file\)/)
+assert.match(knowledgePage, /@file-selected="emit\('upload', \$event\)"/)
 assert.ok(teamPage.includes("emit('openRegistration')"))
 
 console.log("Local task patching, pending actions, route loading and interaction requests passed")

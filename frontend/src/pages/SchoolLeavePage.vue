@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from "vue"
 
 import { api } from "../api"
+import ActionMenu, { type ActionMenuItem } from "../components/ActionMenu.vue"
 import FileDropzone from "../components/FileDropzone.vue"
 import type {
   Member,
@@ -259,8 +260,7 @@ async function collectNow() {
   }
 }
 
-function startReasonEdit(run: SchoolLeaveRun, event?: Event) {
-  closeOverflow(event)
+function startReasonEdit(run: SchoolLeaveRun) {
   reasonDrafts.value[run.id] = run.reason
   editingReasonRunId.value = run.id
 }
@@ -286,8 +286,7 @@ async function saveReason(run: SchoolLeaveRun) {
   }
 }
 
-async function cancelRun(run: SchoolLeaveRun, event?: Event) {
-  closeOverflow(event)
+async function cancelRun(run: SchoolLeaveRun) {
   if (!window.confirm("取消本次汇总？其中申请会退回待汇总并可由成员重新修改。")) return
   actionRunId.value = run.id
   error.value = ""
@@ -303,8 +302,7 @@ async function cancelRun(run: SchoolLeaveRun, event?: Event) {
   }
 }
 
-async function deleteRun(run: SchoolLeaveRun, event?: Event) {
-  closeOverflow(event)
+async function deleteRun(run: SchoolLeaveRun) {
   const confirmed = window.confirm(
     "删除这条已完成记录？\n\n" +
     "将同时删除该批次下的 " + run.request_count + " 条请假申请和盖章材料。\n" +
@@ -410,9 +408,32 @@ function togglePendingPreview(key: string) {
   pendingPreviewKey.value = pendingPreviewKey.value === key ? "" : key
 }
 
-function closeOverflow(event?: Event) {
-  const details = (event?.currentTarget as HTMLElement | null)?.closest("details")
-  details?.removeAttribute("open")
+function readyRunMenuActions(run: SchoolLeaveRun): ActionMenuItem[] {
+  const disabled = actionRunId.value === run.id
+  return [
+    { key: "edit-reason", label: "修改统一事由", disabled },
+    { key: "cancel", label: "取消本次汇总", disabled, danger: true },
+  ]
+}
+
+function completedRunMenuActions(run: SchoolLeaveRun): ActionMenuItem[] {
+  return [
+    {
+      key: "delete",
+      label: "删除记录",
+      disabled: actionRunId.value === run.id,
+      danger: true,
+    },
+  ]
+}
+
+function handleReadyRunMenuAction(run: SchoolLeaveRun, action: string) {
+  if (action === "edit-reason") startReasonEdit(run)
+  else if (action === "cancel") void cancelRun(run)
+}
+
+function handleCompletedRunMenuAction(run: SchoolLeaveRun, action: string) {
+  if (action === "delete") void deleteRun(run)
 }
 
 function dayKey(value: string) {
@@ -537,13 +558,13 @@ onMounted(() => {
 
         <div class="leave-run-row leave-reason-summary">
           <div><span class="leave-field-label">事由</span><p>{{ run.reason }}</p></div>
-          <details class="leave-more">
-            <summary aria-label="更多管理操作">···</summary>
-            <div class="leave-more-menu">
-              <button type="button" :disabled="actionRunId === run.id" @click="startReasonEdit(run, $event)">修改统一事由</button>
-              <button class="leave-danger-action" type="button" :disabled="actionRunId === run.id" @click="cancelRun(run, $event)">取消本次汇总</button>
-            </div>
-          </details>
+          <ActionMenu
+            :id="`leave-ready-${run.id}`"
+            :actions="readyRunMenuActions(run)"
+            :disabled="actionRunId === run.id"
+            aria-label="更多管理操作"
+            @select="handleReadyRunMenuAction(run, $event)"
+          />
         </div>
 
         <div v-if="editingReasonRunId === run.id" class="leave-reason-editor">
@@ -764,19 +785,13 @@ onMounted(() => {
               >
                 下载请假材料
               </button>
-              <details class="leave-more">
-                <summary aria-label="更多历史操作">···</summary>
-                <div class="leave-more-menu">
-                  <button
-                    class="leave-danger-action"
-                    type="button"
-                    :disabled="actionRunId === run.id"
-                    @click="deleteRun(run, $event)"
-                  >
-                    删除记录
-                  </button>
-                </div>
-              </details>
+              <ActionMenu
+                :id="`leave-history-${run.id}`"
+                :actions="completedRunMenuActions(run)"
+                :disabled="actionRunId === run.id"
+                aria-label="更多历史操作"
+                @select="handleCompletedRunMenuAction(run, $event)"
+              />
             </div>
           </div>
         </details>
@@ -843,15 +858,6 @@ onMounted(() => {
 .leave-field-label { display: block; margin-bottom: 4px; color: var(--faint); font-size: 11.5px; }
 .leave-reason-summary p { margin: 0; color: var(--secondary); font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; white-space: pre-wrap; }
 
-.leave-more { position: relative; flex: 0 0 auto; }
-.leave-more summary { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 4px; color: var(--muted); cursor: pointer; list-style: none; user-select: none; }
-.leave-more summary::-webkit-details-marker { display: none; }
-.leave-more summary:hover { background: var(--hover); color: var(--text); }
-.leave-more-menu { position: absolute; z-index: 5; top: calc(100% + 4px); right: 0; width: 190px; max-width: calc(100vw - 32px); display: grid; padding: 4px; border: 1px solid var(--line-strong); background: var(--surface); }
-.leave-more-menu button { min-width: 0; border: 0; background: transparent; padding: 8px 9px; text-align: left; color: var(--secondary); }
-.leave-more-menu button:hover { background: var(--hover); color: var(--text); }
-.leave-more-menu .leave-danger-action { color: var(--danger); }
-
 .leave-reason-editor { display: grid; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
 .leave-reason-editor textarea { width: 100%; min-width: 0; resize: vertical; }
 .leave-inline-actions { display: flex; justify-content: flex-end; gap: 10px; }
@@ -902,7 +908,6 @@ onMounted(() => {
   .leave-group-actions { justify-content: flex-start; }
   .leave-preview-row { gap: 10px; }
   .leave-preview-row span:last-child { text-align: right; }
-  .leave-more-menu { width: min(190px, calc(100vw - 32px)); }
 }
 @media (max-width: 380px) {
   .leave-time-pair { grid-template-columns: minmax(0, 1fr); }

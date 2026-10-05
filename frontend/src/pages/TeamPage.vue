@@ -91,17 +91,17 @@ function groupLabel(member: Member) {
     </div>
     <div class="member-list">
       <div v-for="member in enabledMembers" :key="member.id" class="member-row team-member-row">
-        <div class="team-member-summary">
-          <strong>{{ member.name }}</strong>
-          <span>{{ member.email }}</span>
-          <small>{{ groupLabel(member) }} · {{ roleLabels[member.role] }} · {{ memberStatusLabel(member) }}</small>
-          <span class="team-member-student-id">
-            {{ member.student_id ? `学号 ${member.student_id}` : "学号未填写" }}
+        <button class="team-member-link" type="button" @click="emit('navigate', `/team/${member.id}`)">
+          <span class="team-member-summary">
+            <strong>{{ member.name }}</strong>
+            <span>{{ member.email }}</span>
+            <small>{{ groupLabel(member) }} · {{ roleLabels[member.role] }} · {{ memberStatusLabel(member) }}</small>
+            <span class="team-member-student-id">
+              {{ member.student_id ? `学号 ${member.student_id}` : "学号未填写" }}
+            </span>
           </span>
-        </div>
-        <div class="row-actions team-member-action">
-          <button type="button" @click="emit('navigate', `/team/${member.id}`)">编辑</button>
-        </div>
+          <span class="team-member-chevron" aria-hidden="true">›</span>
+        </button>
       </div>
     </div>
 
@@ -109,17 +109,17 @@ function groupLabel(member: Member) {
       <summary>已停用成员（{{ disabledMembers.length }}）</summary>
       <div class="member-list">
         <div v-for="member in disabledMembers" :key="member.id" class="member-row team-member-row">
-          <div class="team-member-summary">
-            <strong>{{ member.name }}</strong>
-            <span>{{ member.email }}</span>
-            <small>{{ groupLabel(member) }} · {{ roleLabels[member.role] }} · {{ memberStatusLabel(member) }}</small>
-            <span class="team-member-student-id">
-              {{ member.student_id ? `学号 ${member.student_id}` : "学号未填写" }}
+          <button class="team-member-link" type="button" @click="emit('navigate', `/team/${member.id}`)">
+            <span class="team-member-summary">
+              <strong>{{ member.name }}</strong>
+              <span>{{ member.email }}</span>
+              <small>{{ groupLabel(member) }} · {{ roleLabels[member.role] }} · {{ memberStatusLabel(member) }}</small>
+              <span class="team-member-student-id">
+                {{ member.student_id ? `学号 ${member.student_id}` : "学号未填写" }}
+              </span>
             </span>
-          </div>
-          <div class="row-actions team-member-action">
-            <button type="button" @click="emit('navigate', `/team/${member.id}`)">编辑</button>
-          </div>
+            <span class="team-member-chevron" aria-hidden="true">›</span>
+          </button>
         </div>
       </div>
     </details>
@@ -167,12 +167,38 @@ function groupLabel(member: Member) {
 }
 
 .team-member-row {
+  display: block;
+  padding: 0;
+}
+
+.team-member-link {
+  width: 100%;
+  min-width: 0;
+  display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
+  gap: 16px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 15px 0;
+  color: inherit;
+  text-align: left;
+}
+
+.team-member-link:hover {
+  background: var(--hover);
+}
+
+.team-member-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .team-member-summary {
   min-width: 0;
+  display: grid;
+  gap: 2px;
 }
 
 .team-member-summary strong,
@@ -188,8 +214,9 @@ function groupLabel(member: Member) {
   line-height: 1.5;
 }
 
-.team-member-action {
-  align-self: center;
+.team-member-chevron {
+  color: var(--faint);
+  font-size: 18px;
 }
 
 .team-disabled-members {
@@ -212,13 +239,9 @@ function groupLabel(member: Member) {
     width: 100%;
   }
 
-  .team-member-row {
-    grid-template-columns: minmax(0, 1fr) auto;
-    align-items: center;
-  }
-
-  .team-member-action {
-    justify-content: flex-end;
+  .team-member-link {
+    gap: 10px;
+    padding: 14px 0;
   }
 }
 </style>

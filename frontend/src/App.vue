@@ -1474,6 +1474,30 @@ function handleTaskMenuAction(task: Task, action: string) {
   else if (action === "edit" && isAdmin.value) void editTask(task)
 }
 
+function rootTaskMenuActions(task: Task): TaskActionMenuItem[] {
+  const pending = Boolean(pendingTaskAction(task.id))
+  const actions = taskMenuActions(task).map((action) =>
+    action.key === "edit" ? { ...action, label: "编辑事项" } : action,
+  )
+  if (isAdmin.value) {
+    actions.push({
+      key: "delete",
+      label: "删除事项",
+      disabled: pending,
+      danger: true,
+    })
+  }
+  return actions
+}
+
+function handleRootTaskMenuAction(task: Task, action: string) {
+  if (action === "delete" && isAdmin.value) {
+    openDeleteRootItemModal(task, "list")
+    return
+  }
+  handleTaskMenuAction(task, action)
+}
+
 
 async function planFromBase() {
   if (plannerDescription.value.trim().length < 10) {
@@ -3576,26 +3600,12 @@ onBeforeUnmount(() => {
                     :disabled="Boolean(pendingTaskAction(task.id))"
                     @click="claimTask(task)"
                   >{{ pendingTaskAction(task.id) === 'claim' ? '认领中…' : '认领事项负责人' }}</button>
-                  <button
-                    v-if="task.owner?.id === user?.id && task.owner_claimable && task.status !== 'done'"
-                    type="button"
+                  <TaskActionMenu
+                    :task-id="`root-${task.id}`"
+                    :actions="rootTaskMenuActions(task)"
                     :disabled="Boolean(pendingTaskAction(task.id))"
-                    @click="unclaimTask(task)"
-                  >{{ pendingTaskAction(task.id) === 'unclaim' ? '取消中…' : '取消认领' }}</button>
-                  <button
-                    v-if="task.collaboration_open && task.owner?.id !== user?.id && !isCollaborator(task) && task.status !== 'done'"
-                    type="button"
-                    :disabled="Boolean(pendingTaskAction(task.id))"
-                    @click="joinTask(task)"
-                  >{{ pendingTaskAction(task.id) === 'join' ? '加入中…' : '加入协作' }}</button>
-                  <button
-                    v-if="task.collaboration_open && isCollaborator(task) && task.status !== 'done'"
-                    type="button"
-                    :disabled="Boolean(pendingTaskAction(task.id))"
-                    @click="leaveTask(task)"
-                  >{{ pendingTaskAction(task.id) === 'leave' ? '退出中…' : '退出协作' }}</button>
-                  <button v-if="isAdmin" type="button" @click="editTask(task)">编辑</button>
-                  <button v-if="isAdmin" class="danger-text" type="button" @click.stop="openDeleteRootItemModal(task, 'list')">删除</button>
+                    @select="handleRootTaskMenuAction(task, $event)"
+                  />
                 </div>
               </div>
 

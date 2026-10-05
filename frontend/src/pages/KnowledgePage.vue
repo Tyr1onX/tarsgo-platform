@@ -1,6 +1,9 @@
 <script setup lang="ts">
-import { ref } from "vue"
+import FileDropzone from "../components/FileDropzone.vue"
 import type { KnowledgeDocument, KnowledgeSyncSummary } from "../types"
+
+const KNOWLEDGE_UPLOAD_ACCEPT = ".md,.txt,.docx,.pdf"
+const KNOWLEDGE_UPLOAD_MAX_SIZE = 10 * 1024 * 1024
 
 defineProps<{
   documents: KnowledgeDocument[]
@@ -17,15 +20,6 @@ const emit = defineEmits<{
   remove: [document: KnowledgeDocument]
   navigate: [path: string]
 }>()
-
-const fileInput = ref<HTMLInputElement | null>(null)
-
-function uploadSelectedFile(event: Event) {
-  const input = event.target as HTMLInputElement
-  const file = input.files?.[0]
-  if (file) emit("upload", file)
-  input.value = ""
-}
 </script>
 
 <template>
@@ -37,11 +31,15 @@ function uploadSelectedFile(event: Event) {
     <button type="button" @click="emit('navigate', '/team')">返回团队</button>
   </div>
   <section class="knowledge-actions">
-    <button class="primary" type="button" :disabled="uploading" @click="fileInput?.click()">
-      {{ uploading ? "正在上传…" : "上传资料" }}
-    </button>
-    <input ref="fileInput" class="visually-hidden" type="file" accept=".md,.txt,.docx,.pdf" :disabled="uploading" @change="uploadSelectedFile" />
-    <small>支持 Markdown、TXT、DOCX 和可提取文字的 PDF，单个文件最大 10 MB。</small>
+    <FileDropzone
+      class="knowledge-dropzone"
+      :accept="KNOWLEDGE_UPLOAD_ACCEPT"
+      :max-size="KNOWLEDGE_UPLOAD_MAX_SIZE"
+      :uploading="uploading"
+      label="将资料拖到这里，或点击选择文件"
+      hint="Markdown / TXT / DOCX / PDF · 最大 10 MB"
+      @file-selected="emit('upload', $event)"
+    />
   </section>
   <details class="knowledge-maintenance">
     <summary>高级维护</summary>

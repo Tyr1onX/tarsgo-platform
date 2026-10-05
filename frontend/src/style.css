@@ -1401,16 +1401,18 @@ textarea[aria-invalid="true"] {
 
 .operation-list {
   display: grid;
-  gap: 16px;
+  gap: 0;
+  border-top: 1px solid var(--line);
 }
 
 .operation-card {
   display: grid;
-  gap: 13px;
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  background: var(--surface);
-  padding: 18px 19px;
+  gap: 12px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+  padding: 16px 0;
 }
 
 .operation-card-top {
@@ -1492,16 +1494,8 @@ textarea[aria-invalid="true"] {
 .root-task-actions {
   justify-content: flex-end;
   align-items: center;
-  gap: 11px;
+  gap: 8px;
   padding-top: 1px;
-}
-
-.root-task-actions .danger-text {
-  color: var(--danger);
-}
-
-.root-task-actions .danger-text:hover {
-  color: var(--danger);
 }
 
 .task-actions button:not(.primary):not(.danger-action),
@@ -1835,7 +1829,7 @@ textarea[aria-invalid="true"] {
     gap: 5px 10px;
   }
 
-  .task-action-menu {
+  .action-menu {
     max-width: calc(100vw - 24px);
   }
 }
@@ -2074,11 +2068,12 @@ textarea[aria-invalid="true"] {
   padding-top: 4px;
 }
 .knowledge-actions {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 12px;
   margin: 0 0 26px;
+}
+
+.knowledge-dropzone {
+  width: 100%;
+  max-width: 680px;
 }
 .knowledge-list { border-top: 1px solid var(--line); }
 .knowledge-row {
@@ -2300,18 +2295,18 @@ textarea[aria-invalid="true"] {
   gap: 6px;
 }
 
-.task-action-menu-wrap {
+.action-menu-wrap {
   position: relative;
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
 }
 
-.task-action-menu-trigger {
+.action-menu-trigger {
   display: inline-grid;
-  width: 36px;
-  height: 36px;
-  flex: 0 0 36px;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
   place-items: center;
   border: 0;
   border-radius: 4px;
@@ -2319,54 +2314,54 @@ textarea[aria-invalid="true"] {
   color: var(--muted);
 }
 
-.task-action-menu-trigger:hover,
-.task-action-menu-trigger[aria-expanded="true"] {
+.action-menu-trigger:hover,
+.action-menu-trigger[aria-expanded="true"] {
   background: var(--hover);
   color: var(--text);
 }
 
-.task-action-menu-trigger svg {
+.action-menu-trigger svg {
   width: 16px;
   height: 16px;
   fill: currentColor;
 }
 
-.task-action-menu-trigger:disabled {
+.action-menu-trigger:disabled {
   cursor: wait;
   color: var(--faint);
 }
 
-.task-action-menu {
+.action-menu {
   position: absolute;
   z-index: 100;
   top: calc(100% + 4px);
   left: 0;
   display: grid;
   width: max-content;
-  min-width: 168px;
+  min-width: 164px;
   max-width: min(240px, calc(100vw - 24px));
   gap: 2px;
   border: 1px solid var(--line-strong);
   border-radius: 5px;
   background: var(--surface);
   padding: 4px;
-  box-shadow: 0 4px 12px rgba(27, 26, 24, 0.12);
+  box-shadow: 0 2px 8px rgba(27, 26, 24, 0.1);
 }
 
-.task-action-menu.align-right {
+.action-menu.align-right {
   right: 0;
   left: auto;
 }
 
-.task-action-menu.open-above {
+.action-menu.open-above {
   top: auto;
   bottom: calc(100% + 4px);
 }
 
-.task-action-menu-item {
+.action-menu-item {
   display: flex;
   width: 100%;
-  min-height: 36px;
+  min-height: 34px;
   align-items: center;
   border: 0;
   border-radius: 3px;
@@ -2377,12 +2372,16 @@ textarea[aria-invalid="true"] {
   text-align: left;
 }
 
-.task-action-menu-item:hover:not(:disabled),
-.task-action-menu-item:focus-visible:not(:disabled) {
+.action-menu-item:hover:not(:disabled),
+.action-menu-item:focus-visible:not(:disabled) {
   background: var(--hover);
 }
 
-.task-action-menu-item:disabled {
+.action-menu-item.danger {
+  color: var(--danger);
+}
+
+.action-menu-item:disabled {
   cursor: wait;
   color: var(--muted);
 }
@@ -3362,7 +3361,7 @@ button:disabled { cursor: not-allowed; }
   .planner-options { grid-template-columns: minmax(0, 1fr); }
   .planner-suggestion { align-items: stretch; flex-direction: column; gap: 10px; }
   .planner-suggestion-actions { justify-content: flex-end; }
-  .knowledge-actions { align-items: flex-start; flex-direction: column; }
+  .knowledge-dropzone { max-width: none; }
   .knowledge-row { gap: 10px; }
 }
 

@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from "vue"
 
 import { api } from "../api"
 import ActionMenu, { type ActionMenuItem } from "../components/ActionMenu.vue"
+import ConfirmDialog from "../components/ConfirmDialog.vue"
 import FileDropzone from "../components/FileDropzone.vue"
 import type {
   Member,
@@ -38,6 +39,17 @@ const pendingPreviewKey = ref("")
 const editingReasonRunId = ref<number | null>(null)
 const historyExpanded = ref(false)
 const activeView = ref<"mine" | "admin">("mine")
+
+interface LeaveConfirmRequest {
+  title: string
+  description: string
+  confirmLabel: string
+  danger?: boolean
+  action: () => Promise<void> | void
+}
+
+const leaveConfirm = ref<LeaveConfirmRequest | null>(null)
+const leaveConfirmPending = ref(false)
 
 const SCHOOL_LEAVE_RESULT_ACCEPT = "image/jpeg,image/png,application/pdf,.jpg,.jpeg,.png,.pdf"
 const SCHOOL_LEAVE_RESULT_MAX_SIZE = 15 * 1024 * 1024
@@ -102,6 +114,30 @@ const pendingPreviewDays = computed(() => {
 
 function messageOf(reason: unknown) {
   return reason instanceof Error ? reason.message : "操作失败"
+}
+
+function requestLeaveConfirmation(request: LeaveConfirmRequest) {
+  if (leaveConfirmPending.value) return
+  leaveConfirm.value = request
+}
+
+function cancelLeaveConfirmation() {
+  if (leaveConfirmPending.value) return
+  leaveConfirm.value = null
+}
+
+async function confirmLeaveAction() {
+  const request = leaveConfirm.value
+  if (!request || leaveConfirmPending.value) return
+  leaveConfirmPending.value = true
+  try {
+    await request.action()
+  } catch (reason) {
+    error.value = messageOf(reason)
+  } finally {
+    leaveConfirmPending.value = false
+    leaveConfirm.value = null
+  }
 }
 
 function toInputParts(value: string) {
@@ -232,17 +268,23 @@ function editRequest(item: SchoolLeaveRequest) {
 }
 
 async function withdrawRequest(item: SchoolLeaveRequest) {
-  if (!window.confirm("撤回这条待汇总请假申请？")) return
-  error.value = ""
-  notice.value = ""
-  try {
-    await api.withdrawSchoolLeaveRequest(item.id)
-    if (editingRequestId.value === item.id) resetForm()
-    notice.value = "请假申请已撤回。"
-    await load()
-  } catch (reason) {
-    error.value = messageOf(reason)
-  }
+  requestLeaveConfirmation({
+    title: "撤回请假申请？",
+    description: "撤回后，这条申请将不再进入待汇总；如仍需请假，可以重新填写并提交。",
+    confirmLabel: "撤回申请",
+    action: async () => {
+      error.value = ""
+      notice.value = ""
+      try {
+        await api.withdrawSchoolLeaveRequest(item.id)
+        if (editingRequestId.value === item.id) resetForm()
+        notice.value = "请假申请已撤回。"
+        await load()
+      } catch (reason) {
+        error.value = messageOf(reason)
+      }
+    },
+  })
 }
 
 async function collectNow() {
@@ -287,41 +329,50 @@ async function saveReason(run: SchoolLeaveRun) {
 }
 
 async function cancelRun(run: SchoolLeaveRun) {
-  if (!window.confirm("取消本次汇总？其中申请会退回待汇总并可由成员重新修改。")) return
-  actionRunId.value = run.id
-  error.value = ""
-  notice.value = ""
-  try {
-    await api.cancelSchoolLeaveRun(run.id)
-    notice.value = "本次汇总已取消，申请已退回待汇总。"
-    await load()
-  } catch (reason) {
-    error.value = messageOf(reason)
-  } finally {
-    actionRunId.value = null
-  }
+  requestLeaveConfirmation({
+    title: "取消本次汇总？",
+    description: "取消后，本批次中的申请会退回待汇总，并可由成员重新修改。",
+    confirmLabel: "取消汇总",
+    danger: true,
+    action: async () => {
+      actionRunId.value = run.id
+      error.value = ""
+      notice.value = ""
+      try {
+        await api.cancelSchoolLeaveRun(run.id)
+        notice.value = "本次汇总已取消，申请已退回待汇总。"
+        await load()
+      } catch (reason) {
+        error.value = messageOf(reason)
+      } finally {
+        actionRunId.value = null
+      }
+    },
+  })
 }
 
 async function deleteRun(run: SchoolLeaveRun) {
-  const confirmed = window.confirm(
-    "删除这条已完成记录？\n\n" +
-    "将同时删除该批次下的 " + run.request_count + " 条请假申请和盖章材料。\n" +
-    "此操作不可恢复。",
-  )
-  if (!confirmed) return
-  actionRunId.value = run.id
-  error.value = ""
-  notice.value = ""
-  try {
-    await api.deleteSchoolLeaveRun(run.id)
-    runs.value = runs.value.filter((item) => item.id !== run.id)
-    notice.value = "历史记录已删除。"
-    await load()
-  } catch (reason) {
-    error.value = messageOf(reason)
-  } finally {
-    actionRunId.value = null
-  }
+  requestLeaveConfirmation({
+    title: "删除已完成记录？",
+    description: `将同时删除该批次下的 ${run.request_count} 条请假申请和盖章材料，此操作不可恢复。`,
+    confirmLabel: "删除记录",
+    danger: true,
+    action: async () => {
+      actionRunId.value = run.id
+      error.value = ""
+      notice.value = ""
+      try {
+        await api.deleteSchoolLeaveRun(run.id)
+        runs.value = runs.value.filter((item) => item.id !== run.id)
+        notice.value = "历史记录已删除。"
+        await load()
+      } catch (reason) {
+        error.value = messageOf(reason)
+      } finally {
+        actionRunId.value = null
+      }
+    },
+  })
 }
 
 function saveBlob(blob: Blob, filename: string) {
@@ -455,6 +506,17 @@ onMounted(() => {
 </script>
 
 <template>
+  <ConfirmDialog
+    :open="leaveConfirm !== null"
+    :title="leaveConfirm?.title ?? ''"
+    :description="leaveConfirm?.description ?? ''"
+    :confirm-label="leaveConfirm?.confirmLabel ?? '确认'"
+    :danger="leaveConfirm?.danger ?? false"
+    :pending="leaveConfirmPending"
+    @cancel="cancelLeaveConfirmation"
+    @confirm="confirmLeaveAction"
+  />
+
   <div class="page-title leave-page-title"><h1>学校请假</h1></div>
 
   <nav v-if="isAdmin" class="leave-view-tabs" aria-label="学校请假视图">
@@ -512,7 +574,7 @@ onMounted(() => {
           </div>
           <div v-if="item.status === 'pending'" class="row-actions leave-row-actions">
             <button type="button" @click="editRequest(item)">修改</button>
-            <button class="danger-text" type="button" @click="withdrawRequest(item)">撤回</button>
+            <button type="button" @click="withdrawRequest(item)">撤回</button>
           </div>
           <button
             v-else-if="

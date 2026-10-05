@@ -8,6 +8,7 @@ import { itemReviewChanges, removeItemReviewSuggestion } from "./itemReview.js"
 import { isExpandedRoot, removeRootAndChildren, toggleExpandedRoot } from "./rootItemList.js"
 import TaskStatusIndicator from "./TaskStatusIndicator.vue"
 import TaskActionMenu, { type TaskActionMenuItem } from "./TaskActionMenu.vue"
+import ConfirmDialog from "./components/ConfirmDialog.vue"
 import LocalPageLoading from "./pages/LocalPageLoading.vue"
 import {
   claimableTask,
@@ -82,6 +83,17 @@ const notice = ref("")
 const fieldErrors = ref<Record<string, string>>({})
 const feedback = ref<{ kind: "success" | "error" | "info"; message: string } | null>(null)
 let feedbackTimer: number | undefined
+
+interface ConfirmRequest {
+  title: string
+  description: string
+  confirmLabel: string
+  danger?: boolean
+  action: () => Promise<void> | void
+}
+
+const appConfirm = ref<ConfirmRequest | null>(null)
+const appConfirmPending = ref(false)
 
 const loginEmail = ref("")
 const loginPassword = ref("")
@@ -364,6 +376,30 @@ const viewLabels: Record<TaskView, string> = {
 
 function messageOf(reason: unknown): string {
   return reason instanceof Error ? reason.message : "操作失败"
+}
+
+function requestAppConfirmation(request: ConfirmRequest) {
+  if (appConfirmPending.value) return
+  appConfirm.value = request
+}
+
+function cancelAppConfirmation() {
+  if (appConfirmPending.value) return
+  appConfirm.value = null
+}
+
+async function confirmAppConfirmation() {
+  const request = appConfirm.value
+  if (!request || appConfirmPending.value) return
+  appConfirmPending.value = true
+  try {
+    await request.action()
+  } catch (reason) {
+    error.value = messageOf(reason)
+  } finally {
+    appConfirmPending.value = false
+    appConfirm.value = null
+  }
 }
 
 function clearFeedback() {
@@ -1259,13 +1295,20 @@ async function copyInvite() {
 }
 
 async function disableMember(memberId: number) {
-  if (!window.confirm("停用后该成员会立即退出登录，确定停用？")) return
-  error.value = ""
-  try {
-    replaceMemberInState(await api.disableMember(memberId))
-  } catch (reason) {
-    error.value = messageOf(reason)
-  }
+  requestAppConfirmation({
+    title: "停用成员？",
+    description: "停用后，该成员会立即退出登录，且无法继续访问 TARS BASE；之后可由管理员恢复。",
+    confirmLabel: "停用成员",
+    danger: true,
+    action: async () => {
+      error.value = ""
+      try {
+        replaceMemberInState(await api.disableMember(memberId))
+      } catch (reason) {
+        error.value = messageOf(reason)
+      }
+    },
+  })
 }
 
 async function enableMember(memberId: number) {
@@ -1439,8 +1482,12 @@ async function claimTask(task: Task) {
 }
 
 async function unclaimTask(task: Task) {
-  if (!window.confirm("取消负责人认领后，该任务会重新进入待认领列表。确定继续？")) return
-  await runTaskAction(task, "unclaim", () => api.unclaimTask(task.id))
+  requestAppConfirmation({
+    title: "取消负责人认领？",
+    description: "取消负责人认领后，该任务会重新进入待认领列表，其他成员可以重新认领。",
+    confirmLabel: "取消认领",
+    action: () => runTaskAction(task, "unclaim", () => api.unclaimTask(task.id)),
+  })
 }
 
 async function joinTask(task: Task) {
@@ -1655,15 +1702,22 @@ async function addCurrentFact() {
 async function removeCurrentFact(factId: number) {
   const root = detailRoot.value
   if (!root || !canManageFactScope.value) return
-  if (!window.confirm("移除这条当前信息？已有的历史动态会保留。")) return
-  error.value = ""
-  try {
-    const updatedRoot = await api.deleteItemFact(root.id, factId)
-    replaceRootFactsInState(updatedRoot)
-    clearItemReview()
-  } catch (reason) {
-    error.value = messageOf(reason)
-  }
+  requestAppConfirmation({
+    title: "移除当前信息？",
+    description: "移除后，这条当前信息将不再参与事项当前上下文；已有的历史动态会保留。",
+    confirmLabel: "移除信息",
+    danger: true,
+    action: async () => {
+      error.value = ""
+      try {
+        const updatedRoot = await api.deleteItemFact(root.id, factId)
+        replaceRootFactsInState(updatedRoot)
+        clearItemReview()
+      } catch (reason) {
+        error.value = messageOf(reason)
+      }
+    },
+  })
 }
 
 function beginFactScopeEdit(fact: ItemFact) {
@@ -2181,15 +2235,22 @@ async function uploadKnowledgeFile(file: File) {
 }
 
 async function removeKnowledgeDocument(document: KnowledgeDocument) {
-  if (!window.confirm(`删除知识条目“${document.title}”？`)) return
-  error.value = ""
-  try {
-    await api.deleteKnowledgeDocument(document.id)
-    removePlannerCurrentDocument(document.id)
-    await loadKnowledgeDocuments()
-  } catch (reason) {
-    error.value = messageOf(reason)
-  }
+  requestAppConfirmation({
+    title: `删除知识条目“${document.title}”？`,
+    description: "删除后，AI 规划将不再使用这份资料，该知识条目也会从当前资料列表中移除。",
+    confirmLabel: "删除资料",
+    danger: true,
+    action: async () => {
+      error.value = ""
+      try {
+        await api.deleteKnowledgeDocument(document.id)
+        removePlannerCurrentDocument(document.id)
+        await loadKnowledgeDocuments()
+      } catch (reason) {
+        error.value = messageOf(reason)
+      }
+    },
+  })
 }
 
 function knowledgeStatusLabel(document: KnowledgeDocument) {
@@ -2265,6 +2326,17 @@ onBeforeUnmount(() => {
       <button type="button" aria-label="关闭提示" @click="clearFeedback">×</button>
     </div>
   </div>
+
+  <ConfirmDialog
+    :open="appConfirm !== null"
+    :title="appConfirm?.title ?? ''"
+    :description="appConfirm?.description ?? ''"
+    :confirm-label="appConfirm?.confirmLabel ?? '确认'"
+    :danger="appConfirm?.danger ?? false"
+    :pending="appConfirmPending"
+    @cancel="cancelAppConfirmation"
+    @confirm="confirmAppConfirmation"
+  />
 
   <div
     v-if="deleteRootItemModalOpen && isAdmin && deleteTargetRoot"

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import io
 import os
+from datetime import datetime
+from urllib.parse import unquote
 from concurrent.futures import ThreadPoolExecutor
 
 from docx import Document
@@ -14,7 +16,11 @@ from app.auth import get_current_member
 from app.db import SessionLocal, get_db
 from app.main import app
 from app.models import Member, SchoolLeaveRequest, SchoolLeaveRun
-from app.school_leave import SCHOOL_LEAVE_TEMPLATE_PATH, collect_pending_school_leave
+from app.school_leave import (
+    SCHOOL_LEAVE_TEMPLATE_PATH,
+    collect_pending_school_leave,
+    school_leave_run_document_filename,
+)
 
 
 TEST_EMAILS = (
@@ -332,7 +338,14 @@ def main() -> None:
             assert doc_response.headers["content-type"].startswith(
                 "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
             )
-            assert ".docx" in doc_response.headers["content-disposition"]
+            content_disposition = doc_response.headers["content-disposition"]
+            assert ".docx" in content_disposition
+            run_two_row = db.get(SchoolLeaveRun, run_two_id)
+            assert run_two_row is not None
+            assert unquote(content_disposition.split("UTF-8''", 1)[1]) == school_leave_run_document_filename(
+                db,
+                run_two_row,
+            )
             rendered = docx_text(doc_response.content)
             assert rendered.count("请假条") == 3
             assert reason in rendered
@@ -517,6 +530,46 @@ def main() -> None:
             concurrency_row = db.get(SchoolLeaveRequest, concurrency_request_id)
             assert concurrency_row and concurrency_row.status == "included"
             assert concurrency_row.run_id == created_run_ids[0]
+
+            # Download filenames hide database run IDs and number only valid same-day supplements.
+            filename_runs = [
+                SchoolLeaveRun(
+                    collected_at=datetime(2030, 1, 2, 9, 0),
+                    created_by=admin.id,
+                    reason="文件名测试",
+                    status="sent",
+                ),
+                SchoolLeaveRun(
+                    collected_at=datetime(2030, 1, 2, 10, 0),
+                    created_by=admin.id,
+                    reason="文件名测试",
+                    status="cancelled",
+                ),
+                SchoolLeaveRun(
+                    collected_at=datetime(2030, 1, 2, 11, 0),
+                    created_by=admin.id,
+                    reason="文件名测试",
+                    status="ready",
+                ),
+                SchoolLeaveRun(
+                    collected_at=datetime(2030, 1, 2, 12, 0),
+                    created_by=admin.id,
+                    reason="文件名测试",
+                    status="sent",
+                ),
+                SchoolLeaveRun(
+                    collected_at=datetime(2030, 1, 3, 9, 0),
+                    created_by=admin.id,
+                    reason="文件名测试",
+                    status="ready",
+                ),
+            ]
+            db.add_all(filename_runs)
+            db.commit()
+            assert school_leave_run_document_filename(db, filename_runs[0]) == "吉甲大师请假条_2030-01-02.docx"
+            assert school_leave_run_document_filename(db, filename_runs[2]) == "吉甲大师请假条_2030-01-02_补充1.docx"
+            assert school_leave_run_document_filename(db, filename_runs[3]) == "吉甲大师请假条_2030-01-02_补充2.docx"
+            assert school_leave_run_document_filename(db, filename_runs[4]) == "吉甲大师请假条_2030-01-03.docx"
 
             # Cutoff parsing is configuration-only and visible to admins without exposing phone.
             os.environ["LEAVE_DAILY_CUTOFF"] = "11:30"

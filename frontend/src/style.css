@@ -484,6 +484,22 @@ h3 {
   font-weight: 570;
 }
 
+.nav-count {
+  display: inline-flex;
+  min-width: 17px;
+  height: 17px;
+  align-items: center;
+  justify-content: center;
+  margin-left: 5px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--hover);
+  color: var(--secondary);
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 1;
+}
+
 .sidebar-nav button.active::before {
   position: absolute;
   top: 50%;

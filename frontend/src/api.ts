@@ -23,6 +23,8 @@ import type {
   TeamRegistrationWindow,
   TeamRegistrationWindowOpen,
   SchoolLeaveAdminConfig,
+  SchoolLeaveAdminSummary,
+  SchoolLeaveGroupResult,
   SchoolLeaveRequest,
   SchoolLeaveRun,
   Task,
@@ -141,6 +143,7 @@ export const api = {
   withdrawSchoolLeaveRequest: (requestId: number) =>
     request<SchoolLeaveRequest>(`/api/school-leave/requests/${requestId}/withdraw`, { method: "POST" }),
   schoolLeaveAdminConfig: () => request<SchoolLeaveAdminConfig>("/api/school-leave/admin/config"),
+  schoolLeaveAdminSummary: () => request<SchoolLeaveAdminSummary>("/api/school-leave/admin/summary"),
   schoolLeaveAdminRequests: () => request<SchoolLeaveRequest[]>("/api/school-leave/admin/requests"),
   schoolLeaveRuns: () => request<SchoolLeaveRun[]>("/api/school-leave/admin/runs"),
   collectSchoolLeave: () => request<SchoolLeaveRun | null>("/api/school-leave/admin/runs/collect", { method: "POST" }),
@@ -151,8 +154,30 @@ export const api = {
     }),
   cancelSchoolLeaveRun: (runId: number) =>
     request<SchoolLeaveRun>(`/api/school-leave/admin/runs/${runId}/cancel`, { method: "POST" }),
-  markSchoolLeaveRunSent: (runId: number) =>
-    request<SchoolLeaveRun>(`/api/school-leave/admin/runs/${runId}/sent`, { method: "POST" }),
+  uploadSchoolLeaveResult: (runId: number, groupIndex: number, file: File) => {
+    const form = new FormData()
+    form.append("file", file)
+    return request<SchoolLeaveGroupResult>(
+      `/api/school-leave/admin/runs/${runId}/groups/${groupIndex}/result`,
+      { method: "POST", body: form },
+    )
+  },
+  schoolLeaveResultUrl: (runId: number, groupIndex: number) =>
+    `/api/school-leave/runs/${runId}/groups/${groupIndex}/result`,
+  downloadSchoolLeaveRunDocument: async (runId: number) => {
+    const response = await fetch(`/api/school-leave/admin/runs/${runId}/document`)
+    if (!response.ok) {
+      let message = "下载失败"
+      try {
+        const data = (await response.json()) as { detail?: string }
+        if (data.detail) message = data.detail
+      } catch {}
+      throw new ApiError(response.status, message)
+    }
+    const disposition = response.headers.get("content-disposition") ?? ""
+    const encodedName = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1] ?? "吉甲大师请假条.docx"
+    return { blob: await response.blob(), filename: decodeURIComponent(encodedName) }
+  },
   deleteSchoolLeaveRun: (runId: number) =>
     request<void>(`/api/school-leave/admin/runs/${runId}`, { method: "DELETE" }),
 

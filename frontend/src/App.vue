@@ -108,6 +108,7 @@ const registrationWindow = ref<TeamRegistrationWindow | null>(null)
 const registrationPath = ref("")
 const openingRegistration = ref(false)
 const closingRegistration = ref(false)
+const schoolLeaveTodoCount = ref(0)
 
 const tasks = ref<Task[]>([])
 const homeMineTasks = ref<Task[]>([])
@@ -944,12 +945,22 @@ async function loadKnowledgeDocuments() {
   knowledgeDocuments.value = await api.knowledgeDocuments()
 }
 
+async function loadSchoolLeaveSummary() {
+  schoolLeaveTodoCount.value = 0
+  if (user.value?.role !== "admin") return
+  try {
+    schoolLeaveTodoCount.value = (await api.schoolLeaveAdminSummary()).todo_count
+  } catch {
+    schoolLeaveTodoCount.value = 0
+  }
+}
+
 async function loadCurrentUser() {
   try {
     user.value = await api.me()
     studentIdDraft.value = user.value.student_id ?? ""
     teamGroupDraft.value = user.value.team_group ?? ""
-    await loadPlannerAccess()
+    await Promise.all([loadPlannerAccess(), loadSchoolLeaveSummary()])
   } catch (reason) {
     if (reason instanceof ApiError && reason.status === 401) {
       user.value = null
@@ -2429,7 +2440,7 @@ onBeforeUnmount(() => {
           任务
         </button>
         <button :class="{ active: path === '/leave' }" type="button" @click="navigate('/leave')">
-          请假
+          请假 <span v-if="isAdmin && schoolLeaveTodoCount" class="nav-count">{{ schoolLeaveTodoCount }}</span>
         </button>
         <button
           v-if="isAdmin"
@@ -3724,7 +3735,12 @@ onBeforeUnmount(() => {
       </template>
 
       <template v-else-if="path === '/leave'">
-        <SchoolLeavePage v-if="user" :current-user="user" @navigate="navigate" />
+        <SchoolLeavePage
+          v-if="user"
+          :current-user="user"
+          @navigate="navigate"
+          @todo-count="schoolLeaveTodoCount = $event"
+        />
       </template>
 
       <template v-else-if="teamMemberDetailId !== null && teamMemberDetail">
@@ -3787,7 +3803,9 @@ onBeforeUnmount(() => {
       <button :class="{ active: path.startsWith('/tasks') }" type="button" @click="navigateTasks('mine')">
         任务
       </button>
-      <button :class="{ active: path === '/leave' }" type="button" @click="navigate('/leave')">请假</button>
+      <button :class="{ active: path === '/leave' }" type="button" @click="navigate('/leave')">
+        请假<span v-if="isAdmin && schoolLeaveTodoCount" class="nav-count">{{ schoolLeaveTodoCount }}</span>
+      </button>
       <button
         v-if="isAdmin"
         :class="{ active: isTeamRoute }"

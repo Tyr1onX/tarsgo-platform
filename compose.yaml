@@ -41,8 +41,10 @@ services:
       KNOWLEDGE_STORAGE_DIR: /opt/tarsgo-knowledge
       LEAVE_CONTACT_PHONE: ${LEAVE_CONTACT_PHONE:-}
       LEAVE_DAILY_CUTOFF: ${LEAVE_DAILY_CUTOFF:-11:30}
+      SCHOOL_LEAVE_RESULT_STORAGE_DIR: /opt/tarsgo-data/school-leave-results
     volumes:
       - ${KNOWLEDGE_STORAGE_HOST_DIR:-/opt/tarsgo-knowledge}:/opt/tarsgo-knowledge
+      - ${SCHOOL_LEAVE_RESULT_STORAGE_HOST_DIR:-/opt/tarsgo-data/school-leave-results}:/opt/tarsgo-data/school-leave-results
     depends_on:
       db:
         condition: service_healthy

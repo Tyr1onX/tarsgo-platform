@@ -61,7 +61,14 @@ watch(activeIndex, (index) => {
 function updatePlacement() {
   const bounds = rootRef.value?.getBoundingClientRect()
   if (!bounds) return
-  const placement = collegeMenuPlacement(window.innerHeight, bounds.top, bounds.bottom)
+  const viewport = window.visualViewport
+  const viewportTop = viewport?.offsetTop ?? 0
+  const viewportHeight = viewport?.height ?? window.innerHeight
+  const placement = collegeMenuPlacement(
+    viewportHeight,
+    bounds.top - viewportTop,
+    bounds.bottom - viewportTop,
+  )
   opensAbove.value = placement.opensAbove
   menuMaxHeight.value = placement.maxHeight
 }

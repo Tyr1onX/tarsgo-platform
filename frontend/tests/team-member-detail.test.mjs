@@ -78,7 +78,9 @@ assert.ok(api.includes("updateMemberProfile: (memberId: number, payload: MemberP
 assert.ok(api.includes("/api/members/${memberId}/profile"))
 assert.ok(detail.includes('v-model="collegeDraft"'))
 assert.ok(detail.includes('v-model="teamMembershipDraft"'))
-assert.ok(detail.includes('v-for="college in collegeOptions"'))
+assert.ok(detail.includes('<CollegeSelect'))
+assert.ok(detail.includes(':options="collegeOptions"'))
+assert.ok(detail.includes('clearable'))
 assert.ok(detail.includes('v-for="(label, code) in membershipLabels"'))
 assert.ok(app.includes('@clear-profile-error="clearMemberProfileFieldError(teamMemberDetail.id, $event)"'))
 

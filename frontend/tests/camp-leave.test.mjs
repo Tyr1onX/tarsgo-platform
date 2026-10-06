@@ -39,6 +39,7 @@ assert.match(page, /确认参加|取消参加/)
 // Public registration has no authenticated team-data calls and submits only the three requested fields.
 assert.match(publicPage, /api\.publicCampLeaveEvent\(props\.token\)/)
 assert.match(publicPage, /api\.colleges\(\)/)
+assert.match(publicPage, /<CollegeSelect[\s\S]*?:options="colleges"[\s\S]*?required/)
 assert.match(publicPage, /name,\s*student_id: studentId,\s*college: draft\.value\.college/s)
 assert.doesNotMatch(publicPage, /api\.(members|campLeaveEvents|campLeaveAdminEvents|tasks)\(/)
 assert.doesNotMatch(publicPage, /participant_type|member_id|团队成员|任务列表/)

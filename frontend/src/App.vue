@@ -12,6 +12,7 @@ import { parseTaskEditorRoute, taskEditorCancelPath, taskEditorSuccessPath, task
 import TaskStatusIndicator from "./TaskStatusIndicator.vue"
 import TaskActionMenu, { type TaskActionMenuItem } from "./TaskActionMenu.vue"
 import ConfirmDialog from "./components/ConfirmDialog.vue"
+import CollegeSelect from "./components/CollegeSelect.vue"
 import AsyncRouteLoadError from "./pages/AsyncRouteLoadError.vue"
 import LocalPageLoading from "./pages/LocalPageLoading.vue"
 import {
@@ -2612,17 +2613,13 @@ onBeforeUnmount(() => {
           </label>
           <label>
             所属学院
-            <select
+            <CollegeSelect
               v-model="registrationCollege"
+              :options="collegeOptions"
               required
-              :aria-invalid="Boolean(registrationFieldErrors.college)"
+              :invalid="Boolean(registrationFieldErrors.college)"
               @change="clearRegistrationFieldError('college')"
-            >
-              <option value="" disabled>请选择学院</option>
-              <option v-for="college in collegeOptions" :key="college.code" :value="college.code">
-                {{ college.name }}
-              </option>
-            </select>
+            />
             <small v-if="registrationFieldErrors.college" class="field-error">{{ registrationFieldErrors.college }}</small>
           </label>
           <label>
@@ -3999,16 +3996,14 @@ onBeforeUnmount(() => {
             </label>
             <label>
               <span>所属学院</span>
-              <select
+              <CollegeSelect
                 v-model="collegeDraft"
-                :aria-invalid="Boolean(profileFieldErrors.college)"
+                :options="collegeOptions"
+                clearable
+                placeholder="可留空，搜索学院"
+                :invalid="Boolean(profileFieldErrors.college)"
                 @change="clearProfileFieldError('college')"
-              >
-                <option value="">未填写</option>
-                <option v-for="college in collegeOptions" :key="college.code" :value="college.code">
-                  {{ college.name }}
-                </option>
-              </select>
+              />
               <small v-if="profileFieldErrors.college" class="field-error">{{ profileFieldErrors.college }}</small>
             </label>
             <label>

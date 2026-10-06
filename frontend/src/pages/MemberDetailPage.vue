@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue"
+import CollegeSelect from "../components/CollegeSelect.vue"
 import type {
   CollegeOption,
   InviteResult,
@@ -151,12 +152,14 @@ function clearProfileError(field: string) {
       </label>
       <label>
         <span>学院</span>
-        <select v-model="collegeDraft" @change="clearProfileError('college')">
-          <option value="">未填写</option>
-          <option v-for="college in collegeOptions" :key="college.code" :value="college.code">
-            {{ college.name }}
-          </option>
-        </select>
+        <CollegeSelect
+          v-model="collegeDraft"
+          :options="collegeOptions"
+          clearable
+          placeholder="可留空，搜索学院"
+          :invalid="Boolean(fieldError('college'))"
+          @change="clearProfileError('college')"
+        />
         <small v-if="fieldError('college')" class="field-error">{{ fieldError('college') }}</small>
       </label>
       <label>

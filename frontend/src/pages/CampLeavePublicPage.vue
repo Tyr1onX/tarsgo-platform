@@ -2,6 +2,7 @@
 import { onMounted, ref } from "vue"
 
 import { ApiError, api } from "../api"
+import CollegeSelect from "../components/CollegeSelect.vue"
 import type { CampLeavePublicEvent, CollegeOption } from "../types"
 
 const props = defineProps<{ token: string }>()
@@ -114,10 +115,13 @@ onMounted(load)
           </label>
           <label>
             所属学院
-            <select v-model="draft.college" required :aria-invalid="Boolean(fieldErrors.college)" @change="clearFieldError('college')">
-              <option value="" disabled>请选择学院</option>
-              <option v-for="college in colleges" :key="college.code" :value="college.code">{{ college.name }}</option>
-            </select>
+            <CollegeSelect
+              v-model="draft.college"
+              :options="colleges"
+              required
+              :invalid="Boolean(fieldErrors.college)"
+              @change="clearFieldError('college')"
+            />
             <small v-if="fieldErrors.college" class="camp-public-error">{{ fieldErrors.college }}</small>
           </label>
           <button class="primary" type="submit" :disabled="saving">{{ saving ? "正在提交…" : "提交报名" }}</button>

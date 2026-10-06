@@ -117,13 +117,58 @@ def main() -> None:
             now = local_now()
             activity_start = (now + timedelta(days=3)).replace(hour=13, minute=30)
             activity_end = activity_start.replace(hour=17, minute=10)
-            window_payload = {
-                "title": "机器人战队创新实践",
+
+            # Team members can generate directly without an administrator-created window.
+            standalone_payload = {
                 "start_at": activity_start.isoformat(timespec="minutes"),
                 "end_at": activity_end.isoformat(timespec="minutes"),
-                "open_until": (now + timedelta(days=2)).isoformat(timespec="minutes"),
-                "team_open": True,
-                "public_enabled": True,
+            }
+            set_actor(formal)
+            standalone_doc = client.post("/api/daily-leave/self-service/document", json=standalone_payload)
+            assert standalone_doc.status_code == 200, standalone_doc.text
+            standalone_paragraphs, standalone_tables = docx_text(standalone_doc.content)
+            assert any("吉甲大师双创基地机器人战队创新实践活动" in line for line in standalone_paragraphs)
+            assert not any("内部活动" in line for line in standalone_paragraphs)
+            assert any("下午课程" in line for line in standalone_paragraphs)
+            assert standalone_tables[0][1] == ["正式成员甲", "26000201", "电子科学与工程学院"]
+            standalone_entry = db.scalar(
+                select(DailyLeaveEntry).where(
+                    DailyLeaveEntry.window_id.is_(None), DailyLeaveEntry.member_id == formal.id
+                ).order_by(DailyLeaveEntry.id)
+            )
+            assert standalone_entry is not None
+            assert standalone_entry.start_at == activity_start.replace(second=0, microsecond=0)
+            assert standalone_entry.end_at == activity_end.replace(second=0, microsecond=0)
+            assert standalone_entry.name_snapshot == "正式成员甲"
+            assert standalone_entry.student_id_snapshot == "26000201"
+            assert standalone_entry.college_snapshot == "electronic-science-engineering"
+            assert standalone_entry.participant_type == "formal"
+            assert standalone_entry.submitted_at is not None
+            standalone_offline = client.post(
+                "/api/daily-leave/self-service/document?offline=true", json=standalone_payload
+            )
+            assert standalone_offline.status_code == 200
+            assert package_media(standalone_offline.content) == set()
+            assert client.post(
+                "/api/daily-leave/self-service/document",
+                json={**standalone_payload, "title": "不允许客户端提交活动名"},
+            ).status_code == 422
+            assert client.post(
+                "/api/daily-leave/self-service/document",
+                json={**standalone_payload, "end_at": standalone_payload["start_at"]},
+            ).status_code == 422
+            assert db.scalar(
+                select(func.count(DailyLeaveEntry.id)).where(
+                    DailyLeaveEntry.window_id.is_(None), DailyLeaveEntry.member_id == formal.id
+                )
+            ) == 2
+            set_actor(incomplete)
+            assert client.post("/api/daily-leave/self-service/document", json=standalone_payload).status_code == 409
+
+            window_payload = {
+                "title": "管理员内部留档名称",
+                "start_at": activity_start.isoformat(timespec="minutes"),
+                "end_at": activity_end.isoformat(timespec="minutes"),
             }
 
             set_actor(formal)
@@ -136,6 +181,16 @@ def main() -> None:
             window = created.json()
             window_id = window["id"]
             window_ids.add(window_id)
+            assert window["open_until"] == window["end_at"]
+            assert window["public_enabled"] is False
+            assert window["public_path"] is None
+            assert window["team_open"] is True
+            set_actor(formal)
+            assert client.post(f"/api/daily-leave/admin/windows/{window_id}/public-link").status_code == 403
+            set_actor(admin)
+            enabled_link = client.post(f"/api/daily-leave/admin/windows/{window_id}/public-link")
+            assert enabled_link.status_code == 200, enabled_link.text
+            window = enabled_link.json()
             token = window["public_path"].rsplit("/", 1)[1]
             assert window["public_enabled"] is True
             assert 40 <= len(token) <= 50
@@ -154,6 +209,7 @@ def main() -> None:
             assert first_entry.name_snapshot == "正式成员甲"
             assert first_entry.student_id_snapshot == "26000201"
             assert first_entry.college_snapshot == "electronic-science-engineering"
+            assert first_entry.start_at is None and first_entry.end_at is None
             assert client.post(f"/api/daily-leave/windows/{window_id}/document").status_code == 200
             assert db.scalar(select(func.count(DailyLeaveEntry.id)).where(DailyLeaveEntry.window_id == window_id)) == 1
 
@@ -174,6 +230,7 @@ def main() -> None:
             # Default daily DOCX embeds exact source media and deterministic body/date/identity; offline omits both images.
             signed_bytes = formal_doc.content
             signed_paragraphs, signed_tables = docx_text(signed_bytes)
+            assert not any(window_payload["title"] in line for line in signed_paragraphs)
             time_text = (
                 f"{activity_start.year} 年 {activity_start.month} 月 {activity_start.day} 日 "
                 "13:30 至 17:10"
@@ -202,7 +259,9 @@ def main() -> None:
             public_info = client.get(f"/api/daily-leave/public/{token}")
             assert public_info.status_code == 200
             public_json = public_info.json()
-            assert public_json["title"] == window_payload["title"]
+            assert public_json["start_at"].startswith(window_payload["start_at"])
+            assert public_json["end_at"].startswith(window_payload["end_at"])
+            assert "title" not in public_json and "open_until" not in public_json
             assert not {"id", "participants", "entries", "entry_count", "public_token", "public_path"}.intersection(public_json)
             external_payload = {
                 "name": "临时参与者",
@@ -236,6 +295,10 @@ def main() -> None:
                 f"/api/daily-leave/public/{token}/document",
                 json={**external_payload, "college": "invalid-college"},
             ).status_code == 422
+            assert client.post(
+                f"/api/daily-leave/public/{token}/document",
+                json={**external_payload, "start_at": window_payload["start_at"]},
+            ).status_code == 422
 
             # Re-downloading keeps the first member identity snapshot despite later Profile edits.
             formal.name = "后来改名"
@@ -258,17 +321,14 @@ def main() -> None:
             assert client.post(f"/api/daily-leave/windows/{window_id}/document").status_code == 409
             set_actor(None)
             assert client.post(f"/api/daily-leave/public/{token}/document", json=external_payload).status_code == 409
-            assert client.get(f"/api/daily-leave/public/{token}").status_code == 200
+            assert client.get(f"/api/daily-leave/public/{token}").status_code == 404
             assert client.get("/api/daily-leave/public/not-a-valid-token").status_code == 404
 
             set_actor(admin)
             expired_payload = {
-                **window_payload,
                 "title": "已截止的窗口",
                 "start_at": (now + timedelta(days=5)).replace(hour=13, minute=30).isoformat(timespec="minutes"),
                 "end_at": (now + timedelta(days=5)).replace(hour=17, minute=10).isoformat(timespec="minutes"),
-                "open_until": (now + timedelta(days=4)).isoformat(timespec="minutes"),
-                "team_open": False,
             }
             expired_response = client.post("/api/daily-leave/admin/windows", json=expired_payload)
             assert expired_response.status_code == 201, expired_response.text
@@ -276,11 +336,15 @@ def main() -> None:
             window_ids.add(expired_window["id"])
             expired_row = db.get(DailyLeaveWindow, expired_window["id"])
             assert expired_row is not None
-            expired_row.open_until = local_now() - timedelta(minutes=1)
+            expired_row.public_enabled = True
+            expired_row.public_token = "expired-test-token-123456789012345678901234"
+            expired_row.start_at = local_now() - timedelta(hours=2)
+            expired_row.end_at = local_now() - timedelta(hours=1)
+            expired_row.open_until = expired_row.end_at
             db.commit()
-            expired_token = expired_window["public_path"].rsplit("/", 1)[1]
+            expired_token = expired_row.public_token
             set_actor(None)
-            assert client.get(f"/api/daily-leave/public/{expired_token}").json()["accepting_participants"] is False
+            assert client.get(f"/api/daily-leave/public/{expired_token}").status_code == 404
             assert client.post(
                 f"/api/daily-leave/public/{expired_token}/document",
                 json={"name": "截止后报名", "student_id": "26000204", "college": "art"},
@@ -397,6 +461,11 @@ def main() -> None:
             if window_ids:
                 db.execute(delete(DailyLeaveEntry).where(DailyLeaveEntry.window_id.in_(window_ids)))
                 db.execute(delete(DailyLeaveWindow).where(DailyLeaveWindow.id.in_(window_ids)))
+            db.execute(
+                delete(DailyLeaveEntry).where(
+                    DailyLeaveEntry.member_id.in_([admin.id, formal.id, reserve.id, incomplete.id])
+                )
+            )
             if event_ids:
                 db.execute(delete(CampLeaveParticipant).where(CampLeaveParticipant.event_id.in_(event_ids)))
                 db.execute(delete(CampLeaveEvent).where(CampLeaveEvent.id.in_(event_ids)))

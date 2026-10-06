@@ -14,6 +14,7 @@ import type {
   DailyLeaveWindowAdmin,
   DailyLeaveWindowCreatePayload,
   DailyLeaveWindowMember,
+  DailyLeaveSelfServicePayload,
   AIItemReviewResult,
   AIItemReviewSuggestion,
   AIItemFactExtractionResult,
@@ -233,8 +234,16 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  enableDailyLeavePublicLink: (windowId: number) =>
+    request<DailyLeaveWindowAdmin>(`/api/daily-leave/admin/windows/${windowId}/public-link`, { method: "POST" }),
   closeDailyLeaveWindow: (windowId: number) =>
     request<DailyLeaveWindowAdmin>(`/api/daily-leave/admin/windows/${windowId}/close`, { method: "POST" }),
+  generateDailyLeaveSelfServiceDocument: (payload: DailyLeaveSelfServicePayload, offline = false) =>
+    downloadFile(
+      `/api/daily-leave/self-service/document${offline ? "?offline=true" : ""}`,
+      "请假条.docx",
+      { method: "POST", body: JSON.stringify(payload), headers: { "Content-Type": "application/json" } },
+    ),
   downloadDailyLeaveDocument: (windowId: number, offline = false) =>
     downloadFile(
       `/api/daily-leave/windows/${windowId}/document${offline ? "?offline=true" : ""}`,

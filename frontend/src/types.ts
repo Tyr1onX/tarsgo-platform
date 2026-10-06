@@ -257,17 +257,17 @@ export interface DailyLeaveWindowCreatePayload {
   title: string
   start_at: string
   end_at: string
-  open_until: string
-  team_open: boolean
-  public_enabled: boolean
 }
 
 export interface DailyLeavePublicWindow {
-  title: string
   start_at: string
   end_at: string
-  open_until: string
   accepting_participants: boolean
+}
+
+export interface DailyLeaveSelfServicePayload {
+  start_at: string
+  end_at: string
 }
 
 export interface DailyLeavePublicEntry {

@@ -44,7 +44,8 @@ assert.match(app, /function handleRootTaskMenuAction/)
 
 // Daily and camp leave use the shared menu for low-frequency document actions.
 assert.match(dailyLeave, /<ActionMenu[\s\S]*?aria-label="其他下载选项"/)
-assert.match(dailyLeave, /<ActionMenu[\s\S]*?aria-label="窗口管理操作"/)
+assert.match(dailyLeave, /aria-label="共享活动操作"/)
+assert.match(dailyLeave, /开启临时公开链接/)
 assert.match(campLeave, /<ActionMenu[\s\S]*?aria-label="更多文档下载选项"/)
 assert.doesNotMatch(leave, /class="leave-more"/)
 assert.match(dailyLeave, /<ConfirmDialog/)

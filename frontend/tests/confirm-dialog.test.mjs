@@ -100,11 +100,12 @@ assert.match(removeKnowledge, /danger: true/)
 assert.match(removeKnowledge, /api\.deleteKnowledgeDocument\(document\.id\)/)
 assert.match(knowledge, /emit\(['"]remove['"], document\)/)
 
-// Daily window closure uses the shared dialog; old summary history is read-only.
+// Shared activity closure uses the shared dialog; old summary history is removed from the daily page.
 assert.match(dailyLeave, /import ConfirmDialog from "\.\.\/components\/ConfirmDialog\.vue"/)
 assert.match(dailyLeave, /<ConfirmDialog[\s\S]*?:open="closeRequest !== null"/)
-assert.match(dailyLeave, /关闭请假窗口？/)
-assert.match(dailyLeave, /closeDailyLeaveWindow\(window\.id\)/)
+assert.match(dailyLeave, /关闭共享活动？/)
+assert.match(dailyLeave, /closeDailyLeaveWindow\(item\.id\)/)
+assert.doesNotMatch(dailyLeave, /LegacySchoolLeaveHistory|旧版日常请假历史/)
 assert.match(leave, /<DailyLeavePage/)
 
 // Camp event closure and erroneous participant removal remain confirmed destructive actions.

@@ -272,7 +272,7 @@ class DailyLeaveWindowCreate(BaseModel):
     title: str = Field(min_length=1, max_length=100)
     start_at: datetime
     end_at: datetime
-    open_until: datetime
+    open_until: datetime | None = None
     team_open: bool = True
     public_enabled: bool = False
 
@@ -284,7 +284,34 @@ class DailyLeaveWindowCreate(BaseModel):
             raise ValueError("活动名称不能为空")
         return value
 
-    @field_validator("start_at", "end_at", "open_until")
+    @field_validator("start_at", "end_at")
+    @classmethod
+    def normalize_time(cls, value: datetime) -> datetime:
+        return _normalize_daily_leave_datetime(value)
+
+    @field_validator("open_until")
+    @classmethod
+    def normalize_optional_open_until(cls, value: datetime | None) -> datetime | None:
+        return None if value is None else _normalize_daily_leave_datetime(value)
+
+    @model_validator(mode="after")
+    def validate_times(self):
+        if self.start_at >= self.end_at:
+            raise ValueError("活动开始时间必须早于结束时间")
+        if self.open_until is None:
+            self.open_until = self.end_at
+        if self.open_until > self.end_at:
+            raise ValueError("开放截止时间不能晚于活动结束时间")
+        return self
+
+
+class DailyLeaveSelfServiceCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    start_at: datetime
+    end_at: datetime
+
+    @field_validator("start_at", "end_at")
     @classmethod
     def normalize_time(cls, value: datetime) -> datetime:
         return _normalize_daily_leave_datetime(value)
@@ -292,9 +319,7 @@ class DailyLeaveWindowCreate(BaseModel):
     @model_validator(mode="after")
     def validate_times(self):
         if self.start_at >= self.end_at:
-            raise ValueError("活动开始时间必须早于结束时间")
-        if self.open_until > self.end_at:
-            raise ValueError("开放截止时间不能晚于活动结束时间")
+            raise ValueError("开始时间必须早于结束时间")
         return self
 
 
@@ -324,10 +349,8 @@ class DailyLeaveWindowAdminOut(BaseModel):
 
 
 class DailyLeavePublicWindowOut(BaseModel):
-    title: str
     start_at: datetime
     end_at: datetime
-    open_until: datetime
     accepting_participants: bool
 
 

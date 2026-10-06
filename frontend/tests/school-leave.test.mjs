@@ -10,73 +10,73 @@ const app = await read("../src/App.vue")
 const api = await read("../src/api.ts")
 const types = await read("../src/types.ts")
 
-// The existing leave entry point now separates the two workflows.
+// Keep the two leave workflows separate.
 assert.match(leavePage, /日常请假/)
 assert.match(leavePage, /集中请假/)
 assert.match(leavePage, /<DailyLeavePage/)
 assert.match(leavePage, /<CampLeavePage/)
 
-// Admin authorizes a fixed activity window; the member only downloads its own document.
-for (const field of ["title", "start_at", "end_at", "open_until", "team_open", "public_enabled"]) {
-  assert.match(dailyPage, new RegExp(`draft\\.value\\.${field}|v-model="draft\\.${field}"`))
-}
-assert.match(dailyPage, /createDailyLeaveWindow/)
-assert.match(dailyPage, /downloadDailyLeaveDocument\(window\.id, offline\)/)
-assert.match(dailyPage, /下载请假条/)
+// Internal members enter only the interval; identity comes from their profile.
+assert.match(dailyPage, /生成请假条/)
+assert.match(dailyPage, /v-model="selfDraft\.start_at" type="datetime-local"/)
+assert.match(dailyPage, /v-model="selfDraft\.end_at" type="datetime-local"/)
+assert.match(dailyPage, /generateDailyLeaveSelfServiceDocument/)
+assert.match(dailyPage, /生成并下载请假条/)
 assert.match(dailyPage, /下载线下签章版/)
-assert.match(dailyPage, /closeDailyLeaveWindow/)
-assert.match(dailyPage, /<ConfirmDialog/)
-assert.match(dailyPage, /当前开放窗口/)
 assert.match(dailyPage, /profileReady/)
-assert.match(dailyPage, /请先完善姓名、8 位学号、学院和队内身份/)
-assert.doesNotMatch(dailyPage, /待汇总|补充汇总|等待其他成员|11:30 汇总/)
-assert.doesNotMatch(dailyPage, /type="time"/)
+assert.match(dailyPage, /请先完善姓名、8 位学号和学院/)
+assert.match(api, /generateDailyLeaveSelfServiceDocument: \(payload: DailyLeaveSelfServicePayload/)
+assert.match(types, /interface DailyLeaveSelfServicePayload\s*\{\s*start_at: string\s*end_at: string/s)
+assert.doesNotMatch(dailyPage, /请假原因|模板内容|子时间段/)
 
-// Public link shows immutable activity times and accepts only the three identity fields.
+// Shared activities are optional, fixed-time shortcuts. Creating one is a collapsed admin action.
+assert.match(dailyPage, /共享活动/)
+assert.match(dailyPage, /＋ 创建共享活动/)
+assert.match(dailyPage, /windowDraft\.title/)
+assert.match(dailyPage, /windowDraft\.start_at/)
+assert.match(dailyPage, /windowDraft\.end_at/)
+assert.match(dailyPage, /创建共享活动/)
+assert.match(dailyPage, /一键生成/)
+assert.match(dailyPage, /enableDailyLeavePublicLink/)
+assert.doesNotMatch(dailyPage, /v-model="windowDraft\.(open_until|team_open|public_enabled)"/)
+assert.doesNotMatch(types.match(/interface DailyLeaveWindowCreatePayload\s*\{[^}]*\}/s)?.[0] ?? "", /open_until|team_open|public_enabled/)
+
+// External links expose only the fixed time and collect name, student ID, and college.
 assert.match(publicPage, /publicDailyLeaveWindow\(props\.token\)/)
 assert.match(publicPage, /generatePublicDailyLeaveDocument\(props\.token/)
 assert.match(publicPage, /windowInfo\.start_at/)
 assert.match(publicPage, /windowInfo\.end_at/)
 assert.match(publicPage, /<CollegeSelect[\s\S]*required/)
 assert.match(publicPage, /name,\s*student_id: studentId,\s*college: draft\.value\.college/s)
-assert.match(publicPage, /windowInfo\.accepting_participants/)
-assert.match(publicPage, /活动时间固定，不能修改/)
-assert.doesNotMatch(publicPage, /start_at\s*[:=]|end_at\s*[:=]|participant_type|member_id|api\.(members|tasks|campLeaveAdmin)/)
+assert.match(publicPage, /活动时间固定，不能修改|时间固定，不能修改/)
+assert.match(publicPage, /共享活动链接已失效/)
+assert.doesNotMatch(publicPage, /windowInfo\.title|windowInfo\.open_until|v-model="draft\.(start_at|end_at)"/)
+assert.doesNotMatch(publicPage, /participant_type|member_id|api\.(members|tasks|campLeaveAdmin)/)
 assert.match(publicPage, /下载线下签章版/)
-assert.match(api, /generatePublicDailyLeaveDocument: \(token: string, payload: DailyLeavePublicEntry/)
-assert.match(api, /method: "POST", body: JSON\.stringify\(payload\)/)
 
-// Public daily URL loads outside the authenticated application shell.
+// Public URLs still open outside authentication; activity names stay private to the app.
 assert.match(app, /routePath\.startsWith\("\/leave\/daily\/"\)/)
 assert.match(app, /path\.startsWith\('\/leave\/daily\/'\)/)
 assert.match(app, /<DailyLeavePublicPage :token="dailyLeavePublicToken"/)
 
-// Old aggregation data remains readable in a collapsed history section with original downloads.
-assert.match(dailyPage, /legacyExpanded/)
-assert.match(dailyPage, /<LegacySchoolLeaveHistory/)
+// The old history UI is removed, while read/download APIs and the legacy component remain available.
+assert.doesNotMatch(dailyPage, /LegacySchoolLeaveHistory|legacyExpanded|旧版日常请假历史|查看历史（只读）/)
 assert.match(legacyPage, /schoolLeaveRuns\(\)/)
 assert.match(legacyPage, /schoolLeaveRequests\(\)/)
 assert.match(legacyPage, /downloadLegacySchoolLeaveRunDocument/)
 assert.match(legacyPage, /downloadLegacySchoolLeaveGroupDocument/)
-assert.match(legacyPage, /schoolLeaveResultUrl/)
-assert.doesNotMatch(legacyPage, /createSchoolLeaveRequest|updateSchoolLeaveRequest|withdrawSchoolLeaveRequest|collectPendingSchoolLeave|uploadSchoolLeaveResult|deleteSchoolLeaveRun/)
 assert.match(api, /schoolLeaveRequests/)
 assert.match(api, /schoolLeaveRuns/)
-assert.match(api, /deleteSchoolLeaveRun/)
 assert.match(api, /\/api\/school-leave\/admin\/runs\/.*\/history-document/)
 assert.match(types, /SchoolLeaveRunStatus = "ready" \| "awaiting_return" \| "completed" \| "cancelled"/)
 
-// Old tables and routes are retained for existing history and file access.
-assert.match(api, /\/api\/school-leave\/admin\/runs\/.*\/documents\//)
-assert.match(api, /schoolLeaveResultUrl/)
-assert.doesNotMatch(types, /interface MemberSummary \{[^}]*student_id/s)
-
-// New UI remains narrow on mobile and avoids fixed-width page containers.
-for (const page of [dailyPage, publicPage, legacyPage, leavePage]) {
+// Keep both pages usable on narrow phones without fixed-width containers.
+for (const page of [dailyPage, publicPage, leavePage]) {
   assert.doesNotMatch(page, /(?:^|[;{])\s*(?:min-width|width)\s*:\s*(?:4\d\d|[5-9]\d\d|\d{4,})px/)
   assert.doesNotMatch(page, /width:\s*100vw/)
 }
 assert.match(dailyPage, /@media \(max-width: 520px\)/)
+assert.match(dailyPage, /grid-template-columns: minmax\(0, 1fr\)/)
 assert.match(publicPage, /box-sizing: border-box; width: 100%; min-width: 0/)
 
 console.log("Daily Leave V2 and legacy history frontend tests passed")

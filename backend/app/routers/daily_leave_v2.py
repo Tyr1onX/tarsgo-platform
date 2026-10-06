@@ -21,6 +21,7 @@ from ..schemas import (
     DailyLeaveWindowAdminOut,
     DailyLeaveWindowCreate,
     DailyLeaveWindowMemberOut,
+    DailyLeaveSelfServiceCreate,
     validate_college,
     validate_member_name,
     validate_student_id,
@@ -32,7 +33,8 @@ router = APIRouter(prefix="/api/daily-leave", tags=["daily-leave-v2"])
 
 
 def _accepting(window: DailyLeaveWindow, *, now: datetime | None = None) -> bool:
-    return window.status == "open" and window.open_until > (now or school_leave_now())
+    current_time = now or school_leave_now()
+    return window.status == "open" and window.open_until > current_time and window.end_at > current_time
 
 
 def _member_window_out(window: DailyLeaveWindow) -> DailyLeaveWindowMemberOut:
@@ -80,8 +82,9 @@ def _get_window(db: Session, window_id: int, *, lock: bool = False) -> DailyLeav
 def _require_open(window: DailyLeaveWindow, *, public: bool) -> None:
     if window.status != "open":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="请假窗口已关闭")
-    if window.open_until <= school_leave_now():
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="请假窗口已截止")
+    now = school_leave_now()
+    if window.open_until <= now or window.end_at <= now:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="共享活动已结束")
     if public and (not window.public_enabled or not window.public_token):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="临时报名链接无效")
     if not public and not window.team_open:
@@ -113,7 +116,9 @@ def _document_response(content: bytes, filename: str) -> StreamingResponse:
     )
 
 
-def _make_document(window: DailyLeaveWindow, *, name: str, student_id: str, college: str, offline: bool):
+def _make_document(
+    *, start_at: datetime, end_at: datetime, name: str, student_id: str, college: str, offline: bool
+):
     phone = get_leave_contact_phone()
     if not phone:
         raise HTTPException(
@@ -121,8 +126,8 @@ def _make_document(window: DailyLeaveWindow, *, name: str, student_id: str, coll
             detail="LEAVE_CONTACT_PHONE 未配置，暂时不能生成请假材料",
         )
     return build_daily_leave_v2_docx(
-        start_at=window.start_at,
-        end_at=window.end_at,
+        start_at=start_at,
+        end_at=end_at,
         name=name,
         student_id=student_id,
         college_name=COLLEGE_BY_CODE[college]["name"],
@@ -131,9 +136,25 @@ def _make_document(window: DailyLeaveWindow, *, name: str, student_id: str, coll
     )
 
 
-def _daily_filename(window: DailyLeaveWindow, *, offline: bool) -> str:
+def _daily_filename(start_at: datetime, *, offline: bool) -> str:
     kind = "线下签章版" if offline else "请假条"
-    return f"{kind}_{window.start_at:%Y-%m-%d}.docx"
+    return f"{kind}_{start_at:%Y-%m-%d}.docx"
+
+
+def _member_identity(current: Member) -> tuple[str, str, str]:
+    if current.team_membership not in {"formal", "reserve"}:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="仅正式队员和梯队成员可以生成")
+    try:
+        return (
+            validate_member_name(current.name or ""),
+            validate_student_id(current.student_id or ""),
+            validate_college(current.college or ""),
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="请先完善个人资料中的姓名、8 位学号和学院",
+        ) from exc
 
 
 @router.get("/windows", response_model=list[DailyLeaveWindowMemberOut])
@@ -181,7 +202,7 @@ def create_window(
         title=payload.title,
         start_at=payload.start_at,
         end_at=payload.end_at,
-        open_until=payload.open_until,
+        open_until=payload.open_until or payload.end_at,
         team_open=payload.team_open,
         public_enabled=payload.public_enabled,
         public_token=new_token() if payload.public_enabled else None,
@@ -191,6 +212,23 @@ def create_window(
     db.add(window)
     db.commit()
     db.refresh(window)
+    return _admin_window_out(db, window)
+
+
+@router.post("/admin/windows/{window_id}/public-link", response_model=DailyLeaveWindowAdminOut)
+def enable_public_link(
+    window_id: int,
+    _: Member = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> DailyLeaveWindowAdminOut:
+    window = _get_window(db, window_id, lock=True)
+    if not _accepting(window):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="共享活动已结束或关闭")
+    if not window.public_enabled or not window.public_token:
+        window.public_enabled = True
+        window.public_token = new_token()
+        db.commit()
+        db.refresh(window)
     return _admin_window_out(db, window)
 
 
@@ -219,22 +257,13 @@ def member_document(
     _require_open(window, public=False)
     if current.team_membership not in {"formal", "reserve"}:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="仅正式队员和梯队成员可以生成")
-
     entry = db.scalar(
         select(DailyLeaveEntry)
         .where(DailyLeaveEntry.window_id == window.id, DailyLeaveEntry.member_id == current.id)
         .with_for_update()
     )
     if entry is None:
-        try:
-            name = validate_member_name(current.name or "")
-            student_id = validate_student_id(current.student_id or "")
-            college = validate_college(current.college or "")
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="请先完善个人资料中的姓名、8 位学号和学院",
-            ) from exc
+        name, student_id, college = _member_identity(current)
         collision = db.scalar(
             select(DailyLeaveEntry).where(
                 DailyLeaveEntry.window_id == window.id,
@@ -250,6 +279,8 @@ def member_document(
             student_id_snapshot=student_id,
             college_snapshot=college,
             participant_type=current.team_membership,
+            start_at=None,
+            end_at=None,
         )
         db.add(entry)
         try:
@@ -260,24 +291,56 @@ def member_document(
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="该学号已在本窗口生成材料") from exc
 
     content = _make_document(
-        window,
+        start_at=window.start_at,
+        end_at=window.end_at,
         name=entry.name_snapshot,
         student_id=entry.student_id_snapshot,
         college=entry.college_snapshot,
         offline=offline,
     )
-    return _document_response(content, _daily_filename(window, offline=offline))
+    return _document_response(content, _daily_filename(window.start_at, offline=offline))
+
+
+@router.post("/self-service/document")
+def self_service_document(
+    payload: DailyLeaveSelfServiceCreate,
+    offline: bool = False,
+    current: Member = Depends(get_current_member),
+    db: Session = Depends(get_db),
+) -> StreamingResponse:
+    name, student_id, college = _member_identity(current)
+    content = _make_document(
+        start_at=payload.start_at,
+        end_at=payload.end_at,
+        name=name,
+        student_id=student_id,
+        college=college,
+        offline=offline,
+    )
+    entry = DailyLeaveEntry(
+        window_id=None,
+        member_id=current.id,
+        start_at=payload.start_at,
+        end_at=payload.end_at,
+        name_snapshot=name,
+        student_id_snapshot=student_id,
+        college_snapshot=college,
+        participant_type=current.team_membership,
+    )
+    db.add(entry)
+    db.commit()
+    return _document_response(content, _daily_filename(payload.start_at, offline=offline))
 
 
 @router.get("/public/{token}", response_model=DailyLeavePublicWindowOut)
 def public_window(token: str, db: Session = Depends(get_db)) -> DailyLeavePublicWindowOut:
     window = _public_window(token, db)
+    if not _accepting(window):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="临时链接已失效")
     return DailyLeavePublicWindowOut(
-        title=window.title,
         start_at=window.start_at,
         end_at=window.end_at,
-        open_until=window.open_until,
-        accepting_participants=_accepting(window),
+        accepting_participants=True,
     )
 
 
@@ -322,10 +385,11 @@ def public_document(
             if entry is None:
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="请稍后重新生成") from exc
     content = _make_document(
-        window,
+        start_at=window.start_at,
+        end_at=window.end_at,
         name=entry.name_snapshot,
         student_id=entry.student_id_snapshot,
         college=entry.college_snapshot,
         offline=offline,
     )
-    return _document_response(content, _daily_filename(window, offline=offline))
+    return _document_response(content, _daily_filename(window.start_at, offline=offline))

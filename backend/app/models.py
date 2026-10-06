@@ -278,21 +278,30 @@ class DailyLeaveEntry(Base):
             "college_snapshot IN (" + ",".join(f"'{code}'" for code in sorted(COLLEGE_CODES)) + ")",
             name="ck_daily_leave_entries_college",
         ),
+        CheckConstraint(
+            "(window_id IS NOT NULL AND start_at IS NULL AND end_at IS NULL) OR "
+            "(window_id IS NULL AND start_at IS NOT NULL AND end_at IS NOT NULL AND start_at < end_at)",
+            name="ck_daily_leave_entries_source_time_shape",
+        ),
         UniqueConstraint("window_id", "student_id_snapshot", name="uq_daily_leave_window_student"),
         UniqueConstraint("window_id", "member_id", name="uq_daily_leave_window_member"),
         Index("ix_daily_leave_entries_window_college", "window_id", "college_snapshot"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    window_id: Mapped[int] = mapped_column(ForeignKey("daily_leave_windows.id", ondelete="CASCADE"), nullable=False)
+    window_id: Mapped[int | None] = mapped_column(
+        ForeignKey("daily_leave_windows.id", ondelete="CASCADE"), nullable=True
+    )
     member_id: Mapped[int | None] = mapped_column(ForeignKey("members.id", ondelete="SET NULL"), nullable=True)
+    start_at: Mapped[datetime | None] = mapped_column(DateTime(), nullable=True)
+    end_at: Mapped[datetime | None] = mapped_column(DateTime(), nullable=True)
     name_snapshot: Mapped[str] = mapped_column(String(50), nullable=False)
     student_id_snapshot: Mapped[str] = mapped_column(String(8), nullable=False)
     college_snapshot: Mapped[str] = mapped_column(String(50), nullable=False)
     participant_type: Mapped[str] = mapped_column(String(20), nullable=False)
     submitted_at: Mapped[datetime] = mapped_column(DateTime(), server_default=func.now(), nullable=False)
 
-    window: Mapped[DailyLeaveWindow] = relationship(back_populates="entries")
+    window: Mapped[DailyLeaveWindow | None] = relationship(back_populates="entries")
     member: Mapped[Member | None] = relationship()
 
 

@@ -99,18 +99,17 @@ onMounted(load)
   <section class="daily-leave-public-form">
     <p class="brand">TARS BASE</p>
     <template v-if="loading">
-      <h1>日常请假</h1>
-      <p class="daily-public-muted" role="status">正在读取活动信息…</p>
+      <h1>生成日常请假条</h1>
+      <p class="daily-public-muted" role="status">正在读取共享活动时间…</p>
     </template>
     <template v-else-if="windowInfo">
-      <span class="daily-public-kicker">请假授权窗口</span>
-      <h1>{{ windowInfo.title }}</h1>
+      <span class="daily-public-kicker">共享活动</span>
+      <h1>生成日常请假条</h1>
       <dl class="daily-public-facts">
-        <div><dt>活动时间</dt><dd>{{ dateTime(windowInfo.start_at) }} 至 {{ dateTime(windowInfo.end_at) }}</dd></div>
-        <div><dt>开放至</dt><dd>{{ dateTime(windowInfo.open_until) }}</dd></div>
+        <div><dt>请假时间</dt><dd>{{ dateTime(windowInfo.start_at) }} 至 {{ dateTime(windowInfo.end_at) }}</dd></div>
       </dl>
       <template v-if="windowInfo.accepting_participants">
-        <p class="daily-public-hint">填写本人信息后即可下载个人请假条。活动时间固定，不能修改。</p>
+        <p class="daily-public-hint">填写本人信息后即可下载个人请假条。时间固定，不能修改。</p>
         <p v-if="error" class="daily-public-error" role="alert">{{ error }}</p>
         <form @submit.prevent="generate(false)">
           <label>
@@ -151,8 +150,8 @@ onMounted(load)
     </template>
     <template v-else>
       <span class="daily-public-kicker">BASE / DAILY LEAVE</span>
-      <h1>无法打开请假窗口</h1>
-      <p class="daily-public-error" role="alert">{{ error || "临时链接无效或已失效。" }}</p>
+      <h1>共享活动链接已失效</h1>
+      <p class="daily-public-error" role="alert">{{ error || "临时链接无效或活动已结束。" }}</p>
     </template>
   </section>
 </template>

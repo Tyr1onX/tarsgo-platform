@@ -2,6 +2,7 @@
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 
 import { ApiError, api } from "./api"
+import { clearAsyncRouteRecovery, handleAsyncRouteResourceError } from "./asyncRouteRecovery.js"
 import { recentBaseChanges } from "./baseHome.js"
 import { revealInvalidField } from "./formFeedback.js"
 import { filterIgnoredPlannerSuggestions, ignorePlannerSuggestion, plannerSuggestionJoinInstruction } from "./plannerSuggestions.js"
@@ -11,6 +12,7 @@ import { parseTaskEditorRoute, taskEditorCancelPath, taskEditorSuccessPath, task
 import TaskStatusIndicator from "./TaskStatusIndicator.vue"
 import TaskActionMenu, { type TaskActionMenuItem } from "./TaskActionMenu.vue"
 import ConfirmDialog from "./components/ConfirmDialog.vue"
+import AsyncRouteLoadError from "./pages/AsyncRouteLoadError.vue"
 import LocalPageLoading from "./pages/LocalPageLoading.vue"
 import {
   claimableTask,
@@ -63,31 +65,27 @@ const taskEditor = computed(() => parseTaskEditorRoute(path.value))
 const isTaskEditorRoute = computed(() => taskEditor.value !== null)
 const taskEditorLoading = ref(false)
 let initializedTaskEditorPath = ""
-const TeamPage = defineAsyncComponent({
-  loader: () => import("./pages/TeamPage.vue"),
-  loadingComponent: LocalPageLoading,
-  delay: 120,
-})
-const MemberDetailPage = defineAsyncComponent({
-  loader: () => import("./pages/MemberDetailPage.vue"),
-  loadingComponent: LocalPageLoading,
-  delay: 120,
-})
-const KnowledgePage = defineAsyncComponent({
-  loader: () => import("./pages/KnowledgePage.vue"),
-  loadingComponent: LocalPageLoading,
-  delay: 120,
-})
-const SchoolLeavePage = defineAsyncComponent({
-  loader: () => import("./pages/SchoolLeavePage.vue"),
-  loadingComponent: LocalPageLoading,
-  delay: 120,
-})
-const CampLeavePublicPage = defineAsyncComponent({
-  loader: () => import("./pages/CampLeavePublicPage.vue"),
-  loadingComponent: LocalPageLoading,
-  delay: 120,
-})
+function defineLazyPage(loader: () => Promise<{ default: import("vue").Component }>) {
+  return defineAsyncComponent({
+    loader: async () => {
+      const page = await loader()
+      clearAsyncRouteRecovery()
+      return page
+    },
+    loadingComponent: LocalPageLoading,
+    errorComponent: AsyncRouteLoadError,
+    delay: 120,
+    onError(error, _retry, fail) {
+      if (handleAsyncRouteResourceError(error) !== "reloading") fail()
+    },
+  })
+}
+
+const TeamPage = defineLazyPage(() => import("./pages/TeamPage.vue"))
+const MemberDetailPage = defineLazyPage(() => import("./pages/MemberDetailPage.vue"))
+const KnowledgePage = defineLazyPage(() => import("./pages/KnowledgePage.vue"))
+const SchoolLeavePage = defineLazyPage(() => import("./pages/SchoolLeavePage.vue"))
+const CampLeavePublicPage = defineLazyPage(() => import("./pages/CampLeavePublicPage.vue"))
 const campLeavePublicToken = computed(() => path.value.match(/^\/leave\/camp\/([A-Za-z0-9_-]+)$/)?.[1] ?? "")
 const isCampLeavePublicRoute = computed(() => path.value.startsWith("/leave/camp/"))
 const user = ref<Member | null>(null)

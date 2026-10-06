@@ -46,7 +46,7 @@ assert.ok(team.includes('member.status === "disabled") return "已停用"'))
 assert.doesNotMatch(team, /return member\.status/)
 
 // Member detail remains an admin-only route and edits only school/team profile fields.
-assert.ok(app.includes("const MemberDetailPage = defineAsyncComponent"))
+assert.ok(app.includes('const MemberDetailPage = defineLazyPage(() => import("./pages/MemberDetailPage.vue"))'))
 assert.ok(app.includes("const teamMemberDetailId = computed"))
 assert.ok(app.includes('const match = path.value.match(/^\\/team\\/(\\d+)$/)'))
 const detailLoader = app.slice(

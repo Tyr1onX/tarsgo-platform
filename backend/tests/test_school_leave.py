@@ -259,8 +259,8 @@ def main() -> None:
             run_one_id = run_one["id"]
             assert "send_message" not in run_one
             assert [(group["time_text"], group["count"]) for group in run_one["groups"]] == [
-                ("2026 年 10 月 8 日 13:00 至 17:00", 2),
-                ("2026 年 10 月 8 日 15:00 至 17:00", 1),
+                ("2026年10月8日13:00 至 17:00", 2),
+                ("2026年10月8日15:00 至 17:00", 1),
             ]
 
             # Members can read only the run status attached to their own requests.
@@ -400,13 +400,13 @@ def main() -> None:
             assert rendered.count("请假条") == 5
             assert reason not in rendered
             assert rendered.count("吉甲大师双创基地机器人战队创新实践活动") == 5
-            assert "以下学生因参加2026 年 10 月 8 日 08:00 至 09:00的吉甲大师双创基地机器人战队创新实践活动，不能参加上午课程，特此证明。" in rendered
-            assert "以下学生因参加2026 年 10 月 8 日 10:00 至 14:00的吉甲大师双创基地机器人战队创新实践活动，不能参加当日对应课程，特此证明。" in rendered
-            assert "以下学生因参加2026 年 10 月 8 日 13:00 至 17:00的吉甲大师双创基地机器人战队创新实践活动，不能参加下午课程，特此证明。" in rendered
-            assert "以下学生因参加2026 年 10 月 8 日 18:00 至 19:00的吉甲大师双创基地机器人战队创新实践活动，不能参加晚间课程，特此证明。" in rendered
-            assert "2026 年 10 月 8 日 13:00 至 17:00" in rendered
-            assert "2026 年 10 月 8 日 15:00 至 17:00" in rendered
-            assert "2026 年 10 月 8 日 18:00 至 19:00" in rendered
+            assert "以下学生因参加2026年10月8日08:00 至 09:00的吉甲大师双创基地机器人战队创新实践活动，不能参加上午课程，特此证明。" in rendered
+            assert "以下学生因参加2026年10月8日10:00 至 14:00的吉甲大师双创基地机器人战队创新实践活动，不能参加当日对应课程，特此证明。" in rendered
+            assert "以下学生因参加2026年10月8日13:00 至 17:00的吉甲大师双创基地机器人战队创新实践活动，不能参加下午课程，特此证明。" in rendered
+            assert "以下学生因参加2026年10月8日18:00 至 19:00的吉甲大师双创基地机器人战队创新实践活动，不能参加晚间课程，特此证明。" in rendered
+            assert "2026年10月8日13:00 至 17:00" in rendered
+            assert "2026年10月8日15:00 至 17:00" in rendered
+            assert "2026年10月8日18:00 至 19:00" in rendered
             assert "联系电话：000-0000-0000" in rendered
             document = open_docx(doc_response.content)
             template_document = Document(SCHOOL_LEAVE_TEMPLATE_PATH)
@@ -516,7 +516,7 @@ def main() -> None:
             assert len(single_document.tables) == 1
             assert len(single_document.paragraphs) == len(template_document.paragraphs)
             assert docx_page_break_count(single_doc.content) == 0
-            assert "2026 年 10 月 8 日 20:00 至 21:00" in docx_text(single_doc.content)
+            assert "2026年10月8日20:00 至 21:00" in docx_text(single_doc.content)
             assert "测试乙" in table_text(single_document, 0)
             assert client.delete(f"/api/school-leave/admin/runs/{run_three_id}").status_code == 409
 

@@ -232,7 +232,7 @@ def main() -> None:
             signed_paragraphs, signed_tables = docx_text(signed_bytes)
             assert not any(window_payload["title"] in line for line in signed_paragraphs)
             time_text = (
-                f"{activity_start.year} 年 {activity_start.month} 月 {activity_start.day} 日 "
+                f"{activity_start.year}年{activity_start.month}月{activity_start.day}日"
                 "13:30 至 17:10"
             )
             assert any("吉甲大师双创基地机器人战队创新实践活动" in line for line in signed_paragraphs)

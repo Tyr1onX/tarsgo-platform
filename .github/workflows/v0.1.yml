@@ -110,6 +110,10 @@ jobs:
           test "$CAMP_TABLES" = "2"
           CAMP_EMPTY="$(docker compose exec -T db mysql -uroot -p"$CI_MYSQL_ROOT_PASSWORD" -N -B tarsgo_migration -e "SELECT CONCAT((SELECT COUNT(*) FROM camp_leave_events), '|', (SELECT COUNT(*) FROM camp_leave_participants))")"
           test "$CAMP_EMPTY" = "0|0"
+          DAILY_LEAVE_TABLES="$(docker compose exec -T db mysql -uroot -p"$CI_MYSQL_ROOT_PASSWORD" -N -B -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'tarsgo_migration' AND table_name IN ('daily_leave_windows', 'daily_leave_entries')")"
+          test "$DAILY_LEAVE_TABLES" = "2"
+          DAILY_LEAVE_EMPTY="$(docker compose exec -T db mysql -uroot -p"$CI_MYSQL_ROOT_PASSWORD" -N -B tarsgo_migration -e "SELECT CONCAT((SELECT COUNT(*) FROM daily_leave_windows), '|', (SELECT COUNT(*) FROM daily_leave_entries))")"
+          test "$DAILY_LEAVE_EMPTY" = "0|0"
           LEGACY_RUN="$(docker compose exec -T db mysql -uroot -p"$CI_MYSQL_ROOT_PASSWORD" -N -B tarsgo_migration -e "SELECT CONCAT(status, '|', DATE_FORMAT(downloaded_at, '%Y-%m-%d %H:%i:%s'), '|', downloaded_by) FROM school_leave_runs WHERE id = 200")"
           test "$LEGACY_RUN" = "awaiting_return|2026-10-04 12:00:00|100"
           RESULT="$(docker compose exec -T db mysql -uroot -p"$CI_MYSQL_ROOT_PASSWORD" -N -B tarsgo_migration -e "
@@ -181,6 +185,9 @@ jobs:
 
       - name: Verify school leave completion loop
         run: docker compose exec -T api python -m tests.test_school_leave_completion
+
+      - name: Verify Leave V2 workflows and DOCX templates
+        run: docker compose exec -T api python -m tests.test_leave_v2
 
       - name: Verify school leave result cleanup job
         run: docker compose exec -T api python -m app.jobs.cleanup_school_leave_results

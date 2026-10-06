@@ -9,6 +9,11 @@ import type {
   CampLeaveEventCreatePayload,
   CampLeaveEventMember,
   CampLeavePublicEvent,
+  DailyLeavePublicEntry,
+  DailyLeavePublicWindow,
+  DailyLeaveWindowAdmin,
+  DailyLeaveWindowCreatePayload,
+  DailyLeaveWindowMember,
   AIItemReviewResult,
   AIItemReviewSuggestion,
   AIItemFactExtractionResult,
@@ -81,6 +86,24 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   }
   if (response.status === 204) return undefined as T
   return response.json() as Promise<T>
+}
+
+async function downloadFile(url: string, fallbackName: string, init?: RequestInit) {
+  const response = await fetch(url, init)
+  if (!response.ok) {
+    let message = "下载失败"
+    try {
+      const data = (await response.json()) as { detail?: string }
+      if (data.detail) message = data.detail
+    } catch {}
+    throw new ApiError(response.status, message)
+  }
+  const disposition = response.headers.get("content-disposition") ?? ""
+  const encodedName = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1]
+  return {
+    blob: await response.blob(),
+    filename: encodedName ? decodeURIComponent(encodedName) : fallbackName,
+  }
 }
 
 export interface TaskPayload {
@@ -196,8 +219,35 @@ export const api = {
     const encodedName = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1] ?? "吉甲大师请假条.docx"
     return { blob: await response.blob(), filename: decodeURIComponent(encodedName) }
   },
+  downloadLegacySchoolLeaveRunDocument: (runId: number) =>
+    downloadFile(`/api/school-leave/admin/runs/${runId}/history-document`, "历史请假汇总.docx"),
+  downloadLegacySchoolLeaveGroupDocument: (runId: number, groupIndex: number) =>
+    downloadFile(`/api/school-leave/admin/runs/${runId}/documents/${groupIndex}`, "历史请假材料.docx"),
   deleteSchoolLeaveRun: (runId: number) =>
     request<void>(`/api/school-leave/admin/runs/${runId}`, { method: "DELETE" }),
+
+  dailyLeaveWindows: () => request<DailyLeaveWindowMember[]>("/api/daily-leave/windows"),
+  dailyLeaveAdminWindows: () => request<DailyLeaveWindowAdmin[]>("/api/daily-leave/admin/windows"),
+  createDailyLeaveWindow: (payload: DailyLeaveWindowCreatePayload) =>
+    request<DailyLeaveWindowAdmin>("/api/daily-leave/admin/windows", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  closeDailyLeaveWindow: (windowId: number) =>
+    request<DailyLeaveWindowAdmin>(`/api/daily-leave/admin/windows/${windowId}/close`, { method: "POST" }),
+  downloadDailyLeaveDocument: (windowId: number, offline = false) =>
+    downloadFile(
+      `/api/daily-leave/windows/${windowId}/document${offline ? "?offline=true" : ""}`,
+      "请假条.docx",
+    ),
+  publicDailyLeaveWindow: (token: string) =>
+    request<DailyLeavePublicWindow>(`/api/daily-leave/public/${encodeURIComponent(token)}`),
+  generatePublicDailyLeaveDocument: (token: string, payload: DailyLeavePublicEntry, offline = false) =>
+    downloadFile(
+      `/api/daily-leave/public/${encodeURIComponent(token)}/document${offline ? "?offline=true" : ""}`,
+      "请假条.docx",
+      { method: "POST", body: JSON.stringify(payload), headers: { "Content-Type": "application/json" } },
+    ),
 
   campLeaveEvents: () => request<CampLeaveEventMember[]>("/api/camp-leave/events"),
   createCampLeaveEvent: (payload: CampLeaveEventCreatePayload) =>
@@ -223,6 +273,13 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  downloadCampLeaveAdminCollegeDocument: (eventId: number, college: string, offline = false) =>
+    downloadFile(
+      `/api/camp-leave/admin/events/${eventId}/colleges/${encodeURIComponent(college)}/document${offline ? "?offline=true" : ""}`,
+      "集中请假名单.docx",
+    ),
+  downloadCampLeaveMemberDocument: (eventId: number) =>
+    downloadFile(`/api/camp-leave/events/${eventId}/document`, "集中请假名单.docx"),
 
   aiPlannerAccess: () => request<AIPlannerAccess>("/api/ai/planner/access"),
   generateAIPlan: (payload: AIPlannerInput) =>

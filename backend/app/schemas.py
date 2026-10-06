@@ -16,6 +16,8 @@ SchoolLeaveResultState = Literal["available", "cleared"]
 CampLeaveType = Literal["winter", "summer"]
 CampLeaveStatus = Literal["collecting", "closed"]
 CampLeaveParticipantType = Literal["formal", "reserve", "other"]
+DailyLeaveParticipantType = Literal["formal", "reserve", "other"]
+DailyLeaveWindowStatus = Literal["open", "closed"]
 ItemFactScope = Literal["global", "related"]
 TaskDetailText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=240)]
 ContextFactText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)]
@@ -256,6 +258,100 @@ class SchoolLeaveRequestOut(BaseModel):
     result_state: SchoolLeaveResultState | None = None
     created_at: datetime
     updated_at: datetime
+
+
+def _normalize_daily_leave_datetime(value: datetime) -> datetime:
+    if value.tzinfo is not None:
+        raise ValueError("请使用北京时间，不要包含时区偏移")
+    return value.replace(second=0, microsecond=0)
+
+
+class DailyLeaveWindowCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(min_length=1, max_length=100)
+    start_at: datetime
+    end_at: datetime
+    open_until: datetime
+    team_open: bool = True
+    public_enabled: bool = False
+
+    @field_validator("title")
+    @classmethod
+    def clean_title(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("活动名称不能为空")
+        return value
+
+    @field_validator("start_at", "end_at", "open_until")
+    @classmethod
+    def normalize_time(cls, value: datetime) -> datetime:
+        return _normalize_daily_leave_datetime(value)
+
+    @model_validator(mode="after")
+    def validate_times(self):
+        if self.start_at >= self.end_at:
+            raise ValueError("活动开始时间必须早于结束时间")
+        if self.open_until > self.end_at:
+            raise ValueError("开放截止时间不能晚于活动结束时间")
+        return self
+
+
+class DailyLeaveWindowMemberOut(BaseModel):
+    id: int
+    title: str
+    start_at: datetime
+    end_at: datetime
+    open_until: datetime
+    status: DailyLeaveWindowStatus
+    accepting_participants: bool
+
+
+class DailyLeaveWindowAdminOut(BaseModel):
+    id: int
+    title: str
+    start_at: datetime
+    end_at: datetime
+    open_until: datetime
+    team_open: bool
+    public_enabled: bool
+    status: DailyLeaveWindowStatus
+    accepting_participants: bool
+    entry_count: int
+    public_path: str | None
+    created_at: datetime
+
+
+class DailyLeavePublicWindowOut(BaseModel):
+    title: str
+    start_at: datetime
+    end_at: datetime
+    open_until: datetime
+    accepting_participants: bool
+
+
+class DailyLeavePublicEntryCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    student_id: str
+    college: str
+
+    @field_validator("name")
+    @classmethod
+    def clean_name(cls, value: str) -> str:
+        return validate_member_name(value)
+
+    @field_validator("student_id")
+    @classmethod
+    def check_student_id(cls, value: str) -> str:
+        return validate_student_id(value)
+
+    @field_validator("college")
+    @classmethod
+    def check_college(cls, value: str) -> str:
+        return validate_college(value)
 
 
 class SchoolLeaveReasonUpdate(BaseModel):

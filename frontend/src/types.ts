@@ -233,6 +233,49 @@ export interface SchoolLeaveAdminSummary {
   todo_count: number
 }
 
+export type DailyLeaveWindowStatus = "open" | "closed"
+
+export interface DailyLeaveWindowMember {
+  id: number
+  title: string
+  start_at: string
+  end_at: string
+  open_until: string
+  status: DailyLeaveWindowStatus
+  accepting_participants: boolean
+}
+
+export interface DailyLeaveWindowAdmin extends DailyLeaveWindowMember {
+  team_open: boolean
+  public_enabled: boolean
+  entry_count: number
+  public_path: string | null
+  created_at: string
+}
+
+export interface DailyLeaveWindowCreatePayload {
+  title: string
+  start_at: string
+  end_at: string
+  open_until: string
+  team_open: boolean
+  public_enabled: boolean
+}
+
+export interface DailyLeavePublicWindow {
+  title: string
+  start_at: string
+  end_at: string
+  open_until: string
+  accepting_participants: boolean
+}
+
+export interface DailyLeavePublicEntry {
+  name: string
+  student_id: string
+  college: string
+}
+
 export type CampLeaveType = "winter" | "summer"
 export type CampLeaveStatus = "collecting" | "closed"
 export type CampLeaveParticipantType = "formal" | "reserve" | "other"

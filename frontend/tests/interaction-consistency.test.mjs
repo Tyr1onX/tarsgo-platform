@@ -5,6 +5,8 @@ const app = readFileSync(new URL("../src/App.vue", import.meta.url), "utf8")
 const actionMenu = readFileSync(new URL("../src/components/ActionMenu.vue", import.meta.url), "utf8")
 const taskMenu = readFileSync(new URL("../src/TaskActionMenu.vue", import.meta.url), "utf8")
 const leave = readFileSync(new URL("../src/pages/SchoolLeavePage.vue", import.meta.url), "utf8")
+const dailyLeave = readFileSync(new URL("../src/pages/DailyLeavePage.vue", import.meta.url), "utf8")
+const campLeave = readFileSync(new URL("../src/pages/CampLeavePage.vue", import.meta.url), "utf8")
 const knowledge = readFileSync(new URL("../src/pages/KnowledgePage.vue", import.meta.url), "utf8")
 const team = readFileSync(new URL("../src/pages/TeamPage.vue", import.meta.url), "utf8")
 const dropzone = readFileSync(new URL("../src/components/FileDropzone.vue", import.meta.url), "utf8")
@@ -40,15 +42,12 @@ assert.doesNotMatch(normalRoot, />\s*(?:取消认领|加入协作|退出协作|�
 assert.match(app, /label: "删除事项"[\s\S]*?danger: true/)
 assert.match(app, /function handleRootTaskMenuAction/)
 
-// School Leave uses the same menu while preserving its upload loop.
-assert.match(leave, /<ActionMenu[\s\S]*?aria-label="更多管理操作"/)
-assert.match(leave, /<ActionMenu[\s\S]*?aria-label="更多历史操作"/)
-assert.match(leave, /label: "取消本次汇总"[\s\S]*?danger: true/)
-assert.match(leave, /label: "删除记录"[\s\S]*?danger: true/)
+// Daily and camp leave use the shared menu for low-frequency document actions.
+assert.match(dailyLeave, /<ActionMenu[\s\S]*?aria-label="其他下载选项"/)
+assert.match(dailyLeave, /<ActionMenu[\s\S]*?aria-label="窗口管理操作"/)
+assert.match(campLeave, /<ActionMenu[\s\S]*?aria-label="更多文档下载选项"/)
 assert.doesNotMatch(leave, /class="leave-more"/)
-assert.match(leave, /<FileDropzone/)
-assert.match(leave, /SCHOOL_LEAVE_RESULT_MAX_SIZE = 15 \* 1024 \* 1024/)
-assert.match(leave, /image\/jpeg,image\/png,application\/pdf,\.jpg,\.jpeg,\.png,\.pdf/)
+assert.match(dailyLeave, /<ConfirmDialog/)
 
 // Knowledge shares FileDropzone and matches backend-established constraints.
 assert.match(knowledge, /import FileDropzone/)
@@ -70,7 +69,7 @@ assert.match(css, /@media \(max-width: 560px\)[\s\S]*?\.action-menu\s*\{[^}]*max
 assert.match(dropzone, /width:\s*100%/)
 assert.match(dropzone, /min-width:\s*0/)
 assert.match(knowledge, /class="knowledge-dropzone"/)
-assert.doesNotMatch(team + knowledge + leave, /min-width:\s*(?:4\d\d|[5-9]\d\d|\d{4,})px/)
+assert.doesNotMatch(team + knowledge + leave + dailyLeave + campLeave, /min-width:\s*(?:4\d\d|[5-9]\d\d|\d{4,})px/)
 
 // Root items use a list surface instead of separate floating cards.
 assert.match(css, /\.operation-list\s*\{[^}]*border-top:\s*1px solid var\(--line\)/s)

@@ -35,6 +35,8 @@ SCHOOL_LEAVE_RUN_STATUS_VALUES = ("ready", "awaiting_return", "completed", "canc
 CAMP_LEAVE_TYPE_VALUES = ("winter", "summer")
 CAMP_LEAVE_STATUS_VALUES = ("collecting", "closed")
 CAMP_LEAVE_PARTICIPANT_TYPE_VALUES = ("formal", "reserve", "other")
+DAILY_LEAVE_WINDOW_STATUS_VALUES = ("open", "closed")
+DAILY_LEAVE_PARTICIPANT_TYPE_VALUES = ("formal", "reserve", "other")
 
 
 task_collaborators = Table(
@@ -226,6 +228,72 @@ class SchoolLeaveRequest(Base):
 
     member: Mapped[Member] = relationship(foreign_keys=[member_id])
     run: Mapped[SchoolLeaveRun | None] = relationship(back_populates="requests")
+
+
+class DailyLeaveWindow(Base):
+    __tablename__ = "daily_leave_windows"
+    __table_args__ = (
+        CheckConstraint("status IN ('open','closed')", name="ck_daily_leave_windows_status"),
+        CheckConstraint("start_at < end_at", name="ck_daily_leave_windows_time_order"),
+        CheckConstraint(
+            "public_enabled = 0 OR public_token IS NOT NULL",
+            name="ck_daily_leave_windows_public_token_required",
+        ),
+        CheckConstraint(
+            "public_enabled = 1 OR public_token IS NULL",
+            name="ck_daily_leave_windows_public_token_disabled",
+        ),
+        UniqueConstraint("public_token", name="uq_daily_leave_windows_public_token"),
+        Index("ix_daily_leave_windows_status_open_until", "status", "open_until"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    title: Mapped[str] = mapped_column(String(100), nullable=False)
+    start_at: Mapped[datetime] = mapped_column(DateTime(), nullable=False)
+    end_at: Mapped[datetime] = mapped_column(DateTime(), nullable=False)
+    open_until: Mapped[datetime] = mapped_column(DateTime(), nullable=False)
+    team_open: Mapped[bool] = mapped_column(Boolean(), default=True, server_default=text("1"), nullable=False)
+    public_enabled: Mapped[bool] = mapped_column(Boolean(), default=False, server_default=text("0"), nullable=False)
+    public_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="open", server_default="open", nullable=False)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("members.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(), server_default=func.now(), nullable=False)
+
+    creator: Mapped[Member | None] = relationship()
+    entries: Mapped[list["DailyLeaveEntry"]] = relationship(
+        back_populates="window", cascade="all, delete-orphan"
+    )
+
+
+class DailyLeaveEntry(Base):
+    __tablename__ = "daily_leave_entries"
+    __table_args__ = (
+        CheckConstraint(
+            "participant_type IN ('formal','reserve','other')",
+            name="ck_daily_leave_entries_participant_type",
+        ),
+        CheckConstraint("CHAR_LENGTH(name_snapshot) BETWEEN 2 AND 50", name="ck_daily_leave_entries_name_length"),
+        CheckConstraint("CHAR_LENGTH(student_id_snapshot) = 8", name="ck_daily_leave_entries_student_id_length"),
+        CheckConstraint(
+            "college_snapshot IN (" + ",".join(f"'{code}'" for code in sorted(COLLEGE_CODES)) + ")",
+            name="ck_daily_leave_entries_college",
+        ),
+        UniqueConstraint("window_id", "student_id_snapshot", name="uq_daily_leave_window_student"),
+        UniqueConstraint("window_id", "member_id", name="uq_daily_leave_window_member"),
+        Index("ix_daily_leave_entries_window_college", "window_id", "college_snapshot"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    window_id: Mapped[int] = mapped_column(ForeignKey("daily_leave_windows.id", ondelete="CASCADE"), nullable=False)
+    member_id: Mapped[int | None] = mapped_column(ForeignKey("members.id", ondelete="SET NULL"), nullable=True)
+    name_snapshot: Mapped[str] = mapped_column(String(50), nullable=False)
+    student_id_snapshot: Mapped[str] = mapped_column(String(8), nullable=False)
+    college_snapshot: Mapped[str] = mapped_column(String(50), nullable=False)
+    participant_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    submitted_at: Mapped[datetime] = mapped_column(DateTime(), server_default=func.now(), nullable=False)
+
+    window: Mapped[DailyLeaveWindow] = relationship(back_populates="entries")
+    member: Mapped[Member | None] = relationship()
 
 
 class CampLeaveEvent(Base):

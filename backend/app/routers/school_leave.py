@@ -505,6 +505,27 @@ def download_run_document(
     )
 
 
+@router.get("/admin/runs/{run_id}/history-document")
+def download_legacy_history_document(
+    run_id: int,
+    _: Member = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> StreamingResponse:
+    """Read-only download for the legacy history section."""
+    run, groups = _document_context(db, run_id)
+    content = build_school_leave_run_docx(
+        run,
+        groups,
+        contact_phone=get_leave_contact_phone(),
+    )
+    filename = school_leave_run_document_filename(db, run)
+    return StreamingResponse(
+        io.BytesIO(content),
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
+    )
+
+
 @router.post(
     "/admin/runs/{run_id}/groups/{group_index}/result",
     response_model=SchoolLeaveGroupResultOut,

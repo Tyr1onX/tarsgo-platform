@@ -87,8 +87,11 @@ const MemberDetailPage = defineLazyPage(() => import("./pages/MemberDetailPage.v
 const KnowledgePage = defineLazyPage(() => import("./pages/KnowledgePage.vue"))
 const SchoolLeavePage = defineLazyPage(() => import("./pages/SchoolLeavePage.vue"))
 const CampLeavePublicPage = defineLazyPage(() => import("./pages/CampLeavePublicPage.vue"))
+const DailyLeavePublicPage = defineLazyPage(() => import("./pages/DailyLeavePublicPage.vue"))
 const campLeavePublicToken = computed(() => path.value.match(/^\/leave\/camp\/([A-Za-z0-9_-]+)$/)?.[1] ?? "")
 const isCampLeavePublicRoute = computed(() => path.value.startsWith("/leave/camp/"))
+const dailyLeavePublicToken = computed(() => path.value.match(/^\/leave\/daily\/([A-Za-z0-9_-]+)$/)?.[1] ?? "")
+const isDailyLeavePublicRoute = computed(() => path.value.startsWith("/leave/daily/"))
 const user = ref<Member | null>(null)
 const loading = ref(true)
 const initialRouteResolved = ref(false)
@@ -1056,7 +1059,8 @@ async function loadRoute() {
       routePath === "/login" ||
       routePath.startsWith("/invite/") ||
       routePath.startsWith("/register/") ||
-      routePath.startsWith("/leave/camp/")
+      routePath.startsWith("/leave/camp/") ||
+      routePath.startsWith("/leave/daily/")
     if (!publicPage && !user.value) {
       await loadCurrentUser()
       if (!isCurrentLoad()) return
@@ -1066,8 +1070,8 @@ async function loadRoute() {
       }
     }
 
-    if (routePath.startsWith("/leave/camp/")) {
-      // Public camp signup page intentionally loads no authenticated team data.
+    if (routePath.startsWith("/leave/camp/") || routePath.startsWith("/leave/daily/")) {
+      // Public leave links intentionally load no authenticated team data.
     } else if (routePath === "/login") {
       if (user.value) {
         navigate("/")
@@ -2459,7 +2463,7 @@ onMounted(async () => {
   window.addEventListener("keydown", handlePlannerDetailKeydown)
   window.addEventListener("focus", handleExecutionRefreshSignal)
   document.addEventListener("visibilitychange", handleExecutionRefreshSignal)
-  if (!isCampLeavePublicRoute.value) {
+  if (!isCampLeavePublicRoute.value && !isDailyLeavePublicRoute.value) {
     try {
       await loadCurrentUser()
     } catch (reason) {
@@ -2501,6 +2505,10 @@ onBeforeUnmount(() => {
 
   <main v-if="path.startsWith('/leave/camp/')" class="auth-shell">
     <CampLeavePublicPage :token="campLeavePublicToken" />
+  </main>
+
+  <main v-else-if="path.startsWith('/leave/daily/')" class="auth-shell">
+    <DailyLeavePublicPage :token="dailyLeavePublicToken" />
   </main>
 
   <main v-else-if="path === '/login'" class="auth-shell">

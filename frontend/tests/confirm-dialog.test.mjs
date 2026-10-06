@@ -4,6 +4,8 @@ import { readFileSync } from "node:fs"
 const dialog = readFileSync(new URL("../src/components/ConfirmDialog.vue", import.meta.url), "utf8")
 const app = readFileSync(new URL("../src/App.vue", import.meta.url), "utf8")
 const leave = readFileSync(new URL("../src/pages/SchoolLeavePage.vue", import.meta.url), "utf8")
+const dailyLeave = readFileSync(new URL("../src/pages/DailyLeavePage.vue", import.meta.url), "utf8")
+const campLeave = readFileSync(new URL("../src/pages/CampLeavePage.vue", import.meta.url), "utf8")
 const knowledge = readFileSync(new URL("../src/pages/KnowledgePage.vue", import.meta.url), "utf8")
 const memberDetail = readFileSync(new URL("../src/pages/MemberDetailPage.vue", import.meta.url), "utf8")
 
@@ -98,34 +100,27 @@ assert.match(removeKnowledge, /danger: true/)
 assert.match(removeKnowledge, /api\.deleteKnowledgeDocument\(document\.id\)/)
 assert.match(knowledge, /emit\(['"]remove['"], document\)/)
 
-// School Leave owns one confirmation state for its three existing flows.
-assert.match(leave, /import ConfirmDialog from "\.\.\/components\/ConfirmDialog\.vue"/)
-assert.match(leave, /const leaveConfirm = ref<LeaveConfirmRequest \| null>\(null\)/)
-assert.match(leave, /<ConfirmDialog[\s\S]*?:open="leaveConfirm !== null"/)
+// Daily window closure uses the shared dialog; old summary history is read-only.
+assert.match(dailyLeave, /import ConfirmDialog from "\.\.\/components\/ConfirmDialog\.vue"/)
+assert.match(dailyLeave, /<ConfirmDialog[\s\S]*?:open="closeRequest !== null"/)
+assert.match(dailyLeave, /关闭请假窗口？/)
+assert.match(dailyLeave, /closeDailyLeaveWindow\(window\.id\)/)
+assert.match(leave, /<DailyLeavePage/)
 
-const withdrawRequest = functionSource(leave, "withdrawRequest")
-assert.match(withdrawRequest, /title: "撤回请假申请？"/)
-assert.match(withdrawRequest, /confirmLabel: "撤回申请"/)
-assert.doesNotMatch(withdrawRequest, /danger: true/)
-assert.match(withdrawRequest, /api\.withdrawSchoolLeaveRequest\(item\.id\)/)
-
-const cancelRun = functionSource(leave, "cancelRun")
-assert.match(cancelRun, /title: "取消本次汇总？"/)
-assert.match(cancelRun, /申请会退回待汇总/)
-assert.match(cancelRun, /danger: true/)
-assert.match(cancelRun, /api\.cancelSchoolLeaveRun\(run\.id\)/)
-
-const deleteRun = functionSource(leave, "deleteRun")
-assert.match(deleteRun, /title: "删除已完成记录？"/)
-assert.match(deleteRun, /run\.request_count/)
-assert.match(deleteRun, /此操作不可恢复/)
-assert.match(deleteRun, /danger: true/)
-assert.match(deleteRun, /api\.deleteSchoolLeaveRun\(run\.id\)/)
+// Camp event closure and erroneous participant removal remain confirmed destructive actions.
+assert.match(campLeave, /<ConfirmDialog[\s\S]*?:open="confirmation !== null"/)
+const closeCampEvent = functionSource(campLeave, "closeEvent")
+assert.match(closeCampEvent, /title: "关闭本次报名？"/)
+assert.match(closeCampEvent, /danger: true/)
+assert.match(closeCampEvent, /api\.closeCampLeaveEvent\(event\.id\)/)
+const removeCampParticipant = functionSource(campLeave, "removeParticipant")
+assert.match(removeCampParticipant, /title: "移除这条报名？"/)
+assert.match(removeCampParticipant, /danger: true/)
+assert.match(removeCampParticipant, /api\.removeCampLeaveParticipant\(eventId, participantId\)/)
 
 // No business code falls back to the browser-native confirm.
 assert.doesNotMatch(app, /window\.confirm/)
-assert.doesNotMatch(leave, /window\.confirm/)
+assert.doesNotMatch(leave + dailyLeave + campLeave, /window\.confirm/)
 assert.equal((app.match(/requestAppConfirmation\(\{/g) ?? []).length, 5)
-assert.equal((leave.match(/requestLeaveConfirmation\(\{/g) ?? []).length, 3)
 
-console.log("Unified ConfirmDialog behavior, focus, danger semantics, and eight business migrations passed")
+console.log("Unified ConfirmDialog behavior, focus, danger semantics, and leave confirmation flows passed")

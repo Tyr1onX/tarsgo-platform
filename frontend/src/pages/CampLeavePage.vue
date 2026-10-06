@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from "vue"
 
 import { api } from "../api"
+import ActionMenu from "../components/ActionMenu.vue"
 import ConfirmDialog from "../components/ConfirmDialog.vue"
 import type { CampLeaveAdminEvent, CampLeaveAdminEventDetail, CampLeaveEventMember, Member } from "../types"
 
@@ -36,13 +37,32 @@ const profileReady = computed(() =>
   Boolean(props.currentUser.college) &&
   (props.currentUser.team_membership === "formal" || props.currentUser.team_membership === "reserve"),
 )
-const activeEvents = computed(() => memberEvents.value.filter((event) =>
-  event.status === "collecting" && (isAdmin.value || event.accepting_participants),
-))
-const historyEvents = computed(() => memberEvents.value.filter((event) =>
-  event.status !== "collecting" || (!isAdmin.value && !event.accepting_participants),
-))
 const adminEventById = computed(() => new Map(adminEvents.value.map((event) => [event.id, event])))
+const visibleEvents = computed<CampLeaveEventMember[]>(() => {
+  if (!isAdmin.value) return memberEvents.value
+  return adminEvents.value.map((event) => {
+    const ownState = memberEvents.value.find((item) => item.id === event.id)
+    return {
+      id: event.id,
+      title: event.title,
+      type: event.type,
+      start_date: event.start_date,
+      end_date: event.end_date,
+      collection_deadline: event.collection_deadline,
+      status: event.status,
+      accepting_participants: event.accepting_participants,
+      joined: ownState?.joined ?? false,
+      participant_type: ownState?.participant_type ?? null,
+      submitted_at: ownState?.submitted_at ?? null,
+    }
+  })
+})
+const activeEvents = computed(() => visibleEvents.value.filter((event) =>
+  event.status === "collecting" && event.accepting_participants,
+))
+const historyEvents = computed(() => visibleEvents.value.filter((event) =>
+  event.status !== "collecting" || !event.accepting_participants,
+))
 
 function messageOf(reason: unknown) {
   return reason instanceof Error ? reason.message : "操作失败"
@@ -223,6 +243,52 @@ function absolutePublicLink(event: CampLeaveAdminEvent) {
   return new URL(event.public_path, window.location.origin).toString()
 }
 
+function collectionEnded(event: CampLeaveEventMember | CampLeaveAdminEvent) {
+  return event.status === "closed" || !event.accepting_participants
+}
+
+function saveBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement("a")
+  anchor.href = url
+  anchor.download = filename
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
+  URL.revokeObjectURL(url)
+}
+
+async function downloadMemberCollegeDocument(event: CampLeaveEventMember) {
+  saving.value = true
+  error.value = ""
+  notice.value = ""
+  try {
+    const file = await api.downloadCampLeaveMemberDocument(event.id)
+    saveBlob(file.blob, file.filename)
+  } catch (reason) {
+    error.value = messageOf(reason)
+  } finally {
+    saving.value = false
+  }
+}
+
+async function downloadAdminCollegeDocument(eventId: number, college: string, offline = false) {
+  saving.value = true
+  error.value = ""
+  try {
+    const file = await api.downloadCampLeaveAdminCollegeDocument(eventId, college, offline)
+    saveBlob(file.blob, file.filename)
+  } catch (reason) {
+    error.value = messageOf(reason)
+  } finally {
+    saving.value = false
+  }
+}
+
+function handleCollegeDocumentMenu(eventId: number, college: string, action: string) {
+  if (action === "offline") void downloadAdminCollegeDocument(eventId, college, true)
+}
+
 onMounted(load)
 </script>
 
@@ -270,8 +336,15 @@ onMounted(load)
                 @click="toggleParticipation(event)"
               >{{ saving ? "保存中…" : event.joined ? "取消参加" : "确认参加" }}</button>
               <button v-else-if="event.accepting_participants && !profileReady" class="text-action" type="button" @click="emit('navigate', '/me')">完善个人资料</button>
+              <button
+                v-if="event.joined && collectionEnded(event)"
+                class="text-action"
+                type="button"
+                :disabled="saving"
+                @click="downloadMemberCollegeDocument(event)"
+              >下载本学院 DOCX</button>
               <button v-if="isAdmin" class="text-action" type="button" @click="showEvent(event.id)">查看名单</button>
-              <button v-if="isAdmin && event.status === 'collecting'" class="text-action" type="button" @click="closeEvent(adminEventById.get(event.id)!)">关闭收集</button>
+              <button v-if="isAdmin && event.accepting_participants" class="text-action" type="button" @click="closeEvent(adminEventById.get(event.id)!)">关闭收集</button>
             </div>
           </article>
         </div>
@@ -292,7 +365,17 @@ onMounted(load)
               <p v-if="isAdmin && adminEventById.get(event.id)" class="camp-muted">{{ adminEventById.get(event.id)?.participant_count }} 人已报名</p>
             </div>
             <div v-if="isAdmin" class="camp-event-actions">
+              <button
+                v-if="event.joined && collectionEnded(event)"
+                class="text-action"
+                type="button"
+                :disabled="saving"
+                @click="downloadMemberCollegeDocument(event)"
+              >下载本学院 DOCX</button>
               <button class="text-action" type="button" @click="showEvent(event.id)">查看名单</button>
+            </div>
+            <div v-else-if="event.joined && collectionEnded(event)" class="camp-event-actions">
+              <button class="text-action" type="button" :disabled="saving" @click="downloadMemberCollegeDocument(event)">下载本学院 DOCX</button>
             </div>
           </article>
         </div>
@@ -343,7 +426,19 @@ onMounted(load)
           </div>
           <p v-if="!selectedDetail.groups.length" class="camp-muted">还没有报名记录。</p>
           <div v-for="group in selectedDetail.groups" :key="group.college" class="camp-college-group">
-            <div class="camp-college-heading"><strong>{{ group.college_name }}</strong><span>{{ group.count }} 人</span></div>
+            <div class="camp-college-heading">
+              <strong>{{ group.college_name }}</strong><span>{{ group.count }} 人</span>
+              <div v-if="collectionEnded(selectedDetail.event)" class="camp-doc-actions">
+                <button class="text-action" type="button" :disabled="saving" @click="downloadAdminCollegeDocument(selectedDetail.event.id, group.college)">下载 DOCX</button>
+                <ActionMenu
+                  :id="`camp-doc-${selectedDetail.event.id}-${group.college}`"
+                  aria-label="更多文档下载选项"
+                  :disabled="saving"
+                  :actions="[{ key: 'offline', label: '下载线下签章版' }]"
+                  @select="handleCollegeDocumentMenu(selectedDetail.event.id, group.college, $event)"
+                />
+              </div>
+            </div>
             <div v-for="person in group.participants" :key="person.id" class="camp-person-row">
               <div><strong>{{ person.name }}</strong><span>{{ person.student_id }}</span><small>{{ identityLabel(person.participant_type) }}</small></div>
               <button v-if="selectedDetail.event.status === 'collecting' && selectedDetail.event.accepting_participants" class="text-action" type="button" @click="removeParticipant(selectedDetail.event.id, person.id, person.name)">移除</button>
@@ -389,6 +484,8 @@ onMounted(load)
 .camp-college-group { min-width: 0; }
 .camp-college-heading { display: flex; justify-content: space-between; gap: 12px; padding: 10px 0 5px; color: var(--secondary); font-size: 12px; }
 .camp-college-heading span { color: var(--faint); }
+.camp-doc-actions { display: flex; align-items: center; gap: 10px; margin-left: auto; flex: 0 0 auto; }
+.camp-doc-actions button { padding: 1px 0; white-space: nowrap; }
 .camp-person-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; padding: 8px 0; border-top: 1px solid var(--line); }
 .camp-person-row > div { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; min-width: 0; font-size: 13px; }
 .camp-person-row strong { font-weight: 560; }
@@ -401,5 +498,7 @@ onMounted(load)
   .camp-create-form { grid-template-columns: minmax(0, 1fr); }
   .camp-title-field { grid-column: auto; }
   .camp-link-row { align-items: flex-start; flex-direction: column; }
+  .camp-college-heading { flex-wrap: wrap; align-items: center; }
+  .camp-doc-actions { margin-left: 0; }
 }
 </style>

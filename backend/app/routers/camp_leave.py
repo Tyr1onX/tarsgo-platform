@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import io
 from collections import defaultdict
 from datetime import datetime
+from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -12,6 +15,7 @@ from sqlalchemy.orm import Session
 from ..auth import get_current_member, new_token, require_admin
 from ..college_dictionary import COLLEGE_BY_CODE
 from ..db import get_db
+from ..leave_documents import DOCX_MIME_TYPE, build_camp_leave_college_docx
 from ..models import CampLeaveEvent, CampLeaveParticipant, Member
 from ..schemas import (
     CampLeaveAdminEventDetailOut,
@@ -130,6 +134,42 @@ def _public_event(token: str, db: Session) -> CampLeaveEvent:
     if event is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="报名链接无效")
     return event
+
+
+def _require_collection_ended(event: CampLeaveEvent) -> None:
+    if event.status != "closed" and event.collection_deadline > camp_leave_now():
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="收集结束后才能下载名单材料")
+
+
+def _camp_college_document(
+    event: CampLeaveEvent,
+    participants: list[CampLeaveParticipant],
+    college_code: str,
+    *,
+    offline: bool,
+) -> StreamingResponse:
+    content = build_camp_leave_college_docx(
+        title=event.title,
+        event_type=event.type,
+        start_date=event.start_date,
+        end_date=event.end_date,
+        participants=[
+            (
+                participant.name_snapshot,
+                participant.student_id_snapshot,
+                COLLEGE_BY_CODE[participant.college_snapshot]["name"],
+            )
+            for participant in participants
+        ],
+        offline=offline,
+    )
+    kind = "线下签章版" if offline else "名单"
+    filename = f"{event.title}_{COLLEGE_BY_CODE[college_code]['name']}_{kind}.docx"
+    return StreamingResponse(
+        io.BytesIO(content),
+        media_type=DOCX_MIME_TYPE,
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
+    )
 
 
 @router.get("/events", response_model=list[CampLeaveEventMemberOut])
@@ -315,6 +355,63 @@ def remove_participant(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="报名记录不存在")
     db.delete(participant)
     db.commit()
+
+
+@router.get("/admin/events/{event_id}/colleges/{college_code}/document")
+def admin_college_document(
+    event_id: int,
+    college_code: str,
+    offline: bool = False,
+    _: Member = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> StreamingResponse:
+    if college_code not in COLLEGE_BY_CODE:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="学院名单不存在")
+    event = get_event(db, event_id)
+    _require_collection_ended(event)
+    participants = list(
+        db.scalars(
+            select(CampLeaveParticipant)
+            .where(
+                CampLeaveParticipant.event_id == event.id,
+                CampLeaveParticipant.college_snapshot == college_code,
+            )
+            .order_by(CampLeaveParticipant.name_snapshot, CampLeaveParticipant.student_id_snapshot)
+        )
+    )
+    if not participants:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="该学院没有参加者")
+    return _camp_college_document(event, participants, college_code, offline=offline)
+
+
+@router.get("/events/{event_id}/document")
+def member_college_document(
+    event_id: int,
+    offline: bool = False,
+    current: Member = Depends(get_current_member),
+    db: Session = Depends(get_db),
+) -> StreamingResponse:
+    event = get_event(db, event_id)
+    _require_collection_ended(event)
+    own_entry = db.scalar(
+        select(CampLeaveParticipant).where(
+            CampLeaveParticipant.event_id == event.id,
+            CampLeaveParticipant.member_id == current.id,
+        )
+    )
+    if own_entry is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="未找到你的活动记录")
+    participants = list(
+        db.scalars(
+            select(CampLeaveParticipant)
+            .where(
+                CampLeaveParticipant.event_id == event.id,
+                CampLeaveParticipant.college_snapshot == own_entry.college_snapshot,
+            )
+            .order_by(CampLeaveParticipant.name_snapshot, CampLeaveParticipant.student_id_snapshot)
+        )
+    )
+    return _camp_college_document(event, participants, own_entry.college_snapshot, offline=offline)
 
 
 @router.get("/public/{token}", response_model=CampLeavePublicEventOut)

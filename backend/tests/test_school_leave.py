@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import os
+import traceback
 from datetime import datetime
 from urllib.parse import unquote
 from concurrent.futures import ThreadPoolExecutor
@@ -698,4 +699,12 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except AssertionError as error:
+        frame = traceback.extract_tb(error.__traceback__)[-1]
+        print(
+            f"::error file=backend/tests/test_school_leave.py,line={frame.lineno},"
+            "title=SchoolLeaveTestFailure::Assertion failed"
+        )
+        raise

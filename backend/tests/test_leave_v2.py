@@ -386,7 +386,8 @@ def main() -> None:
             )
             assert signed_camp.status_code == 200, signed_camp.text
             camp_paragraphs, camp_tables = docx_text(signed_camp.content)
-            assert any("吉甲大师双创基地机器人战队寒假创新实践活动" in line for line in camp_paragraphs)
+            visible_camp_paragraphs = [line.replace("\u2060", "") for line in camp_paragraphs]
+            assert any("吉甲大师双创基地机器人战队寒假创新实践活动" in line for line in visible_camp_paragraphs)
             assert not any("测试冬令营活动" in line for line in camp_paragraphs)
             assert any("日常管理" in line and "全天候的实验室活动安排" in line for line in camp_paragraphs)
             assert camp_tables[0][0] == ["序号", "姓名", "学号", "学院"]
@@ -429,7 +430,8 @@ def main() -> None:
                 offline=True,
             )
             summer_paragraphs, summer_tables = docx_text(summer_content)
-            assert any("吉甲大师双创基地机器人战队暑假创新实践活动" in line for line in summer_paragraphs)
+            visible_summer_paragraphs = [line.replace("\u2060", "") for line in summer_paragraphs]
+            assert any("吉甲大师双创基地机器人战队暑假创新实践活动" in line for line in visible_summer_paragraphs)
             assert not any("测试夏令营活动" in line for line in summer_paragraphs)
             assert summer_tables[0][1][1:] == ["夏令营学生", "26000299", "人工智能学院"]
             assert package_media(summer_content) == set()

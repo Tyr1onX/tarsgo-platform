@@ -4,10 +4,11 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from .db import check_database
 from .knowledge import MAX_UPLOAD_BYTES
-from .routers import ai_items, ai_planner, auth, invitations, knowledge, members, school_leave, tasks, team_registration
+from .routers import ai_items, ai_planner, auth, colleges, invitations, knowledge, members, school_leave, tasks, team_registration
 
 app = FastAPI(title="TARS-Go Platform API")
 app.include_router(auth.router)
+app.include_router(colleges.router)
 app.include_router(invitations.router)
 app.include_router(members.router)
 app.include_router(team_registration.router)

@@ -1,5 +1,6 @@
 export type Role = "admin" | "member"
 export type TeamGroup = "electrical" | "mechanical" | "vision" | "ai" | "operations"
+export type TeamMembership = "formal" | "reserve"
 export type MemberStatus = "invited" | "active" | "disabled"
 export type TaskStatus = "todo" | "doing" | "done"
 export type TaskView = "mine" | "claimable" | "all"
@@ -11,6 +12,8 @@ export interface Member {
   email: string
   student_id: string | null
   team_group: TeamGroup | null
+  college: string | null
+  team_membership: TeamMembership | null
   role: Role
   status: MemberStatus
   created_at: string
@@ -116,6 +119,18 @@ export interface InviteResult {
   expires_at: string
 }
 
+export interface CollegeOption {
+  code: string
+  name: string
+}
+
+export interface MemberProfilePayload {
+  student_id: string | null
+  team_group: TeamGroup | null
+  college: string | null
+  team_membership: TeamMembership | null
+}
+
 export interface InvitationInfo {
   name: string
   email: string
@@ -141,7 +156,9 @@ export interface TeamRegistrationPayload {
   name: string
   email: string
   student_id: string
+  college: string
   team_group: TeamGroup
+  team_membership: TeamMembership
   password: string
 }
 

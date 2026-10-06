@@ -80,6 +80,10 @@ def update_member_profile(
         member.student_id = payload.student_id
     if "team_group" in fields:
         member.team_group = payload.team_group
+    if "college" in fields:
+        member.college = payload.college
+    if "team_membership" in fields:
+        member.team_membership = payload.team_membership
     try:
         db.commit()
     except IntegrityError as exc:

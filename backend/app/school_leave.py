@@ -6,7 +6,7 @@ import re
 import secrets
 from copy import deepcopy
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -18,6 +18,8 @@ from .models import SchoolLeaveGroupResult, SchoolLeaveRequest, SchoolLeaveRun
 
 
 DEFAULT_SCHOOL_LEAVE_REASON = "参加吉林大学吉甲大师机器人战队相关创新实践活动及工作安排"
+SCHOOL_LEAVE_DOCUMENT_REASON = "吉甲大师双创基地机器人战队创新实践活动"
+SCHOOL_LEAVE_DOCUMENT_TEMPLATE = "以下学生因参加{time_text}的{reason}，不能参加{course_period}，特此证明。"
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 SCHOOL_LEAVE_TEMPLATE_PATH = Path(__file__).with_name("templates") / "school_leave.docx"
 SCHOOL_LEAVE_RESULT_MAX_BYTES = 15 * 1024 * 1024
@@ -29,6 +31,12 @@ SCHOOL_LEAVE_RESULT_MIME_BY_SUFFIX = {
     ".pdf": "application/pdf",
 }
 _CUTOFF_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+# Official undergraduate teaching periods: https://jwc.jlu.edu.cn/sksj.htm
+_COURSE_PERIODS = (
+    (time(8, 0), time(11, 40), "上午"),
+    (time(13, 30), time(17, 10), "下午"),
+    (time(18, 20), time(21, 30), "晚间"),
+)
 
 
 @dataclass(frozen=True)
@@ -241,6 +249,22 @@ def format_school_leave_time(start_at: datetime, end_at: datetime) -> str:
     )
 
 
+def format_school_leave_course_period(start_at: datetime, end_at: datetime) -> str:
+    if start_at.date() != end_at.date():
+        return "当日对应课程"
+
+    start_time = start_at.time()
+    end_time = end_at.time()
+    matched = [
+        label
+        for period_start, period_end, label in _COURSE_PERIODS
+        if start_time < period_end and end_time > period_start
+    ]
+    if len(matched) == 1:
+        return f"{matched[0]}课程"
+    return "当日对应课程"
+
+
 def _replace_paragraph_text(paragraph, text: str) -> None:
     if not paragraph.runs:
         paragraph.add_run(text)
@@ -269,12 +293,10 @@ def _fill_school_leave_template(
     phone_indent = phone.text[: len(phone.text) - len(phone.text.lstrip())]
     issued_indent = issued.text[: len(issued.text) - len(issued.text.lstrip())]
 
-    body_text = body.text.replace(
-        "9月20日下午3点到5点",
-        format_school_leave_time(group.start_at, group.end_at),
-    ).replace(
-        "吉甲大师双创基地参观接待活动",
-        run.reason,
+    body_text = SCHOOL_LEAVE_DOCUMENT_TEMPLATE.format(
+        time_text=format_school_leave_time(group.start_at, group.end_at),
+        reason=SCHOOL_LEAVE_DOCUMENT_REASON,
+        course_period=format_school_leave_course_period(group.start_at, group.end_at),
     )
     _replace_paragraph_text(body, body_text)
     _replace_paragraph_text(phone, f"{phone_indent}联系电话：{contact_phone.strip()}")

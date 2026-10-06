@@ -1,0 +1,33 @@
+import assert from "node:assert/strict"
+import { readFile } from "node:fs/promises"
+
+const app = await readFile(new URL("../src/App.vue", import.meta.url), "utf8")
+const detail = await readFile(new URL("../src/pages/MemberDetailPage.vue", import.meta.url), "utf8")
+const types = await readFile(new URL("../src/types.ts", import.meta.url), "utf8")
+const api = await readFile(new URL("../src/api.ts", import.meta.url), "utf8")
+
+const registrationStart = app.indexOf('<main v-else-if="path.startsWith(\'/register/\')"')
+const registration = app.slice(registrationStart, registrationStart + 5200)
+assert.ok(registration.includes('v-model="registrationCollege"'))
+assert.ok(registration.includes('v-for="college in collegeOptions"'))
+assert.ok(registration.includes('v-model="registrationTeamMembership"'))
+assert.ok(registration.includes('v-model="registrationName"'))
+assert.ok(registration.includes('registrationFieldErrors.team_membership'))
+assert.ok(app.includes("await ensureCollegeOptions()"))
+assert.ok(app.includes("Array.from(normalizedName).length < 2"))
+assert.ok(app.includes("Array.from(normalizedName).length > 50"))
+assert.ok(app.includes("/^\\d{8}$/"))
+assert.ok(registration.includes('registrationFieldErrors.student_id'))
+assert.ok(registration.includes('registrationFieldErrors.college'))
+
+assert.ok(types.includes('export type TeamMembership = "formal" | "reserve"'))
+assert.ok(types.includes("college: string | null"))
+assert.ok(types.includes("team_membership: TeamMembership | null"))
+assert.ok(api.includes('colleges: () => request<CollegeOption[]>("/api/colleges")'))
+assert.ok(api.includes("const candidate = location.at(-1)"))
+assert.ok(detail.includes('v-for="college in collegeOptions"'))
+assert.ok(detail.includes('v-for="(label, code) in membershipLabels"'))
+assert.ok(detail.includes('fieldError(\'student_id\')'))
+assert.ok(detail.includes('fieldError(\'college\')'))
+
+console.log("Member identity frontend tests passed")

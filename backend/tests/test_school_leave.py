@@ -19,6 +19,7 @@ from app.models import Member, SchoolLeaveRequest, SchoolLeaveRun
 from app.school_leave import (
     SCHOOL_LEAVE_TEMPLATE_PATH,
     collect_pending_school_leave,
+    format_school_leave_course_period,
     school_leave_run_document_filename,
 )
 
@@ -68,11 +69,37 @@ def table_text(document: Document, index: int) -> str:
 
 
 def main() -> None:
+    assert format_school_leave_course_period(
+        datetime(2026, 10, 8, 8, 0), datetime(2026, 10, 8, 11, 40)
+    ) == "上午课程"
+    assert format_school_leave_course_period(
+        datetime(2026, 10, 8, 13, 0), datetime(2026, 10, 8, 17, 0)
+    ) == "下午课程"
+    assert format_school_leave_course_period(
+        datetime(2026, 10, 8, 18, 0), datetime(2026, 10, 8, 19, 0)
+    ) == "晚间课程"
+    assert format_school_leave_course_period(
+        datetime(2026, 10, 8, 10, 0), datetime(2026, 10, 8, 14, 0)
+    ) == "当日对应课程"
+    assert format_school_leave_course_period(
+        datetime(2026, 10, 8, 20, 0), datetime(2026, 10, 9, 9, 0)
+    ) == "当日对应课程"
+
     previous_phone = os.environ.get("LEAVE_CONTACT_PHONE")
     previous_cutoff = os.environ.get("LEAVE_DAILY_CUTOFF")
     previous_overrides = dict(app.dependency_overrides)
 
     with SessionLocal() as db:
+        template_body = next(
+            paragraph.text
+            for paragraph in Document(SCHOOL_LEAVE_TEMPLATE_PATH).paragraphs
+            if paragraph.text.startswith("以下学生因")
+        )
+        assert template_body == (
+            "以下学生因参加2026 年 10 月 6 日 13:00 至 17:00的吉甲大师双创基地机器人战队创新实践活动，"
+            "不能参加下午课程，特此证明。"
+        )
+
         existing_ids = list(db.scalars(select(Member.id).where(Member.email.in_(TEST_EMAILS))))
         if existing_ids:
             run_ids = list(
@@ -308,15 +335,37 @@ def main() -> None:
                 assert db.get(SchoolLeaveRequest, request_id) is not None
 
             # Re-collect released requests plus the later supplement.
+            set_actor(member_d)
+            morning = client.post(
+                "/api/school-leave/requests",
+                json=request_payload("2026-10-08T08:00:00", "2026-10-08T09:00:00"),
+            )
+            assert morning.status_code == 201, morning.text
+            morning_request_id = morning.json()["id"]
+
+            missing_id.student_id = "99000006"
+            db.commit()
+            set_actor(missing_id)
+            cross_period = client.post(
+                "/api/school-leave/requests",
+                json=request_payload("2026-10-08T10:00:00", "2026-10-08T14:00:00"),
+            )
+            assert cross_period.status_code == 201, cross_period.text
+            cross_period_request_id = cross_period.json()["id"]
+
+            # Re-collect released requests plus the later supplement and period examples.
             recollected = client.post("/api/school-leave/admin/runs/collect")
             assert recollected.status_code == 200, recollected.text
             run_two = recollected.json()
             run_two_id = run_two["id"]
-            assert run_two["request_count"] == 4
-            assert [group["count"] for group in run_two["groups"]] == [2, 1, 1]
+            assert run_two["request_count"] == 6
+            assert [group["count"] for group in run_two["groups"]] == [1, 1, 2, 1, 1]
+            db.expire_all()
+            assert db.get(SchoolLeaveRequest, morning_request_id).run_id == run_two_id
+            assert db.get(SchoolLeaveRequest, cross_period_request_id).run_id == run_two_id
             assert "send_message" not in run_two
 
-            # Ready reason can change and is reflected deterministically in generated files.
+            # Stored batch reason remains editable, while the form wording stays fixed.
             reason = "参加虚构机器人战队校内创新实践活动"
             changed_reason = client.patch(
                 f"/api/school-leave/admin/runs/{run_two_id}/reason",
@@ -347,18 +396,21 @@ def main() -> None:
                 run_two_row,
             )
             rendered = docx_text(doc_response.content)
-            assert rendered.count("请假条") == 3
-            assert reason in rendered
-            assert "以下学生因参加" in rendered
-            assert "不能参加下午课程，特此证明。" in rendered
+            assert rendered.count("请假条") == 5
+            assert reason not in rendered
+            assert rendered.count("吉甲大师双创基地机器人战队创新实践活动") == 5
+            assert "以下学生因参加2026 年 10 月 8 日 08:00 至 09:00的吉甲大师双创基地机器人战队创新实践活动，不能参加上午课程，特此证明。" in rendered
+            assert "以下学生因参加2026 年 10 月 8 日 10:00 至 14:00的吉甲大师双创基地机器人战队创新实践活动，不能参加当日对应课程，特此证明。" in rendered
+            assert "以下学生因参加2026 年 10 月 8 日 13:00 至 17:00的吉甲大师双创基地机器人战队创新实践活动，不能参加下午课程，特此证明。" in rendered
+            assert "以下学生因参加2026 年 10 月 8 日 18:00 至 19:00的吉甲大师双创基地机器人战队创新实践活动，不能参加晚间课程，特此证明。" in rendered
             assert "2026 年 10 月 8 日 13:00 至 17:00" in rendered
             assert "2026 年 10 月 8 日 15:00 至 17:00" in rendered
             assert "2026 年 10 月 8 日 18:00 至 19:00" in rendered
             assert "联系电话：000-0000-0000" in rendered
             document = open_docx(doc_response.content)
             template_document = Document(SCHOOL_LEAVE_TEMPLATE_PATH)
-            assert len(document.tables) == 3
-            assert docx_page_break_count(doc_response.content) == 2
+            assert len(document.tables) == 5
+            assert docx_page_break_count(doc_response.content) == 4
             assert document.sections[0].top_margin == template_document.sections[0].top_margin
             assert document.sections[0].bottom_margin == template_document.sections[0].bottom_margin
             assert document.sections[0].left_margin == template_document.sections[0].left_margin
@@ -371,9 +423,13 @@ def main() -> None:
             ]
             assert [cell.text for cell in document.tables[0].rows[0].cells] == ["姓名", "学号"]
             assert len(document.tables[0].rows) == 3
-            first_group = table_text(document, 0)
-            second_group = table_text(document, 1)
-            third_group = table_text(document, 2)
+            morning_group = table_text(document, 0)
+            cross_period_group = table_text(document, 1)
+            first_group = table_text(document, 2)
+            second_group = table_text(document, 3)
+            third_group = table_text(document, 4)
+            assert "测试成员丁" in morning_group and "TEST900002" in morning_group
+            assert "测试未填学号" in cross_period_group and "99000006" in cross_period_group
             assert "测试甲" in first_group and "TEST100001" in first_group
             assert "测试乙" in first_group and "TEST100002" in first_group
             assert "测试丙" not in first_group
@@ -471,7 +527,7 @@ def main() -> None:
             run_two_request_ids = list(
                 db.scalars(select(SchoolLeaveRequest.id).where(SchoolLeaveRequest.run_id == run_two_id))
             )
-            assert len(run_two_request_ids) == 4
+            assert len(run_two_request_ids) == 6
             sent_delete = client.delete(f"/api/school-leave/admin/runs/{run_two_id}")
             assert sent_delete.status_code == 204, sent_delete.text
             db.expire_all()

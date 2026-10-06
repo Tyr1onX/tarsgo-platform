@@ -8,10 +8,11 @@ from pydantic import TypeAdapter, ValidationError
 from sqlalchemy import delete, select
 
 from app.auth import COOKIE_NAME, get_current_member, hash_token, utcnow, verify_password
+from app.college_dictionary import COLLEGES
 from app.db import SessionLocal, get_db
 from app.main import app
 from app.models import LoginSession, Member, TeamRegistrationWindow
-from app.schemas import Role
+from app.schemas import Role, TeamRegistrationIn
 
 
 GROUPS = ("electrical", "mechanical", "vision", "ai", "operations")
@@ -107,13 +108,32 @@ def main() -> None:
                 assert valid.json()["active"] is True
                 assert client.get("/api/team-registration/not-a-real-token").status_code == 404
 
+                set_actor(member)
+                historical_me = client.get("/api/auth/me")
+                assert historical_me.status_code == 200
+                assert historical_me.json()["college"] is None
+                assert historical_me.json()["team_membership"] is None
+
+                set_actor(admin)
+                college_response = client.get("/api/colleges")
+                assert college_response.status_code == 200
+                college_options = college_response.json()
+                assert len(college_options) == 45 == len(COLLEGES)
+                assert len({option["code"] for option in college_options}) == 45
+                assert all(option["name"] and option["code"] for option in college_options)
+                valid_college = college_options[0]["code"]
                 base_payload = {
-                    "name": "注册测试新成员",
+                    "name": "  Ada Q·赵  ",
                     "email": first_email,
-                    "student_id": f"REG-{token[:12]}",
+                    "student_id": f"{int(token[:16], 16) % 100_000_000:08d}",
+                    "college": valid_college,
                     "team_group": "operations",
+                    "team_membership": "reserve",
                     "password": "registration-password",
                 }
+                for boundary_name in ("AB", "N" * 50):
+                    validated = TeamRegistrationIn.model_validate({**base_payload, "name": boundary_name})
+                    assert validated.name == boundary_name
                 assert client.post(
                     f"/api/team-registration/{raw_token}/register",
                     json={**base_payload, "role": "admin"},
@@ -125,6 +145,35 @@ def main() -> None:
                 assert client.post(
                     f"/api/team-registration/{raw_token}/register",
                     json={**base_payload, "password": "short"},
+                ).status_code == 422
+                for invalid_name in ("", "A", "  ", "N" * 51):
+                    invalid = client.post(
+                        f"/api/team-registration/{raw_token}/register",
+                        json={**base_payload, "name": invalid_name},
+                    )
+                    assert invalid.status_code == 422, invalid.text
+                for invalid_student_id in ("1234567", "123456789", "1234abcd", "１２３４５６７８"):
+                    invalid = client.post(
+                        f"/api/team-registration/{raw_token}/register",
+                        json={**base_payload, "student_id": invalid_student_id},
+                    )
+                    assert invalid.status_code == 422, invalid.text
+                for invalid_fields in (
+                    {"college": "not-a-college"},
+                    {"team_membership": "other"},
+                    {"team_membership": None},
+                ):
+                    invalid = client.post(
+                        f"/api/team-registration/{raw_token}/register",
+                        json={**base_payload, **invalid_fields},
+                    )
+                    assert invalid.status_code == 422, invalid.text
+                missing_college_payload = {
+                    key: value for key, value in base_payload.items() if key != "college"
+                }
+                assert client.post(
+                    f"/api/team-registration/{raw_token}/register",
+                    json=missing_college_payload,
                 ).status_code == 422
 
                 # Public self-registration creates an active member and a real login session.
@@ -140,6 +189,9 @@ def main() -> None:
                 assert registered_json["role"] == "member"
                 assert registered_json["status"] == "active"
                 assert registered_json["team_group"] == "operations"
+                assert registered_json["name"] == "Ada Q·赵"
+                assert registered_json["college"] == valid_college
+                assert registered_json["team_membership"] == "reserve"
                 cookie = registered.headers.get("set-cookie", "")
                 assert COOKIE_NAME in cookie and "HttpOnly" in cookie
 
@@ -156,8 +208,10 @@ def main() -> None:
                 me = client.get("/api/auth/me")
                 assert me.status_code == 200
                 assert me.json()["id"] == registered_id
+                assert me.json()["college"] == valid_college
+                assert me.json()["team_membership"] == "reserve"
 
-                # PATCH keeps profile fields explicit and supports all five fixed group codes.
+                # Profile edits preserve the independent group and membership enums.
                 for group in GROUPS:
                     updated = client.patch(
                         "/api/auth/me",
@@ -167,12 +221,27 @@ def main() -> None:
                     assert updated.json()["team_group"] == group
                     assert updated.json()["student_id"] == base_payload["student_id"]
 
+                updated_profile = client.patch(
+                    "/api/auth/me",
+                    json={"college": valid_college, "team_membership": "formal"},
+                )
+                assert updated_profile.status_code == 200, updated_profile.text
+                assert updated_profile.json()["college"] == valid_college
+                assert updated_profile.json()["team_membership"] == "formal"
+                for invalid_profile in (
+                    {"student_id": "not-8-digits"},
+                    {"college": "not-a-college"},
+                    {"team_membership": "guest"},
+                ):
+                    invalid = client.patch("/api/auth/me", json=invalid_profile)
+                    assert invalid.status_code == 422, invalid.text
+
                 # Unique constraints are surfaced as stable API conflicts.
                 duplicate_email = client.post(
                     f"/api/team-registration/{raw_token}/register",
                     json={
                         **base_payload,
-                        "student_id": f"REG-OTHER-{token[:8]}",
+                        "student_id": f"{(int(base_payload['student_id']) + 1) % 100_000_000:08d}",
                     },
                 )
                 assert duplicate_email.status_code == 409
@@ -192,10 +261,17 @@ def main() -> None:
                 set_actor(admin)
                 admin_edit = client.patch(
                     f"/api/members/{member.id}/profile",
-                    json={"student_id": f"LEGACY-{token[:8]}", "team_group": "electrical"},
+                    json={
+                        "student_id": f"{(int(base_payload['student_id']) + 2) % 100_000_000:08d}",
+                        "team_group": "electrical",
+                        "college": valid_college,
+                        "team_membership": "formal",
+                    },
                 )
                 assert admin_edit.status_code == 200, admin_edit.text
                 assert admin_edit.json()["team_group"] == "electrical"
+                assert admin_edit.json()["college"] == valid_college
+                assert admin_edit.json()["team_membership"] == "formal"
 
                 set_actor(member)
                 assert client.patch(
@@ -210,7 +286,11 @@ def main() -> None:
                 assert client.get(f"/api/team-registration/{raw_token}").status_code == 410
                 assert client.post(
                     f"/api/team-registration/{raw_token}/register",
-                    json={**base_payload, "email": third_email, "student_id": f"REG-THIRD-{token[:8]}"},
+                    json={
+                        **base_payload,
+                        "email": third_email,
+                        "student_id": f"{(int(base_payload['student_id']) + 3) % 100_000_000:08d}",
+                    },
                 ).status_code == 410
 
                 reopened = client.post("/api/team-registration/admin/open")
@@ -231,7 +311,11 @@ def main() -> None:
                 assert client.get(f"/api/team-registration/{reopened_token}").status_code == 410
                 assert client.post(
                     f"/api/team-registration/{reopened_token}/register",
-                    json={**base_payload, "email": third_email, "student_id": f"REG-THIRD-{token[:8]}"},
+                    json={
+                        **base_payload,
+                        "email": third_email,
+                        "student_id": f"{(int(base_payload['student_id']) + 3) % 100_000_000:08d}",
+                    },
                 ).status_code == 410
 
                 set_actor(admin)

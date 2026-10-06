@@ -7,12 +7,14 @@ import type {
   AIItemReviewResult,
   AIItemReviewSuggestion,
   AIItemFactExtractionResult,
+  CollegeOption,
   InvitationInfo,
   InviteResult,
   ItemActivity,
   ItemActivityPage,
   ItemFactInput,
   Member,
+  MemberProfilePayload,
   MemberSummary,
   KnowledgeDocument,
   KnowledgeSyncSummary,
@@ -38,9 +40,11 @@ import type {
 
 export class ApiError extends Error {
   status: number
-  constructor(status: number, message: string) {
+  field: string | null
+  constructor(status: number, message: string, field: string | null = null) {
     super(message)
     this.status = status
+    this.field = field
   }
 }
 
@@ -56,11 +60,19 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   })
   if (!response.ok) {
     let message = "操作失败"
+    let field: string | null = null
     try {
-      const data = (await response.json()) as { detail?: string }
-      if (data.detail) message = data.detail
+      const data = (await response.json()) as { detail?: unknown }
+      if (typeof data.detail === "string") message = data.detail
+      else if (Array.isArray(data.detail) && data.detail.length) {
+        const issue = data.detail[0] as { loc?: unknown[]; msg?: unknown }
+        if (typeof issue.msg === "string") message = issue.msg.replace(/^Value error, /, "")
+        const location = Array.isArray(issue.loc) ? issue.loc : []
+        const candidate = location.at(-1)
+        if (typeof candidate === "string") field = candidate
+      }
     } catch {}
-    throw new ApiError(response.status, message)
+    throw new ApiError(response.status, message, field)
   }
   if (response.status === 204) return undefined as T
   return response.json() as Promise<T>
@@ -84,10 +96,11 @@ export interface TaskPayload {
 
 export const api = {
   me: () => request<Member>("/api/auth/me"),
-  updateMeProfile: (studentId: string | null, teamGroup: TeamGroup | null) =>
+  colleges: () => request<CollegeOption[]>("/api/colleges"),
+  updateMeProfile: (payload: MemberProfilePayload) =>
     request<Member>("/api/auth/me", {
       method: "PATCH",
-      body: JSON.stringify({ student_id: studentId, team_group: teamGroup }),
+      body: JSON.stringify(payload),
     }),
   login: (email: string, password: string) =>
     request<Member>("/api/auth/login", { method: "POST", body: JSON.stringify({ email, password }) }),
@@ -109,10 +122,10 @@ export const api = {
   regenerateInvite: (memberId: number) => request<InviteResult>(`/api/members/${memberId}/invite`, { method: "POST" }),
   disableMember: (memberId: number) => request<Member>(`/api/members/${memberId}/disable`, { method: "POST" }),
   enableMember: (memberId: number) => request<Member>(`/api/members/${memberId}/enable`, { method: "POST" }),
-  updateMemberProfile: (memberId: number, studentId: string | null, teamGroup: TeamGroup | null) =>
+  updateMemberProfile: (memberId: number, payload: MemberProfilePayload) =>
     request<Member>(`/api/members/${memberId}/profile`, {
       method: "PATCH",
-      body: JSON.stringify({ student_id: studentId, team_group: teamGroup }),
+      body: JSON.stringify(payload),
     }),
 
   currentTeamRegistration: () =>

@@ -1175,7 +1175,8 @@ textarea[aria-invalid="true"] {
   font-size: 12.5px;
 }
 
-.profile-student-edit-form input {
+.profile-student-edit-form input,
+.profile-student-edit-form select {
   min-width: 0;
 }
 

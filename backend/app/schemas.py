@@ -3,8 +3,11 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator, model_validator
 
+from .college_dictionary import is_college_code
+
 Role = Literal["admin", "member"]
 TeamGroup = Literal["electrical", "mechanical", "vision", "ai", "operations"]
+TeamMembership = Literal["formal", "reserve"]
 MemberStatus = Literal["invited", "active", "disabled"]
 TaskStatus = Literal["todo", "doing", "done"]
 SchoolLeaveRequestStatus = Literal["pending", "included", "withdrawn"]
@@ -59,20 +62,27 @@ class MemberOut(BaseModel):
     email: str
     student_id: str | None = None
     team_group: TeamGroup | None = None
+    college: str | None = None
+    team_membership: TeamMembership | None = None
     role: Role
     status: MemberStatus
     created_at: datetime
 
 
+class CollegeOut(BaseModel):
+    code: str
+    name: str
+
+
 class InviteCreate(BaseModel):
-    name: str = Field(min_length=1, max_length=100)
+    name: str
     email: str = Field(min_length=3, max_length=255)
     @field_validator("name")
     @classmethod
     def validate_name(cls, value: str) -> str:
         value = value.strip()
-        if not value:
-            raise ValueError("姓名不能为空")
+        if not 2 <= len(value) <= 50:
+            raise ValueError("姓名长度需为 2–50 个字符")
         return value
 
     @field_validator("email")
@@ -115,18 +125,20 @@ class TeamRegistrationWindowOpenOut(TeamRegistrationWindowOut):
 
 class TeamRegistrationIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    name: str = Field(min_length=1, max_length=100)
+    name: str
     email: str = Field(min_length=3, max_length=255)
-    student_id: str = Field(min_length=1, max_length=50)
+    student_id: str
+    college: str
     team_group: TeamGroup
+    team_membership: TeamMembership
     password: str = Field(min_length=8, max_length=128)
 
     @field_validator("name")
     @classmethod
     def validate_name(cls, value: str) -> str:
         value = value.strip()
-        if not value:
-            raise ValueError("姓名不能为空")
+        if not 2 <= len(value) <= 50:
+            raise ValueError("姓名长度需为 2–50 个字符")
         return value
 
     @field_validator("email")
@@ -138,8 +150,16 @@ class TeamRegistrationIn(BaseModel):
     @classmethod
     def validate_student_id(cls, value: str) -> str:
         value = value.strip()
-        if not value:
-            raise ValueError("学号不能为空")
+        if len(value) != 8 or not value.isascii() or not value.isdigit():
+            raise ValueError("学号必须是 8 位数字")
+        return value
+
+    @field_validator("college")
+    @classmethod
+    def validate_college(cls, value: str) -> str:
+        value = value.strip()
+        if not is_college_code(value):
+            raise ValueError("请选择有效学院")
         return value
 
 
@@ -150,8 +170,10 @@ class MemberSummary(BaseModel):
 
 
 class MemberProfileUpdate(BaseModel):
-    student_id: str | None = Field(default=None, max_length=50)
+    student_id: str | None = None
     team_group: TeamGroup | None = None
+    college: str | None = None
+    team_membership: TeamMembership | None = None
 
     @field_validator("student_id")
     @classmethod
@@ -159,7 +181,23 @@ class MemberProfileUpdate(BaseModel):
         if value is None:
             return None
         value = value.strip()
-        return value or None
+        if not value:
+            return None
+        if len(value) != 8 or not value.isascii() or not value.isdigit():
+            raise ValueError("学号必须是 8 位数字")
+        return value
+
+    @field_validator("college")
+    @classmethod
+    def validate_college(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        if not value:
+            return None
+        if not is_college_code(value):
+            raise ValueError("请选择有效学院")
+        return value
 
 
 def _normalize_school_leave_datetime(value: datetime) -> datetime:

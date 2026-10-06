@@ -1,6 +1,14 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue"
-import type { InviteResult, Member, Role, TeamGroup } from "../types"
+import type {
+  CollegeOption,
+  InviteResult,
+  Member,
+  MemberProfilePayload,
+  Role,
+  TeamGroup,
+  TeamMembership,
+} from "../types"
 
 const props = defineProps<{
   member: Member
@@ -8,6 +16,9 @@ const props = defineProps<{
   latestInvite: InviteResult | null
   roleLabels: Record<Role, string>
   groupLabels: Record<TeamGroup, string>
+  collegeOptions: CollegeOption[]
+  membershipLabels: Record<TeamMembership, string>
+  fieldErrors: Record<string, string>
   formatDate: (value: string) => string
   profileSaving: boolean
 }>()
@@ -16,19 +27,26 @@ const emit = defineEmits<{
   regenerateInvite: [memberId: number]
   disableMember: [memberId: number]
   enableMember: [memberId: number]
-  updateProfile: [payload: { memberId: number; studentId: string; teamGroup: TeamGroup | null }]
+  updateProfile: [payload: { memberId: number } & MemberProfilePayload]
+  clearProfileError: [field: string]
   copyInvite: []
   navigate: [path: string]
 }>()
 
 const studentIdDraft = ref("")
 const teamGroupDraft = ref<TeamGroup | "">("")
+const collegeDraft = ref("")
+const teamMembershipDraft = ref<TeamMembership | "">("")
+const localFieldErrors = ref<Record<string, string>>({})
 
 watch(
   () => props.member,
   (member) => {
     studentIdDraft.value = member.student_id ?? ""
     teamGroupDraft.value = member.team_group ?? ""
+    collegeDraft.value = member.college ?? ""
+    teamMembershipDraft.value = member.team_membership ?? ""
+    localFieldErrors.value = {}
   },
   { immediate: true },
 )
@@ -38,7 +56,9 @@ const savedStudentId = computed(() => props.member.student_id ?? "")
 const profileChanged = computed(
   () =>
     normalizedStudentId.value !== savedStudentId.value ||
-    teamGroupDraft.value !== (props.member.team_group ?? ""),
+    teamGroupDraft.value !== (props.member.team_group ?? "") ||
+    collegeDraft.value !== (props.member.college ?? "") ||
+    teamMembershipDraft.value !== (props.member.team_membership ?? ""),
 )
 const currentInvite = computed(() =>
   props.latestInvite?.member.id === props.member.id ? props.latestInvite : null,
@@ -52,11 +72,35 @@ function memberStatusLabel(member: Member) {
 
 function saveProfile() {
   if (!profileChanged.value || props.profileSaving) return
+  localFieldErrors.value = {}
+  if (normalizedStudentId.value && !/^\d{8}$/.test(normalizedStudentId.value)) {
+    localFieldErrors.value = { student_id: "学号必须是 8 位数字" }
+    return
+  }
+  if (collegeDraft.value && !props.collegeOptions.some((college) => college.code === collegeDraft.value)) {
+    localFieldErrors.value = { college: "请选择有效学院" }
+    return
+  }
   emit("updateProfile", {
     memberId: props.member.id,
-    studentId: studentIdDraft.value,
-    teamGroup: teamGroupDraft.value || null,
+    student_id: normalizedStudentId.value || null,
+    team_group: teamGroupDraft.value || null,
+    college: collegeDraft.value || null,
+    team_membership: teamMembershipDraft.value || null,
   })
+}
+
+function fieldError(field: string) {
+  return localFieldErrors.value[field] ?? props.fieldErrors[field]
+}
+
+function clearProfileError(field: string) {
+  if (localFieldErrors.value[field]) {
+    const next = { ...localFieldErrors.value }
+    delete next[field]
+    localFieldErrors.value = next
+  }
+  emit("clearProfileError", field)
 }
 </script>
 
@@ -97,10 +141,23 @@ function saveProfile() {
         <span>学号</span>
         <input
           v-model="studentIdDraft"
-          maxlength="50"
+          maxlength="8"
+          inputmode="numeric"
           autocomplete="off"
           placeholder="未填写学号"
+          @input="clearProfileError('student_id')"
         />
+        <small v-if="fieldError('student_id')" class="field-error">{{ fieldError('student_id') }}</small>
+      </label>
+      <label>
+        <span>学院</span>
+        <select v-model="collegeDraft" @change="clearProfileError('college')">
+          <option value="">未填写</option>
+          <option v-for="college in collegeOptions" :key="college.code" :value="college.code">
+            {{ college.name }}
+          </option>
+        </select>
+        <small v-if="fieldError('college')" class="field-error">{{ fieldError('college') }}</small>
       </label>
       <label>
         <span>所属组别</span>
@@ -108,6 +165,14 @@ function saveProfile() {
           <option value="">未填写</option>
           <option v-for="(label, code) in groupLabels" :key="code" :value="code">{{ label }}</option>
         </select>
+      </label>
+      <label>
+        <span>队内身份</span>
+        <select v-model="teamMembershipDraft" @change="clearProfileError('team_membership')">
+          <option value="">未填写</option>
+          <option v-for="(label, code) in membershipLabels" :key="code" :value="code">{{ label }}</option>
+        </select>
+        <small v-if="fieldError('team_membership')" class="field-error">{{ fieldError('team_membership') }}</small>
       </label>
       <button
         class="primary member-profile-save"

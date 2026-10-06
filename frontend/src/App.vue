@@ -36,6 +36,7 @@ import type {
   AIPlannerTaskDraft,
   AIItemReviewSuggestion,
   AIItemFactSuggestion,
+  CollegeOption,
   InvitationInfo,
   InviteResult,
   ItemActivity,
@@ -45,9 +46,11 @@ import type {
   KnowledgeDocument,
   KnowledgeSyncSummary,
   Member,
+  MemberProfilePayload,
   MemberSummary,
   Role,
   TeamGroup,
+  TeamMembership,
   TeamRegistrationInfo,
   TeamRegistrationWindow,
   Task,
@@ -105,6 +108,11 @@ const loginEmail = ref("")
 const loginPassword = ref("")
 const studentIdDraft = ref("")
 const teamGroupDraft = ref<TeamGroup | "">("")
+const collegeDraft = ref("")
+const teamMembershipDraft = ref<TeamMembership | "">("")
+const collegeOptions = ref<CollegeOption[]>([])
+const profileFieldErrors = ref<Record<string, string>>({})
+const memberProfileFieldErrors = ref<Record<number, Record<string, string>>>({})
 const profileSaving = ref(false)
 
 const invitation = ref<InvitationInfo | null>(null)
@@ -117,8 +125,11 @@ const registrationEnded = ref(false)
 const registrationLoadError = ref("")
 const registrationName = ref("")
 const registrationStudentId = ref("")
+const registrationCollege = ref("")
 const registrationEmail = ref("")
 const registrationTeamGroup = ref<TeamGroup | "">("")
+const registrationTeamMembership = ref<TeamMembership | "">("")
+const registrationFieldErrors = ref<Record<string, string>>({})
 const registrationPassword = ref("")
 const registrationPasswordConfirm = ref("")
 const registrationSubmitting = ref(false)
@@ -282,7 +293,9 @@ const isTeamRoute = computed(() => path.value === "/team" || teamMemberDetailId.
 const isMeRoute = computed(() => path.value === "/me" || path.value === "/me/edit")
 const myProfileChanged = computed(() =>
   studentIdDraft.value.trim() !== (user.value?.student_id ?? "") ||
-  teamGroupDraft.value !== (user.value?.team_group ?? ""),
+  teamGroupDraft.value !== (user.value?.team_group ?? "") ||
+  collegeDraft.value !== (user.value?.college ?? "") ||
+  teamMembershipDraft.value !== (user.value?.team_membership ?? ""),
 )
 const detailTask = computed(() =>
   taskDetailId.value === null ? null : tasks.value.find((task) => task.id === taskDetailId.value) ?? null,
@@ -389,6 +402,11 @@ const groupLabels: Record<TeamGroup, string> = {
   operations: "运营组",
 }
 
+const membershipLabels: Record<TeamMembership, string> = {
+  formal: "正式队员",
+  reserve: "梯队成员",
+}
+
 const viewLabels: Record<TaskView, string> = {
   mine: "我的",
   claimable: "待认领",
@@ -448,6 +466,8 @@ watch(notice, (message) => {
 watch(path, (nextPath, previousPath) => {
   if (nextPath === previousPath) return
   fieldErrors.value = {}
+  profileFieldErrors.value = {}
+  registrationFieldErrors.value = {}
   error.value = ""
   if (feedback.value?.kind === "error") clearFeedback()
 })
@@ -981,6 +1001,11 @@ async function loadKnowledgeDocuments() {
   knowledgeDocuments.value = await api.knowledgeDocuments()
 }
 
+async function ensureCollegeOptions() {
+  if (collegeOptions.value.length) return
+  collegeOptions.value = await api.colleges()
+}
+
 async function loadSchoolLeaveSummary() {
   schoolLeaveTodoCount.value = 0
   if (user.value?.role !== "admin") return
@@ -996,6 +1021,8 @@ async function loadCurrentUser() {
     user.value = await api.me()
     studentIdDraft.value = user.value.student_id ?? ""
     teamGroupDraft.value = user.value.team_group ?? ""
+    collegeDraft.value = user.value.college ?? ""
+    teamMembershipDraft.value = user.value.team_membership ?? ""
     await Promise.all([loadPlannerAccess(), loadSchoolLeaveSummary()])
   } catch (reason) {
     if (reason instanceof ApiError && reason.status === 401) {
@@ -1057,6 +1084,8 @@ async function loadRoute() {
       } finally {
         registrationChecking.value = false
       }
+      if (!isCurrentLoad()) return
+      await ensureCollegeOptions()
       if (!isCurrentLoad()) return
     } else if (routePath === "/admin/tasks") {
       navigate("/tasks")
@@ -1157,7 +1186,8 @@ async function loadRoute() {
         navigate("/")
         return
       }
-      members.value = await api.members()
+      const [teamMembers] = await Promise.all([api.members(), ensureCollegeOptions()])
+      members.value = teamMembers
       if (!isCurrentLoad()) return
       if (!members.value.some((member) => member.id === teamMemberDetailId.value)) {
         routeNotFound.value = true
@@ -1179,10 +1209,15 @@ async function loadRoute() {
     } else if (routePath === "/leave") {
       // The leave page loads its own independent workflow data.
     } else if (routePath === "/me/edit") {
+      await ensureCollegeOptions()
+      if (!isCurrentLoad()) return
       studentIdDraft.value = user.value?.student_id ?? ""
       teamGroupDraft.value = user.value?.team_group ?? ""
+      collegeDraft.value = user.value?.college ?? ""
+      teamMembershipDraft.value = user.value?.team_membership ?? ""
     } else if (routePath === "/me") {
-      // Profile overview is intentionally read-only.
+      await ensureCollegeOptions()
+      if (!isCurrentLoad()) return
     } else {
       routeNotFound.value = true
     }
@@ -1251,21 +1286,38 @@ async function submitInvitation() {
 
 async function submitRegistration() {
   error.value = ""
-  if (registrationPassword.value !== registrationPasswordConfirm.value) {
-    error.value = "两次输入的密码不一致"
+  registrationFieldErrors.value = {}
+  const normalizedName = registrationName.value.trim()
+  const normalizedStudentId = registrationStudentId.value.trim()
+  const errors: Record<string, string> = {}
+  if (Array.from(normalizedName).length < 2 || Array.from(normalizedName).length > 50) {
+    errors.name = "姓名长度需为 2–50 个字符"
+  }
+  if (!/^\d{8}$/.test(normalizedStudentId)) errors.student_id = "学号必须是 8 位数字"
+  if (!collegeOptions.value.some((college) => college.code === registrationCollege.value)) {
+    errors.college = "请选择有效学院"
+  }
+  if (!registrationTeamGroup.value) errors.team_group = "请选择所属组别"
+  if (!(registrationTeamMembership.value in membershipLabels)) {
+    errors.team_membership = "请选择队内身份"
+  }
+  if (Object.keys(errors).length) {
+    registrationFieldErrors.value = errors
     return
   }
-  if (!registrationTeamGroup.value) {
-    error.value = "请选择所属组别"
+  if (registrationPassword.value !== registrationPasswordConfirm.value) {
+    registrationFieldErrors.value = { password_confirm: "两次输入的密码不一致" }
     return
   }
   registrationSubmitting.value = true
   try {
     user.value = await api.registerTeamMember(registerToken.value, {
-      name: registrationName.value,
-      student_id: registrationStudentId.value,
+      name: normalizedName,
+      student_id: normalizedStudentId,
+      college: registrationCollege.value,
       email: registrationEmail.value,
-      team_group: registrationTeamGroup.value,
+      team_group: registrationTeamGroup.value as TeamGroup,
+      team_membership: registrationTeamMembership.value as TeamMembership,
       password: registrationPassword.value,
     })
     registrationPassword.value = ""
@@ -1274,9 +1326,32 @@ async function submitRegistration() {
     navigate("/")
   } catch (reason) {
     error.value = messageOf(reason)
+    const field = reason instanceof ApiError
+      ? reason.field ??
+        (reason.status === 409 && reason.message.includes("学号")
+          ? "student_id"
+          : reason.status === 409 && reason.message.includes("邮箱")
+            ? "email"
+            : null)
+      : null
+    if (field) registrationFieldErrors.value = { [field]: messageOf(reason) }
   } finally {
     registrationSubmitting.value = false
   }
+}
+
+function clearRegistrationFieldError(field: string) {
+  if (!registrationFieldErrors.value[field]) return
+  const next = { ...registrationFieldErrors.value }
+  delete next[field]
+  registrationFieldErrors.value = next
+}
+
+function clearProfileFieldError(field: string) {
+  if (!profileFieldErrors.value[field]) return
+  const next = { ...profileFieldErrors.value }
+  delete next[field]
+  profileFieldErrors.value = next
 }
 
 async function openTeamRegistration() {
@@ -1366,46 +1441,88 @@ async function enableMember(memberId: number) {
   }
 }
 
-async function updateMemberProfile(payload: {
-  memberId: number
-  studentId: string
-  teamGroup: TeamGroup | null
-}) {
+async function updateMemberProfile(payload: { memberId: number } & MemberProfilePayload) {
   if (memberProfileSavingId.value !== null) return
   error.value = ""
   memberProfileSavingId.value = payload.memberId
   try {
-    replaceMemberInState(
-      await api.updateMemberProfile(
-        payload.memberId,
-        payload.studentId.trim() || null,
-        payload.teamGroup,
-      ),
-    )
+    const { memberId, ...profile } = payload
+    replaceMemberInState(await api.updateMemberProfile(memberId, profile))
+    const next = { ...memberProfileFieldErrors.value }
+    delete next[memberId]
+    memberProfileFieldErrors.value = next
     notice.value = "成员资料已更新"
   } catch (reason) {
     error.value = messageOf(reason)
+    const field = reason instanceof ApiError
+      ? reason.field ?? (reason.status === 409 && reason.message.includes("学号") ? "student_id" : null)
+      : null
+    if (field) {
+      memberProfileFieldErrors.value = {
+        ...memberProfileFieldErrors.value,
+        [payload.memberId]: { ...memberProfileFieldErrors.value[payload.memberId], [field]: messageOf(reason) },
+      }
+    }
   } finally {
     memberProfileSavingId.value = null
   }
+}
+
+function clearMemberProfileFieldError(memberId: number, field: string) {
+  const existing = memberProfileFieldErrors.value[memberId]
+  if (!existing?.[field]) return
+  const nextMemberErrors = { ...existing }
+  delete nextMemberErrors[field]
+  const next = { ...memberProfileFieldErrors.value }
+  if (Object.keys(nextMemberErrors).length) next[memberId] = nextMemberErrors
+  else delete next[memberId]
+  memberProfileFieldErrors.value = next
+}
+
+function profileValidationError(): [string, string] | null {
+  const studentId = studentIdDraft.value.trim()
+  if (studentId && !/^\d{8}$/.test(studentId)) return ["student_id", "学号必须是 8 位数字"]
+  if (collegeDraft.value && !collegeOptions.value.some((college) => college.code === collegeDraft.value)) {
+    return ["college", "请选择有效学院"]
+  }
+  if (teamMembershipDraft.value && !(teamMembershipDraft.value in membershipLabels)) {
+    return ["team_membership", "请选择有效队内身份"]
+  }
+  return null
 }
 
 async function saveMyProfile() {
   if (!user.value || profileSaving.value || !myProfileChanged.value) return
   error.value = ""
   notice.value = ""
+  profileFieldErrors.value = {}
+  const validationError = profileValidationError()
+  if (validationError) {
+    profileFieldErrors.value = { [validationError[0]]: validationError[1] }
+    return
+  }
   profileSaving.value = true
   try {
     user.value = await api.updateMeProfile(
-      studentIdDraft.value.trim() || null,
-      teamGroupDraft.value || null,
+      {
+        student_id: studentIdDraft.value.trim() || null,
+        team_group: teamGroupDraft.value || null,
+        college: collegeDraft.value || null,
+        team_membership: teamMembershipDraft.value || null,
+      },
     )
     studentIdDraft.value = user.value.student_id ?? ""
     teamGroupDraft.value = user.value.team_group ?? ""
+    collegeDraft.value = user.value.college ?? ""
+    teamMembershipDraft.value = user.value.team_membership ?? ""
     notice.value = "资料已保存"
     navigate("/me")
   } catch (reason) {
     error.value = messageOf(reason)
+    const field = reason instanceof ApiError
+      ? reason.field ?? (reason.status === 409 && reason.message.includes("学号") ? "student_id" : null)
+      : null
+    if (field) profileFieldErrors.value = { [field]: messageOf(reason) }
   } finally {
     profileSaving.value = false
   }
@@ -2457,11 +2574,42 @@ onBeforeUnmount(() => {
         <form @submit.prevent="submitRegistration">
           <label>
             姓名
-            <input v-model="registrationName" maxlength="100" autocomplete="name" required />
+            <input
+              v-model="registrationName"
+              autocomplete="name"
+              required
+              :aria-invalid="Boolean(registrationFieldErrors.name)"
+              @input="clearRegistrationFieldError('name')"
+            />
+            <small v-if="registrationFieldErrors.name" class="field-error">{{ registrationFieldErrors.name }}</small>
           </label>
           <label>
             学号
-            <input v-model="registrationStudentId" maxlength="50" autocomplete="off" required />
+            <input
+              v-model="registrationStudentId"
+              maxlength="8"
+              inputmode="numeric"
+              autocomplete="off"
+              required
+              :aria-invalid="Boolean(registrationFieldErrors.student_id)"
+              @input="clearRegistrationFieldError('student_id')"
+            />
+            <small v-if="registrationFieldErrors.student_id" class="field-error">{{ registrationFieldErrors.student_id }}</small>
+          </label>
+          <label>
+            所属学院
+            <select
+              v-model="registrationCollege"
+              required
+              :aria-invalid="Boolean(registrationFieldErrors.college)"
+              @change="clearRegistrationFieldError('college')"
+            >
+              <option value="" disabled>请选择学院</option>
+              <option v-for="college in collegeOptions" :key="college.code" :value="college.code">
+                {{ college.name }}
+              </option>
+            </select>
+            <small v-if="registrationFieldErrors.college" class="field-error">{{ registrationFieldErrors.college }}</small>
           </label>
           <label>
             邮箱
@@ -2473,6 +2621,19 @@ onBeforeUnmount(() => {
               <option value="" disabled>请选择</option>
               <option v-for="(label, code) in groupLabels" :key="code" :value="code">{{ label }}</option>
             </select>
+          </label>
+          <label>
+            队内身份
+            <select
+              v-model="registrationTeamMembership"
+              required
+              :aria-invalid="Boolean(registrationFieldErrors.team_membership)"
+              @change="clearRegistrationFieldError('team_membership')"
+            >
+              <option value="" disabled>请选择</option>
+              <option v-for="(label, code) in membershipLabels" :key="code" :value="code">{{ label }}</option>
+            </select>
+            <small v-if="registrationFieldErrors.team_membership" class="field-error">{{ registrationFieldErrors.team_membership }}</small>
           </label>
           <label>
             密码
@@ -3777,6 +3938,14 @@ onBeforeUnmount(() => {
             <span class="profile-field-label">所属组别</span>
             <span class="profile-field-value">{{ user?.team_group ? groupLabels[user.team_group] : "未填写" }}</span>
           </div>
+          <div class="profile-field-row">
+            <span class="profile-field-label">学院</span>
+            <span class="profile-field-value">{{ collegeOptions.find((college) => college.code === user?.college)?.name || "未填写" }}</span>
+          </div>
+          <div class="profile-field-row">
+            <span class="profile-field-label">队内身份</span>
+            <span class="profile-field-value">{{ user?.team_membership ? membershipLabels[user.team_membership] : "未填写" }}</span>
+          </div>
         </section>
 
         <section class="profile-section profile-account-section">
@@ -3796,7 +3965,16 @@ onBeforeUnmount(() => {
           <form class="profile-student-edit-form" @submit.prevent="saveMyProfile">
             <label>
               <span>学号</span>
-              <input v-model="studentIdDraft" maxlength="50" autocomplete="off" placeholder="未填写学号" />
+              <input
+                v-model="studentIdDraft"
+                maxlength="8"
+                inputmode="numeric"
+                autocomplete="off"
+                placeholder="未填写学号"
+                :aria-invalid="Boolean(profileFieldErrors.student_id)"
+                @input="clearProfileFieldError('student_id')"
+              />
+              <small v-if="profileFieldErrors.student_id" class="field-error">{{ profileFieldErrors.student_id }}</small>
             </label>
             <label>
               <span>所属组别</span>
@@ -3804,6 +3982,32 @@ onBeforeUnmount(() => {
                 <option value="">未填写</option>
                 <option v-for="(label, code) in groupLabels" :key="code" :value="code">{{ label }}</option>
               </select>
+            </label>
+            <label>
+              <span>所属学院</span>
+              <select
+                v-model="collegeDraft"
+                :aria-invalid="Boolean(profileFieldErrors.college)"
+                @change="clearProfileFieldError('college')"
+              >
+                <option value="">未填写</option>
+                <option v-for="college in collegeOptions" :key="college.code" :value="college.code">
+                  {{ college.name }}
+                </option>
+              </select>
+              <small v-if="profileFieldErrors.college" class="field-error">{{ profileFieldErrors.college }}</small>
+            </label>
+            <label>
+              <span>队内身份</span>
+              <select
+                v-model="teamMembershipDraft"
+                :aria-invalid="Boolean(profileFieldErrors.team_membership)"
+                @change="clearProfileFieldError('team_membership')"
+              >
+                <option value="">未填写</option>
+                <option v-for="(label, code) in membershipLabels" :key="code" :value="code">{{ label }}</option>
+              </select>
+              <small v-if="profileFieldErrors.team_membership" class="field-error">{{ profileFieldErrors.team_membership }}</small>
             </label>
             <button
               class="primary profile-save"
@@ -3832,12 +4036,16 @@ onBeforeUnmount(() => {
           :latest-invite="latestInvite"
           :role-labels="roleLabels"
           :group-labels="groupLabels"
+          :college-options="collegeOptions"
+          :membership-labels="membershipLabels"
+          :field-errors="memberProfileFieldErrors[teamMemberDetail.id] ?? {}"
           :format-date="formatDate"
           :profile-saving="memberProfileSavingId === teamMemberDetail.id"
           @regenerate-invite="regenerateInvite"
           @disable-member="disableMember"
           @enable-member="enableMember"
           @update-profile="updateMemberProfile"
+          @clear-profile-error="clearMemberProfileFieldError(teamMemberDetail.id, $event)"
           @copy-invite="copyInvite"
           @navigate="navigate"
         />

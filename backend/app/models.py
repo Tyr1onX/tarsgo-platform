@@ -21,6 +21,8 @@ from sqlalchemy import (
 from sqlalchemy.dialects.mysql import LONGTEXT
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from .college_dictionary import COLLEGE_CODES
+
 from .db import Base
 
 
@@ -68,6 +70,16 @@ class Member(Base):
             "team_group IS NULL OR team_group IN ('electrical','mechanical','vision','ai','operations')",
             name="ck_members_team_group",
         ),
+        CheckConstraint(
+            "college IS NULL OR college IN ("
+            + ",".join(f"'{code}'" for code in sorted(COLLEGE_CODES))
+            + ")",
+            name="ck_members_college",
+        ),
+        CheckConstraint(
+            "team_membership IS NULL OR team_membership IN ('formal','reserve')",
+            name="ck_members_team_membership",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -75,6 +87,8 @@ class Member(Base):
     email: Mapped[str] = mapped_column(String(255), unique=True)
     student_id: Mapped[str | None] = mapped_column(String(50), nullable=True, unique=True)
     team_group: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    college: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    team_membership: Mapped[str | None] = mapped_column(String(20), nullable=True)
     password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
     role: Mapped[str] = mapped_column(String(20), default="member")
     status: Mapped[str] = mapped_column(String(20), default="invited")

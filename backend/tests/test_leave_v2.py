@@ -127,7 +127,10 @@ def main() -> None:
             standalone_doc = client.post("/api/daily-leave/self-service/document", json=standalone_payload)
             assert standalone_doc.status_code == 200, standalone_doc.text
             standalone_paragraphs, standalone_tables = docx_text(standalone_doc.content)
-            assert any("吉甲大师双创基地机器人战队创新实践活动" in line for line in standalone_paragraphs)
+            assert any(
+                "吉甲大师双创基地机器人战队创新实践活动" in line.replace("\u2060", "")
+                for line in standalone_paragraphs
+            )
             assert not any("内部活动" in line for line in standalone_paragraphs)
             assert any("下午课程" in line for line in standalone_paragraphs)
             assert standalone_tables[0][1] == ["正式成员甲", "26000201", "电子科学与工程学院"]
@@ -235,7 +238,10 @@ def main() -> None:
                 f"{activity_start.year}年{activity_start.month}月{activity_start.day}日"
                 "13:30 至 17:10"
             )
-            assert any("吉甲大师双创基地机器人战队创新实践活动" in line for line in signed_paragraphs)
+            assert any(
+                "吉甲大师双创基地机器人战队创新实践活动" in line.replace("\u2060", "")
+                for line in signed_paragraphs
+            )
             assert any("下午课程" in line for line in signed_paragraphs)
             assert any(time_text == line.removeprefix("以下学生因参加").split("的")[0] for line in signed_paragraphs if line.startswith("以下学生因参加"))
             assert signed_tables[0][0] == ["姓名", "学号", "学院"]

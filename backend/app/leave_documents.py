@@ -9,13 +9,16 @@ from pathlib import Path, PurePosixPath
 from typing import Iterable
 
 from docx import Document
-from docx.shared import Inches
+from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT, WD_ROW_HEIGHT_RULE, WD_TABLE_ALIGNMENT
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
+from docx.shared import Inches, Pt
 from lxml import etree
 
 from .school_leave import (
     SCHOOL_LEAVE_DOCUMENT_REASON,
     format_school_leave_course_period,
-    format_school_leave_time,
     school_leave_now,
 )
 
@@ -32,6 +35,8 @@ WP_NS = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
 IMAGE_REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image"
 XML_NS = "http://www.w3.org/XML/1998/namespace"
 EMU_PER_POINT = 12_700
+EMU_PER_TWIP = 635
+DOCUMENT_FONT = "Hiragino Sans GB"
 
 
 def _set_paragraph_text(paragraph, text: str) -> None:
@@ -43,12 +48,320 @@ def _set_paragraph_text(paragraph, text: str) -> None:
         paragraph.add_run(text)
 
 
+def _set_signature_label(paragraph) -> None:
+    label_written = False
+    for run in paragraph.runs:
+        if run._r.xpath(".//w:drawing"):
+            continue
+        if not label_written:
+            run.text = "指导教师："
+            label_written = True
+        else:
+            run.text = ""
+    if not label_written:
+        paragraph.add_run("指导教师：")
+
+
 def _find_paragraph(document, needle: str):
     return next((paragraph for paragraph in document.paragraphs if needle in paragraph.text), None)
 
 
 def _append_image(paragraph, image_path: Path, width_inches: float) -> None:
     paragraph.add_run().add_picture(str(image_path), width=Inches(width_inches))
+
+
+def _set_run_font(run, *, size_pt: float, bold: bool | None = None) -> None:
+    run.font.name = DOCUMENT_FONT
+    run.font.size = Pt(size_pt)
+    if bold is not None:
+        run.bold = bold
+    r_pr = run._element.get_or_add_rPr()
+    r_fonts = r_pr.rFonts
+    if r_fonts is None:
+        r_fonts = OxmlElement("w:rFonts")
+        r_pr.insert(0, r_fonts)
+    for attribute in ("ascii", "hAnsi", "cs", "eastAsia"):
+        r_fonts.set(qn(f"w:{attribute}"), DOCUMENT_FONT)
+    for size_tag in ("w:sz", "w:szCs"):
+        size_element = r_pr.find(qn(size_tag))
+        if size_element is None:
+            size_element = OxmlElement(size_tag)
+            r_pr.append(size_element)
+        size_element.set(qn("w:val"), str(round(size_pt * 2)))
+    if bold is not None:
+        bold_cs = r_pr.find(qn("w:bCs"))
+        if bold_cs is None:
+            bold_cs = OxmlElement("w:bCs")
+            r_pr.append(bold_cs)
+        bold_cs.set(qn("w:val"), "1" if bold else "0")
+    spacing = r_pr.find(qn("w:spacing"))
+    if spacing is not None:
+        r_pr.remove(spacing)
+    lang = r_pr.find(qn("w:lang"))
+    if lang is None:
+        lang = OxmlElement("w:lang")
+        r_pr.append(lang)
+    lang.set(qn("w:val"), "zh-CN")
+    lang.set(qn("w:eastAsia"), "zh-CN")
+
+
+def _set_paragraph_font(paragraph, *, size_pt: float, bold: bool | None = None) -> None:
+    for run in paragraph.runs:
+        _set_run_font(run, size_pt=size_pt, bold=bold)
+
+
+def _disable_cjk_auto_spacing(paragraph) -> None:
+    p_pr = paragraph._p.get_or_add_pPr()
+    later_properties = {
+        "bidi", "adjustRightInd", "snapToGrid", "spacing", "ind", "contextualSpacing",
+        "mirrorIndents", "suppressOverlap", "jc", "textDirection", "textAlignment",
+        "textboxTightWrap", "outlineLvl", "divId", "cnfStyle", "rPr", "sectPr",
+    }
+    for name in ("autoSpaceDE", "autoSpaceDN"):
+        setting = p_pr.find(qn(f"w:{name}"))
+        if setting is None:
+            setting = OxmlElement(f"w:{name}")
+            insert_at = next(
+                (
+                    index
+                    for index, child in enumerate(p_pr)
+                    if etree.QName(child).localname in later_properties
+                ),
+                len(p_pr),
+            )
+            p_pr.insert(insert_at, setting)
+        setting.set(qn("w:val"), "0")
+
+
+def _discard_unused_paragraphs(document, retained) -> None:
+    retained_elements = {paragraph._p for paragraph in retained}
+    for paragraph in list(document.paragraphs):
+        if paragraph._p not in retained_elements:
+            paragraph._p.getparent().remove(paragraph._p)
+
+
+def _format_title(paragraph) -> None:
+    paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    paragraph.paragraph_format.first_line_indent = Inches(0)
+    paragraph.paragraph_format.left_indent = Inches(0)
+    paragraph.paragraph_format.right_indent = Inches(0)
+    paragraph.paragraph_format.space_before = Pt(0)
+    paragraph.paragraph_format.space_after = Pt(16)
+    paragraph.paragraph_format.line_spacing = 1.0
+    _disable_cjk_auto_spacing(paragraph)
+    _set_paragraph_font(paragraph, size_pt=18, bold=True)
+
+
+def _format_body(paragraph) -> None:
+    paragraph.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    paragraph.paragraph_format.left_indent = Inches(0)
+    paragraph.paragraph_format.right_indent = Inches(0)
+    paragraph.paragraph_format.first_line_indent = Pt(24)
+    paragraph.paragraph_format.space_before = Pt(0)
+    paragraph.paragraph_format.space_after = Pt(12)
+    paragraph.paragraph_format.line_spacing = 1.35
+    _disable_cjk_auto_spacing(paragraph)
+    _set_paragraph_font(paragraph, size_pt=12)
+
+
+def _format_signature_paragraph(paragraph) -> None:
+    paragraph.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    paragraph.paragraph_format.left_indent = Inches(0)
+    paragraph.paragraph_format.right_indent = Inches(0)
+    paragraph.paragraph_format.first_line_indent = Inches(0)
+    paragraph.paragraph_format.space_before = Pt(0)
+    paragraph.paragraph_format.space_after = Pt(0)
+    paragraph.paragraph_format.line_spacing = Pt(75)
+    _disable_cjk_auto_spacing(paragraph)
+    _set_paragraph_font(paragraph, size_pt=12)
+
+
+def _format_right_detail(paragraph, *, space_after_pt: float = 0) -> None:
+    paragraph.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    paragraph.paragraph_format.left_indent = Inches(0)
+    paragraph.paragraph_format.right_indent = Inches(0)
+    paragraph.paragraph_format.first_line_indent = Inches(0)
+    paragraph.paragraph_format.space_before = Pt(0)
+    paragraph.paragraph_format.space_after = Pt(space_after_pt)
+    paragraph.paragraph_format.line_spacing = 1.15
+    _disable_cjk_auto_spacing(paragraph)
+    _set_paragraph_font(paragraph, size_pt=12)
+
+
+def _template_seal_anchor():
+    template = Document(CAMP_TEMPLATE_PATH)
+    for paragraph in template.paragraphs:
+        for drawing in paragraph._p.xpath(".//w:drawing"):
+            anchors = drawing.xpath("./wp:anchor")
+            if anchors:
+                return deepcopy(anchors[0])
+    raise ValueError("集中请假模板缺少印章位置")
+
+
+def _position_seal(document, signature_paragraph) -> None:
+    anchor = None
+    for paragraph in document.paragraphs:
+        for drawing in paragraph._p.xpath(".//w:drawing"):
+            anchors = drawing.xpath("./wp:anchor")
+            if anchors:
+                anchor = anchors[0]
+                drawing.getparent().remove(drawing)
+                break
+        if anchor is not None:
+            break
+
+    if anchor is None:
+        anchor = _template_seal_anchor()
+    image_rel_id, _ = document.part.get_or_add_image(str(SEAL_PATH))
+    for blip in anchor.xpath(".//a:blip"):
+        blip.set(qn("r:embed"), image_rel_id)
+
+    section = document.sections[0]
+    seal_width = int(Inches(1.10))
+    original_extent = anchor.find(qn("wp:extent"))
+    if original_extent is None:
+        original_extent = OxmlElement("wp:extent")
+        anchor.insert(3, original_extent)
+    original_cx = int(original_extent.get("cx", str(seal_width))) if original_extent is not None else seal_width
+    original_cy = int(original_extent.get("cy", str(seal_width))) if original_extent is not None else seal_width
+    seal_height = max(1, round(seal_width * original_cy / original_cx))
+    original_extent.set("cx", str(seal_width))
+    original_extent.set("cy", str(seal_height))
+
+    # Keep the same seal asset and overlap, but anchor it to the signing line
+    # and keep it in the right-hand signature zone on both templates.
+    position_h = anchor.find(qn("wp:positionH"))
+    position_v = anchor.find(qn("wp:positionV"))
+    if position_h is None:
+        position_h = OxmlElement("wp:positionH")
+        anchor.insert(1, position_h)
+    if position_v is None:
+        position_v = OxmlElement("wp:positionV")
+        anchor.insert(2, position_v)
+    position_h.set("relativeFrom", "page")
+    position_v.set("relativeFrom", "paragraph")
+    for position, offset in (
+        (position_h, int(section.page_width - section.right_margin - seal_width + Inches(0.30))),
+        (position_v, int(Inches(0.02))),
+    ):
+        pos_offset = position.find(qn("wp:posOffset"))
+        align = position.find(qn("wp:align"))
+        if align is not None:
+            position.remove(align)
+        if pos_offset is None:
+            pos_offset = OxmlElement("wp:posOffset")
+            position.append(pos_offset)
+        pos_offset.text = str(offset)
+    anchor.set("behindDoc", "1")
+    anchor.set("allowOverlap", "1")
+    anchor.set("distL", "0")
+    anchor.set("distR", "0")
+
+    drawing = OxmlElement("w:drawing")
+    drawing.append(anchor)
+    run = OxmlElement("w:r")
+    run.append(drawing)
+    signature_paragraph._p.append(run)
+
+
+def _format_student_table(document, table, column_fractions: tuple[float, ...]) -> None:
+    section = document.sections[0]
+    total_emu = int(section.page_width - section.left_margin - section.right_margin)
+    total_twips = round(total_emu / EMU_PER_TWIP)
+    widths_twips = [round(total_twips * fraction) for fraction in column_fractions]
+    widths_twips[-1] = total_twips - sum(widths_twips[:-1])
+
+    table.autofit = False
+    table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    tbl_pr = table._tbl.tblPr
+    tbl_w = tbl_pr.find(qn("w:tblW"))
+    if tbl_w is None:
+        tbl_w = OxmlElement("w:tblW")
+        tbl_pr.insert(0, tbl_w)
+    tbl_w.set(qn("w:w"), str(total_twips))
+    tbl_w.set(qn("w:type"), "dxa")
+    layout = tbl_pr.find(qn("w:tblLayout"))
+    if layout is None:
+        layout = OxmlElement("w:tblLayout")
+        tbl_pr.append(layout)
+    layout.set(qn("w:type"), "fixed")
+    table_grid = table._tbl.tblGrid
+    grid_columns = list(table_grid.gridCol_lst)
+    for index, width in enumerate(widths_twips):
+        if index < len(grid_columns):
+            grid_columns[index].set(qn("w:w"), str(width))
+        table.columns[index].width = Inches(width / 1440)
+
+    borders = tbl_pr.find(qn("w:tblBorders"))
+    if borders is None:
+        borders = OxmlElement("w:tblBorders")
+        tbl_pr.append(borders)
+    for edge in ("top", "left", "bottom", "right", "insideH", "insideV"):
+        border = borders.find(qn(f"w:{edge}"))
+        if border is None:
+            border = OxmlElement(f"w:{edge}")
+            borders.append(border)
+        border.set(qn("w:val"), "single")
+        border.set(qn("w:sz"), "6")
+        border.set(qn("w:space"), "0")
+        border.set(qn("w:color"), "555555")
+
+    for row_index, row in enumerate(table.rows):
+        row.height = Pt(24)
+        row.height_rule = WD_ROW_HEIGHT_RULE.AT_LEAST
+        for column_index, cell in enumerate(row.cells):
+            width = widths_twips[column_index]
+            cell.width = Inches(width / 1440)
+            cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+            tc_pr = cell._tc.get_or_add_tcPr()
+            cell_margins = tc_pr.find(qn("w:tcMar"))
+            if cell_margins is None:
+                cell_margins = OxmlElement("w:tcMar")
+                tc_pr.append(cell_margins)
+            for edge, margin in (("top", 70), ("bottom", 70), ("left", 100), ("right", 100)):
+                node = cell_margins.find(qn(f"w:{edge}"))
+                if node is None:
+                    node = OxmlElement(f"w:{edge}")
+                    cell_margins.append(node)
+                node.set(qn("w:w"), str(margin))
+                node.set(qn("w:type"), "dxa")
+            cell_borders = tc_pr.find(qn("w:tcBorders"))
+            if cell_borders is None:
+                cell_borders = OxmlElement("w:tcBorders")
+                tc_pr.append(cell_borders)
+            for edge in ("top", "left", "bottom", "right", "insideH", "insideV"):
+                border = cell_borders.find(qn(f"w:{edge}"))
+                if border is None:
+                    border = OxmlElement(f"w:{edge}")
+                    cell_borders.append(border)
+                border.set(qn("w:val"), "single")
+                border.set(qn("w:sz"), "6")
+                border.set(qn("w:space"), "0")
+                border.set(qn("w:color"), "555555")
+            for paragraph in cell.paragraphs:
+                paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                paragraph.paragraph_format.first_line_indent = Inches(0)
+                paragraph.paragraph_format.space_before = Pt(0)
+                paragraph.paragraph_format.space_after = Pt(0)
+                paragraph.paragraph_format.line_spacing = 1.0
+                _disable_cjk_auto_spacing(paragraph)
+                _set_paragraph_font(paragraph, size_pt=11, bold=(row_index == 0))
+
+
+def _document_time_text(start_at, end_at) -> str:
+    if start_at.date() == end_at.date():
+        return f"{start_at.year}年{start_at.month}月{start_at.day}日 {start_at:%H:%M} 至 {end_at:%H:%M}"
+    return (
+        f"{start_at.year}年{start_at.month}月{start_at.day}日 {start_at:%H:%M} 至 "
+        f"{end_at.year}年{end_at.month}月{end_at.day}日 {end_at:%H:%M}"
+    )
+
+
+def _join_no_break_phrase(text: str) -> str:
+    return (
+        text.replace("吉甲大师", "吉\u2060甲\u2060大\u2060师")
+        .replace("双创基地", "双\u2060创\u2060基\u2060地")
+    )
 
 
 def _remove_image_parts(docx_bytes: bytes) -> bytes:
@@ -98,14 +411,18 @@ def _remove_image_parts(docx_bytes: bytes) -> bytes:
                 extent = node.find(f".//{{{WP_NS}}}extent")
                 width = int(extent.get("cx", "0")) if extent is not None else 0
                 height = int(extent.get("cy", "0")) if extent is not None else 0
+                anchor = node.find(f".//{{{WP_NS}}}anchor")
                 if paragraph is not None and width > 0:
                     # One 11pt blank space is roughly 5.5pt wide. The exact
                     # blank run keeps the original image's horizontal place.
-                    spaces = max(1, round(width / (EMU_PER_POINT * 5.5)))
-                    text = etree.Element(f"{{{W_NS}}}t")
-                    text.set(f"{{{XML_NS}}}space", "preserve")
-                    text.text = "\u00a0" * spaces
-                    parent.replace(node, text)
+                    if anchor is not None:
+                        parent.remove(node)
+                    else:
+                        spaces = max(1, round(width / (EMU_PER_POINT * 5.5)))
+                        text = etree.Element(f"{{{W_NS}}}t")
+                        text.set(f"{{{XML_NS}}}space", "preserve")
+                        text.text = "\u00a0" * spaces
+                        parent.replace(node, text)
                     reserved_paragraph_heights[paragraph] = max(
                         reserved_paragraph_heights.get(paragraph, 0), height
                     )
@@ -176,30 +493,29 @@ def build_daily_leave_v2_docx(
     if not contact_phone.strip():
         raise ValueError("LEAVE_CONTACT_PHONE 未配置，无法生成请假材料")
     document = Document(DAILY_TEMPLATE_PATH)
+    title = _find_paragraph(document, "请假条")
     body = _find_paragraph(document, "以下学生因")
     phone = _find_paragraph(document, "联系电话：")
     issued = next(
         (paragraph for paragraph in document.paragraphs if "2026年9月20日" in paragraph.text.replace(" ", "")),
         None,
     )
-    if body is None or phone is None or issued is None or not document.tables:
+    if title is None or body is None or phone is None or issued is None or not document.tables:
         raise ValueError("日常请假模板结构不完整")
 
     body_text = (
-        f"以下学生因参加{format_school_leave_time(start_at, end_at)}的"
+        f"以下学生因参加{_document_time_text(start_at, end_at)}的"
         f"{SCHOOL_LEAVE_DOCUMENT_REASON}，不能参加"
         f"{format_school_leave_course_period(start_at, end_at)}，特此证明。"
     )
-    _set_paragraph_text(body, body_text)
-    phone_indent = phone.text[: len(phone.text) - len(phone.text.lstrip())]
-    _set_paragraph_text(phone, f"{phone_indent}联系电话：{contact_phone.strip()}")
-    issued_indent = issued.text[: len(issued.text) - len(issued.text.lstrip())]
+    _set_paragraph_text(body, _join_no_break_phrase(body_text))
+    _set_paragraph_text(phone, f"联系电话：{contact_phone.strip()}")
     generated_at = school_leave_now()
-    _set_paragraph_text(issued, f"{issued_indent}{generated_at.year}年{generated_at.month}月{generated_at.day}日")
+    _set_paragraph_text(issued, f"{generated_at.year}年{generated_at.month}月{generated_at.day}日")
 
     table = document.tables[0]
     if len(table.columns) == 2:
-        table.add_column(Inches(1.4))
+        table.add_column(Inches(2.0))
     if len(table.columns) != 3 or len(table.rows) < 2:
         raise ValueError("日常请假模板名单表格结构不完整")
     _set_paragraph_text(table.rows[0].cells[0].paragraphs[0], "姓名")
@@ -209,14 +525,20 @@ def build_daily_leave_v2_docx(
     _set_paragraph_text(table.rows[1].cells[1].paragraphs[0], student_id)
     _set_paragraph_text(table.rows[1].cells[2].paragraphs[0], college_name)
 
-    if not offline:
-        signature = _find_paragraph(document, "指导教师（签字）：")
-        if signature is None:
-            signature = _find_paragraph(document, "指导教师")
-        if signature is None:
-            raise ValueError("日常请假模板缺少指导教师签字位置")
-        _append_image(signature, SIGNATURE_PATH, 0.89)
-        _append_image(signature, SEAL_PATH, 1.10)
+    signature = _find_paragraph(document, "指导教师")
+    if signature is None:
+        raise ValueError("日常请假模板缺少指导教师签字位置")
+    _set_signature_label(signature)
+    _append_image(signature, SIGNATURE_PATH, 0.89)
+    _position_seal(document, signature)
+
+    _discard_unused_paragraphs(document, (title, body, signature, phone, issued))
+    _format_title(title)
+    _format_body(body)
+    _format_signature_paragraph(signature)
+    _format_right_detail(phone)
+    _format_right_detail(issued, space_after_pt=12)
+    _format_student_table(document, table, (0.30, 0.30, 0.40))
     return _save(document, offline=offline)
 
 
@@ -237,9 +559,21 @@ def build_camp_leave_college_docx(
     if event_type not in {"winter", "summer"}:
         raise ValueError("集中请假活动类型无效")
     document = Document(CAMP_TEMPLATE_PATH)
-    paragraphs = document.paragraphs
+    title_paragraph = _find_paragraph(document, "留校申请书")
     body = _find_paragraph(document, "兹有以下学生")
-    if body is None or not document.tables:
+    approval = _find_paragraph(document, "望批准")
+    signature = _find_paragraph(document, "指导教师：")
+    phone = _find_paragraph(document, "电话：")
+    attachment = _find_paragraph(document, "附件一：")
+    if (
+        title_paragraph is None
+        or body is None
+        or approval is None
+        or signature is None
+        or phone is None
+        or attachment is None
+        or not document.tables
+    ):
         raise ValueError("集中请假模板结构不完整")
     season = "寒假" if event_type == "winter" else "暑假"
     body_text = (
@@ -248,7 +582,7 @@ def build_camp_leave_college_docx(
         "吉甲大师双创基地已安排指导教师全程负责学生的日常管理，包括早晚签到，"
         "并进行全天候的实验室活动安排。"
     )
-    _set_paragraph_text(body, body_text)
+    _set_paragraph_text(body, _join_no_break_phrase(body_text))
 
     table = document.tables[0]
     if len(table.rows) < 2 or len(table.columns) != 4:
@@ -266,4 +600,29 @@ def build_camp_leave_college_docx(
         for cell, value in zip(row.cells, values):
             _set_paragraph_text(cell.paragraphs[0], value)
 
+    _set_signature_label(signature)
+    _position_seal(document, signature)
+    _discard_unused_paragraphs(
+        document,
+        (title_paragraph, body, approval, signature, phone, attachment),
+    )
+    _format_title(title_paragraph)
+    _format_body(body)
+    approval.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    approval.paragraph_format.left_indent = Inches(0)
+    approval.paragraph_format.right_indent = Inches(0)
+    approval.paragraph_format.first_line_indent = Inches(0)
+    approval.paragraph_format.space_before = Pt(2)
+    approval.paragraph_format.space_after = Pt(0)
+    approval.paragraph_format.line_spacing = 1.15
+    _set_paragraph_font(approval, size_pt=12)
+    _format_signature_paragraph(signature)
+    _format_right_detail(phone, space_after_pt=10)
+    attachment.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    attachment.paragraph_format.first_line_indent = Inches(0)
+    attachment.paragraph_format.space_before = Pt(0)
+    attachment.paragraph_format.space_after = Pt(5)
+    attachment.paragraph_format.line_spacing = 1.0
+    _set_paragraph_font(attachment, size_pt=11, bold=True)
+    _format_student_table(document, table, (0.08, 0.22, 0.30, 0.40))
     return _save(document, offline=offline)

@@ -54,6 +54,18 @@ function dateTime(value: string) {
   return value.slice(0, 16).replace("T", " ")
 }
 
+function initializeDailyTimesIfEmpty(draft: { start_at: string; end_at: string }) {
+  const now = new Date()
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`
+  if (!draft.start_at) draft.start_at = `${today}T08:00`
+  if (!draft.end_at) draft.end_at = `${today}T17:10`
+}
+
+function toggleCreateForm() {
+  showCreateForm.value = !showCreateForm.value
+  if (showCreateForm.value) initializeDailyTimesIfEmpty(windowDraft.value)
+}
+
 function range(item: Pick<DailyLeaveWindowMember, "start_at" | "end_at">) {
   return `${dateTime(item.start_at)} 至 ${dateTime(item.end_at)}`
 }
@@ -249,7 +261,10 @@ function handleAdminMenuSelect(item: DailyLeaveWindowAdmin, action: string) {
   else handleAdminMenu(item, action)
 }
 
-onMounted(load)
+onMounted(() => {
+  initializeDailyTimesIfEmpty(selfDraft.value)
+  void load()
+})
 </script>
 
 <template>
@@ -302,7 +317,7 @@ onMounted(load)
     <section v-if="sharedWindows.length || loading || isAdmin" class="daily-leave-section daily-leave-shared">
       <div class="daily-leave-heading">
         <h2>共享活动</h2>
-        <button v-if="isAdmin" class="text-action" type="button" @click="showCreateForm = !showCreateForm">
+        <button v-if="isAdmin" class="text-action" type="button" @click="toggleCreateForm">
           {{ showCreateForm ? "取消创建" : "＋ 创建共享活动" }}
         </button>
       </div>

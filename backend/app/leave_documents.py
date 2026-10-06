@@ -350,10 +350,10 @@ def _format_student_table(document, table, column_fractions: tuple[float, ...]) 
 
 def _document_time_text(start_at, end_at) -> str:
     if start_at.date() == end_at.date():
-        return f"{start_at.year}年{start_at.month}月{start_at.day}日 {start_at:%H:%M} 至 {end_at:%H:%M}"
+        return f"{start_at.year}年{start_at.month}月{start_at.day}日{start_at:%H:%M} 至 {end_at:%H:%M}"
     return (
-        f"{start_at.year}年{start_at.month}月{start_at.day}日 {start_at:%H:%M} 至 "
-        f"{end_at.year}年{end_at.month}月{end_at.day}日 {end_at:%H:%M}"
+        f"{start_at.year}年{start_at.month}月{start_at.day}日{start_at:%H:%M} 至 "
+        f"{end_at.year}年{end_at.month}月{end_at.day}日{end_at:%H:%M}"
     )
 
 
@@ -576,8 +576,9 @@ def build_camp_leave_college_docx(
     ):
         raise ValueError("集中请假模板结构不完整")
     season = "寒假" if event_type == "winter" else "暑假"
+    activity_title = f"吉甲大师双创基地机器人战队{season}创新实践活动"
     body_text = (
-        f"兹有以下学生，因参与即将举行的“{title}”，需{season}留校进行机器人的设计、编程、测试，"
+        f"兹有以下学生，因参与即将举行的“{activity_title}”，需{season}留校进行机器人的设计、编程、测试，"
         f"时间是{_camp_date(start_date)}到{_camp_date(end_date)}。为确保留校期间安全、高效有序，"
         "吉甲大师双创基地已安排指导教师全程负责学生的日常管理，包括早晚签到，"
         "并进行全天候的实验室活动安排。"

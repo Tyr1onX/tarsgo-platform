@@ -240,12 +240,12 @@ def group_school_leave_requests(requests: list[SchoolLeaveRequest]) -> list[Scho
 def format_school_leave_time(start_at: datetime, end_at: datetime) -> str:
     if start_at.date() == end_at.date():
         return (
-            f"{start_at.year}年{start_at.month}月{start_at.day}日 "
+            f"{start_at.year}年{start_at.month}月{start_at.day}日"
             f"{start_at:%H:%M} 至 {end_at:%H:%M}"
         )
     return (
-        f"{start_at.year}年{start_at.month}月{start_at.day}日 {start_at:%H:%M} 至\n"
-        f"{end_at.year}年{end_at.month}月{end_at.day}日 {end_at:%H:%M}"
+        f"{start_at.year}年{start_at.month}月{start_at.day}日{start_at:%H:%M} 至\n"
+        f"{end_at.year}年{end_at.month}月{end_at.day}日{end_at:%H:%M}"
     )
 
 

@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises"
 const team = await readFile(new URL("../src/pages/TeamPage.vue", import.meta.url), "utf8")
 const detail = await readFile(new URL("../src/pages/MemberDetailPage.vue", import.meta.url), "utf8")
 const app = await readFile(new URL("../src/App.vue", import.meta.url), "utf8")
+const css = await readFile(new URL("../src/style.css", import.meta.url), "utf8")
 const api = await readFile(new URL("../src/api.ts", import.meta.url), "utf8")
 const types = await readFile(new URL("../src/types.ts", import.meta.url), "utf8")
 
@@ -113,8 +114,8 @@ assert.ok(team.includes("@media (max-width: 520px)"))
 assert.ok(team.includes("overflow-wrap: anywhere"))
 assert.ok(detail.includes("@media (max-width: 520px)"))
 assert.ok(detail.includes("grid-template-columns: minmax(78px, 96px) minmax(0, 1fr)"))
-assert.ok(detail.includes("@media (max-width: 720px)"))
 assert.ok(detail.includes(".member-profile-form"))
+assert.match(css, /@media \(max-width: 1000px\)[\s\S]*?\.member-profile-form\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\)/s)
 assert.doesNotMatch(team + detail, /width:\s*100vw/)
 assert.doesNotMatch(team + detail, /min-width:\s*(?:4\d\d|[5-9]\d\d|\d{4,})px/)
 

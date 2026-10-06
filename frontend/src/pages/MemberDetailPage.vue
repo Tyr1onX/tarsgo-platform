@@ -286,32 +286,6 @@ function clearProfileError(field: string) {
   overflow-wrap: anywhere;
 }
 
-.member-profile-form {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
-  align-items: end;
-  gap: 10px;
-  max-width: 720px;
-}
-
-.member-profile-form label {
-  min-width: 0;
-  display: grid;
-  gap: 6px;
-  color: var(--muted);
-  font-size: 12.5px;
-}
-
-.member-profile-form input,
-.member-profile-form select {
-  min-width: 0;
-}
-
-.member-profile-save {
-  width: fit-content;
-  white-space: nowrap;
-}
-
 .member-account-section {
   display: grid;
   justify-items: start;
@@ -360,16 +334,6 @@ function clearProfileError(field: string) {
 .member-profile-form,
 .member-invite-result {
   min-width: 0;
-}
-
-@media (max-width: 720px) {
-  .member-profile-form {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .member-profile-save {
-    justify-self: start;
-  }
 }
 
 @media (max-width: 520px) {

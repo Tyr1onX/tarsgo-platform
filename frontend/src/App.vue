@@ -83,6 +83,13 @@ const SchoolLeavePage = defineAsyncComponent({
   loadingComponent: LocalPageLoading,
   delay: 120,
 })
+const CampLeavePublicPage = defineAsyncComponent({
+  loader: () => import("./pages/CampLeavePublicPage.vue"),
+  loadingComponent: LocalPageLoading,
+  delay: 120,
+})
+const campLeavePublicToken = computed(() => path.value.match(/^\/leave\/camp\/([A-Za-z0-9_-]+)$/)?.[1] ?? "")
+const isCampLeavePublicRoute = computed(() => path.value.startsWith("/leave/camp/"))
 const user = ref<Member | null>(null)
 const loading = ref(true)
 const initialRouteResolved = ref(false)
@@ -1049,7 +1056,8 @@ async function loadRoute() {
     const publicPage =
       routePath === "/login" ||
       routePath.startsWith("/invite/") ||
-      routePath.startsWith("/register/")
+      routePath.startsWith("/register/") ||
+      routePath.startsWith("/leave/camp/")
     if (!publicPage && !user.value) {
       await loadCurrentUser()
       if (!isCurrentLoad()) return
@@ -1059,7 +1067,9 @@ async function loadRoute() {
       }
     }
 
-    if (routePath === "/login") {
+    if (routePath.startsWith("/leave/camp/")) {
+      // Public camp signup page intentionally loads no authenticated team data.
+    } else if (routePath === "/login") {
       if (user.value) {
         navigate("/")
         return
@@ -2450,10 +2460,12 @@ onMounted(async () => {
   window.addEventListener("keydown", handlePlannerDetailKeydown)
   window.addEventListener("focus", handleExecutionRefreshSignal)
   document.addEventListener("visibilitychange", handleExecutionRefreshSignal)
-  try {
-    await loadCurrentUser()
-  } catch (reason) {
-    error.value = messageOf(reason)
+  if (!isCampLeavePublicRoute.value) {
+    try {
+      await loadCurrentUser()
+    } catch (reason) {
+      error.value = messageOf(reason)
+    }
   }
   await loadRoute()
   syncCollaborationRefreshTimer()
@@ -2488,7 +2500,11 @@ onBeforeUnmount(() => {
     @confirm="confirmAppConfirmation"
   />
 
-  <main v-if="path === '/login'" class="auth-shell">
+  <main v-if="path.startsWith('/leave/camp/')" class="auth-shell">
+    <CampLeavePublicPage :token="campLeavePublicToken" />
+  </main>
+
+  <main v-else-if="path === '/login'" class="auth-shell">
     <form class="auth-form" @submit.prevent="submitLogin">
       <p class="brand">TARS BASE</p>
       <h1>登录</h1>

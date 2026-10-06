@@ -233,6 +233,78 @@ export interface SchoolLeaveAdminSummary {
   todo_count: number
 }
 
+export type CampLeaveType = "winter" | "summer"
+export type CampLeaveStatus = "collecting" | "closed"
+export type CampLeaveParticipantType = "formal" | "reserve" | "other"
+
+export interface CampLeaveEventMember {
+  id: number
+  title: string
+  type: CampLeaveType
+  start_date: string
+  end_date: string
+  collection_deadline: string
+  status: CampLeaveStatus
+  accepting_participants: boolean
+  joined: boolean
+  participant_type: CampLeaveParticipantType | null
+  submitted_at: string | null
+}
+
+export interface CampLeaveAdminEvent {
+  id: number
+  title: string
+  type: CampLeaveType
+  start_date: string
+  end_date: string
+  collection_deadline: string
+  status: CampLeaveStatus
+  accepting_participants: boolean
+  participant_count: number
+  public_path: string
+  created_at: string
+}
+
+export interface CampLeaveParticipant {
+  id: number
+  name: string
+  student_id: string
+  college: string
+  college_name: string
+  participant_type: CampLeaveParticipantType
+  submitted_at: string
+}
+
+export interface CampLeaveParticipantGroup {
+  college: string
+  college_name: string
+  count: number
+  participants: CampLeaveParticipant[]
+}
+
+export interface CampLeaveAdminEventDetail {
+  event: CampLeaveAdminEvent
+  groups: CampLeaveParticipantGroup[]
+}
+
+export interface CampLeavePublicEvent {
+  title: string
+  type: CampLeaveType
+  start_date: string
+  end_date: string
+  collection_deadline: string
+  status: CampLeaveStatus
+  accepting_participants: boolean
+}
+
+export interface CampLeaveEventCreatePayload {
+  title: string
+  type: CampLeaveType
+  start_date: string
+  end_date: string
+  collection_deadline: string
+}
+
 export interface AIPlannerAccess { available: boolean }
 export interface AIPlannerInput {
   description: string

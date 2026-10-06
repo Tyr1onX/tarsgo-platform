@@ -32,6 +32,9 @@ MEMBER_STATUS_VALUES = ("invited", "active", "disabled")
 TASK_STATUS_VALUES = ("todo", "doing", "done")
 SCHOOL_LEAVE_REQUEST_STATUS_VALUES = ("pending", "included", "withdrawn")
 SCHOOL_LEAVE_RUN_STATUS_VALUES = ("ready", "awaiting_return", "completed", "cancelled")
+CAMP_LEAVE_TYPE_VALUES = ("winter", "summer")
+CAMP_LEAVE_STATUS_VALUES = ("collecting", "closed")
+CAMP_LEAVE_PARTICIPANT_TYPE_VALUES = ("formal", "reserve", "other")
 
 
 task_collaborators = Table(
@@ -223,6 +226,72 @@ class SchoolLeaveRequest(Base):
 
     member: Mapped[Member] = relationship(foreign_keys=[member_id])
     run: Mapped[SchoolLeaveRun | None] = relationship(back_populates="requests")
+
+
+class CampLeaveEvent(Base):
+    __tablename__ = "camp_leave_events"
+    __table_args__ = (
+        CheckConstraint("type IN ('winter','summer')", name="ck_camp_leave_events_type"),
+        CheckConstraint("status IN ('collecting','closed')", name="ck_camp_leave_events_status"),
+        CheckConstraint("start_date <= end_date", name="ck_camp_leave_events_date_order"),
+        UniqueConstraint("public_token", name="uq_camp_leave_events_public_token"),
+        Index("ix_camp_leave_events_status_deadline", "status", "collection_deadline"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    title: Mapped[str] = mapped_column(String(100), nullable=False)
+    type: Mapped[str] = mapped_column(String(20), nullable=False)
+    start_date: Mapped[date] = mapped_column(Date(), nullable=False)
+    end_date: Mapped[date] = mapped_column(Date(), nullable=False)
+    collection_deadline: Mapped[datetime] = mapped_column(DateTime(), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="collecting", server_default="collecting", nullable=False)
+    # This is a high-entropy bearer secret. It is exposed only by admin APIs and
+    # is never included in member-facing event or public registration responses.
+    public_token: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("members.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(), server_default=func.now(), nullable=False)
+
+    creator: Mapped[Member | None] = relationship()
+    participants: Mapped[list["CampLeaveParticipant"]] = relationship(
+        back_populates="event", cascade="all, delete-orphan"
+    )
+
+
+class CampLeaveParticipant(Base):
+    __tablename__ = "camp_leave_participants"
+    __table_args__ = (
+        CheckConstraint(
+            "participant_type IN ('formal','reserve','other')",
+            name="ck_camp_leave_participants_type",
+        ),
+        CheckConstraint(
+            "CHAR_LENGTH(name_snapshot) BETWEEN 2 AND 50",
+            name="ck_camp_leave_participants_name_length",
+        ),
+        CheckConstraint(
+            "CHAR_LENGTH(student_id_snapshot) = 8",
+            name="ck_camp_leave_participants_student_id",
+        ),
+        CheckConstraint(
+            "college_snapshot IN (" + ",".join(f"'{code}'" for code in sorted(COLLEGE_CODES)) + ")",
+            name="ck_camp_leave_participants_college",
+        ),
+        UniqueConstraint("event_id", "student_id_snapshot", name="uq_camp_leave_event_student"),
+        UniqueConstraint("event_id", "member_id", name="uq_camp_leave_event_member"),
+        Index("ix_camp_leave_participants_event_college", "event_id", "college_snapshot"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    event_id: Mapped[int] = mapped_column(ForeignKey("camp_leave_events.id", ondelete="CASCADE"), nullable=False)
+    member_id: Mapped[int | None] = mapped_column(ForeignKey("members.id", ondelete="SET NULL"), nullable=True)
+    name_snapshot: Mapped[str] = mapped_column(String(50), nullable=False)
+    student_id_snapshot: Mapped[str] = mapped_column(String(8), nullable=False)
+    college_snapshot: Mapped[str] = mapped_column(String(50), nullable=False)
+    participant_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    submitted_at: Mapped[datetime] = mapped_column(DateTime(), server_default=func.now(), nullable=False)
+
+    event: Mapped[CampLeaveEvent] = relationship(back_populates="participants")
+    member: Mapped[Member | None] = relationship()
 
 
 class Task(Base):

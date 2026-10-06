@@ -5,6 +5,7 @@ import { api } from "../api"
 import ActionMenu, { type ActionMenuItem } from "../components/ActionMenu.vue"
 import ConfirmDialog from "../components/ConfirmDialog.vue"
 import FileDropzone from "../components/FileDropzone.vue"
+import CampLeavePage from "./CampLeavePage.vue"
 import type {
   Member,
   SchoolLeaveAdminConfig,
@@ -39,6 +40,7 @@ const pendingPreviewKey = ref("")
 const editingReasonRunId = ref<number | null>(null)
 const historyExpanded = ref(false)
 const activeView = ref<"mine" | "admin">("mine")
+const activeSection = ref<"daily" | "camp">("daily")
 
 interface LeaveConfirmRequest {
   title: string
@@ -517,6 +519,17 @@ onMounted(() => {
     @confirm="confirmLeaveAction"
   />
 
+  <nav class="leave-kind-tabs" aria-label="请假类型">
+    <button type="button" :class="{ active: activeSection === 'daily' }" @click="activeSection = 'daily'">日常请假</button>
+    <button type="button" :class="{ active: activeSection === 'camp' }" @click="activeSection = 'camp'">集中请假</button>
+  </nav>
+
+  <template v-if="activeSection === 'camp'">
+    <div class="page-title leave-page-title"><h1>集中请假</h1></div>
+    <CampLeavePage v-if="currentUser" :current-user="currentUser" @navigate="emit('navigate', $event)" />
+  </template>
+  <template v-else>
+
   <div class="page-title leave-page-title"><h1>学校请假</h1></div>
 
   <nav v-if="isAdmin" class="leave-view-tabs" aria-label="学校请假视图">
@@ -860,10 +873,15 @@ onMounted(() => {
       </div>
     </section>
   </template>
+  </template>
 </template>
 
 <style scoped>
 .leave-page-title { margin-bottom: 0; }
+.leave-kind-tabs { display: flex; gap: 20px; margin-bottom: 20px; border-bottom: 1px solid var(--line); }
+.leave-kind-tabs button { border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; padding: 10px 1px 9px; color: var(--muted); font-size: 13px; }
+.leave-kind-tabs button:hover, .leave-kind-tabs button.active { color: var(--text); }
+.leave-kind-tabs button.active { border-bottom-color: var(--text); }
 .leave-view-tabs { display: flex; gap: 20px; margin-bottom: 24px; border-bottom: 1px solid var(--line); }
 .leave-view-tabs button { border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; padding: 10px 1px 9px; color: var(--muted); font-size: 13px; }
 .leave-view-tabs button:hover, .leave-view-tabs button.active { color: var(--text); }

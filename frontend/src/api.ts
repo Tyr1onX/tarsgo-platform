@@ -4,6 +4,11 @@ import type {
   AIPlannerResult,
   AIPlannerInput,
   AIPlannerRefineInput,
+  CampLeaveAdminEvent,
+  CampLeaveAdminEventDetail,
+  CampLeaveEventCreatePayload,
+  CampLeaveEventMember,
+  CampLeavePublicEvent,
   AIItemReviewResult,
   AIItemReviewSuggestion,
   AIItemFactExtractionResult,
@@ -193,6 +198,31 @@ export const api = {
   },
   deleteSchoolLeaveRun: (runId: number) =>
     request<void>(`/api/school-leave/admin/runs/${runId}`, { method: "DELETE" }),
+
+  campLeaveEvents: () => request<CampLeaveEventMember[]>("/api/camp-leave/events"),
+  createCampLeaveEvent: (payload: CampLeaveEventCreatePayload) =>
+    request<CampLeaveAdminEvent>("/api/camp-leave/admin/events", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  campLeaveAdminEvents: () => request<CampLeaveAdminEvent[]>("/api/camp-leave/admin/events"),
+  campLeaveAdminEvent: (eventId: number) =>
+    request<CampLeaveAdminEventDetail>(`/api/camp-leave/admin/events/${eventId}`),
+  joinCampLeaveEvent: (eventId: number) =>
+    request<CampLeaveEventMember>(`/api/camp-leave/events/${eventId}/join`, { method: "POST" }),
+  leaveCampLeaveEvent: (eventId: number) =>
+    request<CampLeaveEventMember>(`/api/camp-leave/events/${eventId}/leave`, { method: "POST" }),
+  closeCampLeaveEvent: (eventId: number) =>
+    request<CampLeaveAdminEvent>(`/api/camp-leave/admin/events/${eventId}/close`, { method: "POST" }),
+  removeCampLeaveParticipant: (eventId: number, participantId: number) =>
+    request<void>(`/api/camp-leave/admin/events/${eventId}/participants/${participantId}`, { method: "DELETE" }),
+  publicCampLeaveEvent: (token: string) =>
+    request<CampLeavePublicEvent>(`/api/camp-leave/public/${encodeURIComponent(token)}`),
+  publicJoinCampLeaveEvent: (token: string, payload: { name: string; student_id: string; college: string }) =>
+    request<{ submitted: boolean }>(`/api/camp-leave/public/${encodeURIComponent(token)}/participants`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
 
   aiPlannerAccess: () => request<AIPlannerAccess>("/api/ai/planner/access"),
   generateAIPlan: (payload: AIPlannerInput) =>

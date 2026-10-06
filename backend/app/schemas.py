@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator, model_validator
@@ -13,6 +13,9 @@ TaskStatus = Literal["todo", "doing", "done"]
 SchoolLeaveRequestStatus = Literal["pending", "included", "withdrawn"]
 SchoolLeaveRunStatus = Literal["ready", "awaiting_return", "completed", "cancelled"]
 SchoolLeaveResultState = Literal["available", "cleared"]
+CampLeaveType = Literal["winter", "summer"]
+CampLeaveStatus = Literal["collecting", "closed"]
+CampLeaveParticipantType = Literal["formal", "reserve", "other"]
 ItemFactScope = Literal["global", "related"]
 TaskDetailText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=240)]
 ContextFactText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)]
@@ -43,6 +46,27 @@ def normalize_email(value: str) -> str:
     if not local or "." not in domain or domain.startswith(".") or domain.endswith("."):
         raise ValueError("请输入有效邮箱")
     return email
+
+
+def validate_member_name(value: str) -> str:
+    value = value.strip()
+    if not 2 <= len(value) <= 50:
+        raise ValueError("姓名长度需为 2–50 个字符")
+    return value
+
+
+def validate_student_id(value: str) -> str:
+    value = value.strip()
+    if len(value) != 8 or not value.isascii() or not value.isdigit():
+        raise ValueError("学号必须是 8 位数字")
+    return value
+
+
+def validate_college(value: str) -> str:
+    value = value.strip()
+    if not is_college_code(value):
+        raise ValueError("请选择有效学院")
+    return value
 
 
 class LoginIn(BaseModel):
@@ -80,10 +104,7 @@ class InviteCreate(BaseModel):
     @field_validator("name")
     @classmethod
     def validate_name(cls, value: str) -> str:
-        value = value.strip()
-        if not 2 <= len(value) <= 50:
-            raise ValueError("姓名长度需为 2–50 个字符")
-        return value
+        return validate_member_name(value)
 
     @field_validator("email")
     @classmethod
@@ -136,10 +157,7 @@ class TeamRegistrationIn(BaseModel):
     @field_validator("name")
     @classmethod
     def validate_name(cls, value: str) -> str:
-        value = value.strip()
-        if not 2 <= len(value) <= 50:
-            raise ValueError("姓名长度需为 2–50 个字符")
-        return value
+        return validate_member_name(value)
 
     @field_validator("email")
     @classmethod
@@ -149,18 +167,12 @@ class TeamRegistrationIn(BaseModel):
     @field_validator("student_id")
     @classmethod
     def validate_student_id(cls, value: str) -> str:
-        value = value.strip()
-        if len(value) != 8 or not value.isascii() or not value.isdigit():
-            raise ValueError("学号必须是 8 位数字")
-        return value
+        return validate_student_id(value)
 
     @field_validator("college")
     @classmethod
     def validate_college(cls, value: str) -> str:
-        value = value.strip()
-        if not is_college_code(value):
-            raise ValueError("请选择有效学院")
-        return value
+        return validate_college(value)
 
 
 class MemberSummary(BaseModel):
@@ -282,6 +294,124 @@ class SchoolLeaveGroupOut(BaseModel):
     count: int
     members: list[SchoolLeaveGroupMemberOut]
     result: SchoolLeaveGroupResultOut | None = None
+
+
+class CampLeaveEventCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(min_length=1, max_length=100)
+    type: CampLeaveType
+    start_date: date
+    end_date: date
+    collection_deadline: datetime
+
+    @field_validator("title")
+    @classmethod
+    def clean_title(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("活动名称不能为空")
+        return value
+
+    @field_validator("collection_deadline")
+    @classmethod
+    def validate_deadline(cls, value: datetime) -> datetime:
+        if value.tzinfo is not None:
+            raise ValueError("收集截止时间请使用北京时间，不要包含时区偏移")
+        return value.replace(second=0, microsecond=0)
+
+    @model_validator(mode="after")
+    def validate_dates(self):
+        if self.start_date > self.end_date:
+            raise ValueError("活动开始日期不能晚于结束日期")
+        return self
+
+
+class CampLeavePublicParticipantCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    student_id: str
+    college: str
+
+    @field_validator("name")
+    @classmethod
+    def clean_name(cls, value: str) -> str:
+        return validate_member_name(value)
+
+    @field_validator("student_id")
+    @classmethod
+    def validate_student_id(cls, value: str) -> str:
+        return validate_student_id(value)
+
+    @field_validator("college")
+    @classmethod
+    def validate_college(cls, value: str) -> str:
+        return validate_college(value)
+
+
+class CampLeaveEventMemberOut(BaseModel):
+    id: int
+    title: str
+    type: CampLeaveType
+    start_date: date
+    end_date: date
+    collection_deadline: datetime
+    status: CampLeaveStatus
+    accepting_participants: bool
+    joined: bool
+    participant_type: CampLeaveParticipantType | None = None
+    submitted_at: datetime | None = None
+
+
+class CampLeaveAdminEventOut(BaseModel):
+    id: int
+    title: str
+    type: CampLeaveType
+    start_date: date
+    end_date: date
+    collection_deadline: datetime
+    status: CampLeaveStatus
+    accepting_participants: bool
+    participant_count: int
+    public_path: str
+    created_at: datetime
+
+
+class CampLeaveParticipantOut(BaseModel):
+    id: int
+    name: str
+    student_id: str
+    college: str
+    college_name: str
+    participant_type: CampLeaveParticipantType
+    submitted_at: datetime
+
+
+class CampLeaveParticipantGroupOut(BaseModel):
+    college: str
+    college_name: str
+    count: int
+    participants: list[CampLeaveParticipantOut]
+
+
+class CampLeaveAdminEventDetailOut(BaseModel):
+    event: CampLeaveAdminEventOut
+    groups: list[CampLeaveParticipantGroupOut]
+
+
+class CampLeavePublicEventOut(BaseModel):
+    title: str
+    type: CampLeaveType
+    start_date: date
+    end_date: date
+    collection_deadline: datetime
+    status: CampLeaveStatus
+    accepting_participants: bool
+
+
+class CampLeavePublicSubmissionOut(BaseModel):
+    submitted: bool = True
 
 
 class SchoolLeaveRunOut(BaseModel):

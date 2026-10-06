@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import io
-import linecache
 import os
-import traceback
 from datetime import datetime
 from urllib.parse import unquote
 from concurrent.futures import ThreadPoolExecutor
@@ -425,7 +423,7 @@ def main() -> None:
                 cell._tc.tcPr.tcW.w for cell in template_document.tables[0].rows[0].cells
             ]
             assert [cell.text for cell in document.tables[0].rows[0].cells] == ["姓名", "学号"]
-            assert len(document.tables[0].rows) == 3
+            assert [len(table.rows) for table in document.tables] == [2, 2, 3, 2, 2]
             morning_group = table_text(document, 0)
             cross_period_group = table_text(document, 1)
             first_group = table_text(document, 2)
@@ -701,15 +699,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except AssertionError as error:
-        frame = traceback.extract_tb(error.__traceback__)[-1]
-        source = linecache.getline(frame.filename, frame.lineno).strip()
-        detail = str(error) or source
-        detail = detail.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
-        print(
-            f"::error file=backend/tests/test_school_leave.py,line={frame.lineno},"
-            f"title=SchoolLeaveTestFailure::{detail}"
-        )
-        raise
+    main()

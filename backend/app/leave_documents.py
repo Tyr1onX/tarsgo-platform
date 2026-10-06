@@ -13,7 +13,7 @@ from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT, WD_ROW_HEIGHT_RULE, WD_T
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
-from docx.shared import Inches, Pt
+from docx.shared import Inches, Pt, RGBColor
 from lxml import etree
 
 from .school_leave import (
@@ -170,8 +170,8 @@ def _format_signature_paragraph(paragraph) -> None:
     paragraph.paragraph_format.right_indent = Inches(0.28)
     paragraph.paragraph_format.first_line_indent = Inches(0)
     paragraph.paragraph_format.space_before = Pt(0)
-    paragraph.paragraph_format.space_after = Pt(0)
-    paragraph.paragraph_format.line_spacing = Pt(75)
+    paragraph.paragraph_format.space_after = Pt(4)
+    paragraph.paragraph_format.line_spacing = 1.0
     _disable_cjk_auto_spacing(paragraph)
     _set_paragraph_font(paragraph, size_pt=12)
 
@@ -188,80 +188,18 @@ def _format_right_detail(paragraph, *, space_after_pt: float = 0) -> None:
     _set_paragraph_font(paragraph, size_pt=12)
 
 
-def _template_seal_anchor():
-    template = Document(CAMP_TEMPLATE_PATH)
-    for paragraph in template.paragraphs:
-        for drawing in paragraph._p.xpath(".//w:drawing"):
-            anchors = drawing.xpath("./wp:anchor")
-            if anchors:
-                return deepcopy(anchors[0])
-    raise ValueError("集中请假模板缺少印章位置")
-
-
-def _position_seal(document, signature_paragraph) -> None:
-    anchor = None
+def _place_seal_in_signature_line(document, signature_paragraph) -> None:
+    # The Camp template carries its seal as a page-positioned anchor. Remove
+    # floating drawings so neither Word nor LibreOffice can move one over the
+    # phone, date, or student table when preceding content reflows.
     for paragraph in document.paragraphs:
         for drawing in paragraph._p.xpath(".//w:drawing"):
-            anchors = drawing.xpath("./wp:anchor")
-            if anchors:
-                anchor = anchors[0]
+            if drawing.xpath("./wp:anchor"):
                 drawing.getparent().remove(drawing)
-                break
-        if anchor is not None:
-            break
-
-    if anchor is None:
-        anchor = _template_seal_anchor()
-    image_rel_id, _ = document.part.get_or_add_image(str(SEAL_PATH))
-    for blip in anchor.xpath(".//a:blip"):
-        blip.set(qn("r:embed"), image_rel_id)
-
-    section = document.sections[0]
-    seal_width = int(Inches(1.10))
-    original_extent = anchor.find(qn("wp:extent"))
-    if original_extent is None:
-        original_extent = OxmlElement("wp:extent")
-        anchor.insert(3, original_extent)
-    original_cx = int(original_extent.get("cx", str(seal_width))) if original_extent is not None else seal_width
-    original_cy = int(original_extent.get("cy", str(seal_width))) if original_extent is not None else seal_width
-    seal_height = max(1, round(seal_width * original_cy / original_cx))
-    original_extent.set("cx", str(seal_width))
-    original_extent.set("cy", str(seal_height))
-
-    # Keep the same seal asset and overlap, but anchor it to the signing line
-    # and keep it in the right-hand signature zone on both templates.
-    position_h = anchor.find(qn("wp:positionH"))
-    position_v = anchor.find(qn("wp:positionV"))
-    if position_h is None:
-        position_h = OxmlElement("wp:positionH")
-        anchor.insert(1, position_h)
-    if position_v is None:
-        position_v = OxmlElement("wp:positionV")
-        anchor.insert(2, position_v)
-    position_h.set("relativeFrom", "page")
-    position_v.set("relativeFrom", "paragraph")
-    for position, offset in (
-        (position_h, int(section.page_width - section.right_margin - seal_width + Inches(0.30))),
-        (position_v, int(Inches(0.02))),
-    ):
-        pos_offset = position.find(qn("wp:posOffset"))
-        align = position.find(qn("wp:align"))
-        if align is not None:
-            position.remove(align)
-        if pos_offset is None:
-            pos_offset = OxmlElement("wp:posOffset")
-            position.append(pos_offset)
-        pos_offset.text = str(offset)
-    anchor.set("behindDoc", "1")
-    anchor.set("allowOverlap", "1")
-    anchor.set("distL", "0")
-    anchor.set("distR", "0")
-
-    drawing = OxmlElement("w:drawing")
-    drawing.append(anchor)
-    run = OxmlElement("w:r")
-    run.append(drawing)
-    signature_paragraph._p.append(run)
+    # An inline seal participates in paragraph layout and follows the signature
+    # line as it moves. This keeps the complete signing block above later text
+    # and the student table without relying on page coordinates.
+    _append_image(signature_paragraph, SEAL_PATH, 1.10)
 
 
 def _format_student_table(document, table, column_fractions: tuple[float, ...]) -> None:
@@ -274,6 +212,9 @@ def _format_student_table(document, table, column_fractions: tuple[float, ...]) 
     table.autofit = False
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
     tbl_pr = table._tbl.tblPr
+    table_style = tbl_pr.find(qn("w:tblStyle"))
+    if table_style is not None:
+        tbl_pr.remove(table_style)
     tbl_w = tbl_pr.find(qn("w:tblW"))
     if tbl_w is None:
         tbl_w = OxmlElement("w:tblW")
@@ -304,7 +245,7 @@ def _format_student_table(document, table, column_fractions: tuple[float, ...]) 
         border.set(qn("w:val"), "single")
         border.set(qn("w:sz"), "6")
         border.set(qn("w:space"), "0")
-        border.set(qn("w:color"), "555555")
+        border.set(qn("w:color"), "000000")
 
     for row_index, row in enumerate(table.rows):
         row.height = Pt(24)
@@ -314,6 +255,13 @@ def _format_student_table(document, table, column_fractions: tuple[float, ...]) 
             cell.width = Inches(width / 1440)
             cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
             tc_pr = cell._tc.get_or_add_tcPr()
+            shading = tc_pr.find(qn("w:shd"))
+            if shading is None:
+                shading = OxmlElement("w:shd")
+                tc_pr.append(shading)
+            shading.set(qn("w:val"), "clear")
+            shading.set(qn("w:color"), "auto")
+            shading.set(qn("w:fill"), "FFFFFF")
             cell_margins = tc_pr.find(qn("w:tcMar"))
             if cell_margins is None:
                 cell_margins = OxmlElement("w:tcMar")
@@ -337,7 +285,7 @@ def _format_student_table(document, table, column_fractions: tuple[float, ...]) 
                 border.set(qn("w:val"), "single")
                 border.set(qn("w:sz"), "6")
                 border.set(qn("w:space"), "0")
-                border.set(qn("w:color"), "555555")
+                border.set(qn("w:color"), "000000")
             for paragraph in cell.paragraphs:
                 paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
                 paragraph.paragraph_format.first_line_indent = Inches(0)
@@ -346,6 +294,8 @@ def _format_student_table(document, table, column_fractions: tuple[float, ...]) 
                 paragraph.paragraph_format.line_spacing = 1.0
                 _disable_cjk_auto_spacing(paragraph)
                 _set_paragraph_font(paragraph, size_pt=11, bold=(row_index == 0))
+                for run in paragraph.runs:
+                    run.font.color.rgb = RGBColor(0, 0, 0)
 
 
 def _document_time_text(start_at, end_at) -> str:
@@ -530,7 +480,7 @@ def build_daily_leave_v2_docx(
         raise ValueError("日常请假模板缺少指导教师签字位置")
     _set_signature_label(signature)
     _append_image(signature, SIGNATURE_PATH, 0.89)
-    _position_seal(document, signature)
+    _place_seal_in_signature_line(document, signature)
 
     _discard_unused_paragraphs(document, (title, body, signature, phone, issued))
     _format_title(title)
@@ -602,7 +552,7 @@ def build_camp_leave_college_docx(
             _set_paragraph_text(cell.paragraphs[0], value)
 
     _set_signature_label(signature)
-    _position_seal(document, signature)
+    _place_seal_in_signature_line(document, signature)
     _discard_unused_paragraphs(
         document,
         (title_paragraph, body, approval, signature, phone, attachment),

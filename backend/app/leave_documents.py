@@ -167,7 +167,7 @@ def _format_body(paragraph) -> None:
 def _format_signature_paragraph(paragraph) -> None:
     paragraph.alignment = WD_ALIGN_PARAGRAPH.RIGHT
     paragraph.paragraph_format.left_indent = Inches(0)
-    paragraph.paragraph_format.right_indent = Inches(0)
+    paragraph.paragraph_format.right_indent = Inches(0.28)
     paragraph.paragraph_format.first_line_indent = Inches(0)
     paragraph.paragraph_format.space_before = Pt(0)
     paragraph.paragraph_format.space_after = Pt(0)

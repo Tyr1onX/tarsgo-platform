@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import io
+import linecache
 import os
+import traceback
 from datetime import datetime
 from urllib.parse import unquote
 from concurrent.futures import ThreadPoolExecutor
@@ -699,4 +701,15 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except AssertionError as error:
+        frame = traceback.extract_tb(error.__traceback__)[-1]
+        source = linecache.getline(frame.filename, frame.lineno).strip()
+        detail = str(error) or source
+        detail = detail.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+        print(
+            f"::error file=backend/tests/test_school_leave.py,line={frame.lineno},"
+            f"title=SchoolLeaveTestFailure::{detail}"
+        )
+        raise

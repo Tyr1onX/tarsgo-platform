@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import io
 import os
-import traceback
 from datetime import datetime
 from urllib.parse import unquote
 from concurrent.futures import ThreadPoolExecutor
@@ -355,6 +354,7 @@ def main() -> None:
             cross_period_request_id = cross_period.json()["id"]
 
             # Re-collect released requests plus the later supplement and period examples.
+            set_actor(admin)
             recollected = client.post("/api/school-leave/admin/runs/collect")
             assert recollected.status_code == 200, recollected.text
             run_two = recollected.json()
@@ -699,12 +699,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except AssertionError as error:
-        frame = traceback.extract_tb(error.__traceback__)[-1]
-        print(
-            f"::error file=backend/tests/test_school_leave.py,line={frame.lineno},"
-            "title=SchoolLeaveTestFailure::Assertion failed"
-        )
-        raise
+    main()

@@ -86,7 +86,7 @@ def main() -> None:
         unassigned = Member(
             name="身份待管理员维护",
             email=unassigned_email,
-            student_id="26000203",
+            student_id="26000204",
             college="art",
             team_membership=None,
             role="member",

@@ -351,7 +351,7 @@ def main() -> None:
             assert repeated_doc.status_code == 200
             repeated_paragraphs, repeated_tables = docx_text(repeated_doc.content)
             assert repeated_tables[0][1] == signed_tables[0][1]
-            assert db.scalar(select(func.count(DailyLeaveEntry.id)).where(DailyLeaveEntry.window_id == window_id)) == 3
+            assert db.scalar(select(func.count(DailyLeaveEntry.id)).where(DailyLeaveEntry.window_id == window_id)) == 4
 
             # Closing or reaching the deadline blocks both signed-in and public generation.
             set_actor(admin)

@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from ..auth import hash_token, new_token, require_admin, utcnow
 from ..db import get_db
 from ..models import Invitation, LoginSession, Member
-from ..schemas import InviteCreate, InviteOut, MemberOut, MemberProfileUpdate
+from ..schemas import AdminMemberProfileUpdate, InviteCreate, InviteOut, MemberOut
 
 router = APIRouter(prefix="/api/members", tags=["members"])
 INVITATION_TTL = timedelta(days=7)
@@ -68,7 +68,7 @@ def regenerate_invitation(
 @router.patch("/{member_id}/profile", response_model=MemberOut)
 def update_member_profile(
     member_id: int,
-    payload: MemberProfileUpdate,
+    payload: AdminMemberProfileUpdate,
     _: Member = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> Member:

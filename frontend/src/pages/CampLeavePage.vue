@@ -34,8 +34,7 @@ const isAdmin = computed(() => props.currentUser.role === "admin")
 const profileReady = computed(() =>
   props.currentUser.name.trim().length >= 2 && props.currentUser.name.trim().length <= 50 &&
   /^[0-9]{8}$/.test(props.currentUser.student_id ?? "") &&
-  Boolean(props.currentUser.college) &&
-  (props.currentUser.team_membership === "formal" || props.currentUser.team_membership === "reserve"),
+  Boolean(props.currentUser.college),
 )
 const adminEventById = computed(() => new Map(adminEvents.value.map((event) => [event.id, event])))
 const visibleEvents = computed<CampLeaveEventMember[]>(() => {
@@ -121,7 +120,7 @@ async function refreshEvent(eventId: number) {
 async function toggleParticipation(event: CampLeaveEventMember) {
   if (saving.value || !event.accepting_participants) return
   if (!event.joined && !profileReady.value) {
-    error.value = "请先完善个人资料中的姓名、学号、学院和队内身份。"
+    error.value = "请先完善个人资料中的姓名、学号和学院。"
     return
   }
   saving.value = true

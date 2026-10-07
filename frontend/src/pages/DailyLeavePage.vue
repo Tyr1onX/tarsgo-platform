@@ -31,13 +31,10 @@ const selfDraft = ref({ start_at: "", end_at: "" })
 const windowDraft = ref({ title: "", start_at: "", end_at: "" })
 
 const isAdmin = computed(() => props.currentUser.role === "admin")
-const eligibleMember = computed(() =>
-  props.currentUser.team_membership === "formal" || props.currentUser.team_membership === "reserve",
-)
 const profileReady = computed(() =>
   props.currentUser.name.trim().length >= 2 && props.currentUser.name.trim().length <= 50 &&
   /^[0-9]{8}$/.test(props.currentUser.student_id ?? "") &&
-  Boolean(props.currentUser.college) && eligibleMember.value,
+  Boolean(props.currentUser.college),
 )
 const sharedWindows = computed(() => {
   if (isAdmin.value) {
@@ -283,7 +280,7 @@ onMounted(() => {
     <p v-if="error" class="daily-leave-feedback daily-leave-error" role="alert">{{ error }}</p>
     <p v-if="notice" class="daily-leave-feedback daily-leave-notice" role="status">{{ notice }}</p>
 
-    <section v-if="eligibleMember" class="daily-leave-section daily-leave-self">
+    <section class="daily-leave-section daily-leave-self">
       <div class="daily-leave-heading"><h2>生成请假条</h2></div>
       <p v-if="!profileReady" class="daily-leave-muted">
         请先完善姓名、8 位学号和学院。
@@ -312,8 +309,6 @@ onMounted(() => {
         </div>
       </form>
     </section>
-    <p v-else-if="!isAdmin" class="daily-leave-muted">日常请假自助生成仅对正式队员和梯队成员开放。</p>
-
     <section v-if="sharedWindows.length || loading || isAdmin" class="daily-leave-section daily-leave-shared">
       <div class="daily-leave-heading">
         <h2>共享活动</h2>
@@ -375,7 +370,7 @@ onMounted(() => {
           {{ savingWindow ? "正在创建…" : "创建共享活动" }}
         </button>
       </form>
-      <p v-if="eligibleMember && !profileReady && sharedWindows.length" class="daily-leave-muted">
+      <p v-if="!isAdmin && !profileReady && sharedWindows.length" class="daily-leave-muted">
         请先完善个人资料，才能使用共享活动生成请假条。
       </p>
     </section>

@@ -153,7 +153,6 @@ class TeamRegistrationIn(BaseModel):
     student_id: str
     college: str
     team_group: TeamGroup
-    team_membership: TeamMembership
     password: str = Field(min_length=8, max_length=128)
 
     @field_validator("name")
@@ -184,10 +183,11 @@ class MemberSummary(BaseModel):
 
 
 class MemberProfileUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     student_id: str | None = None
     team_group: TeamGroup | None = None
     college: str | None = None
-    team_membership: TeamMembership | None = None
 
     @field_validator("student_id")
     @classmethod
@@ -212,6 +212,10 @@ class MemberProfileUpdate(BaseModel):
         if not is_college_code(value):
             raise ValueError("请选择有效学院")
         return value
+
+
+class AdminMemberProfileUpdate(MemberProfileUpdate):
+    team_membership: TeamMembership | None = None
 
 
 def _normalize_school_leave_datetime(value: datetime) -> datetime:

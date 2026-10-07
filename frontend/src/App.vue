@@ -118,7 +118,6 @@ const loginPassword = ref("")
 const studentIdDraft = ref("")
 const teamGroupDraft = ref<TeamGroup | "">("")
 const collegeDraft = ref("")
-const teamMembershipDraft = ref<TeamMembership | "">("")
 const collegeOptions = ref<CollegeOption[]>([])
 const profileFieldErrors = ref<Record<string, string>>({})
 const memberProfileFieldErrors = ref<Record<number, Record<string, string>>>({})
@@ -137,7 +136,6 @@ const registrationStudentId = ref("")
 const registrationCollege = ref("")
 const registrationEmail = ref("")
 const registrationTeamGroup = ref<TeamGroup | "">("")
-const registrationTeamMembership = ref<TeamMembership | "">("")
 const registrationFieldErrors = ref<Record<string, string>>({})
 const registrationPassword = ref("")
 const registrationPasswordConfirm = ref("")
@@ -303,8 +301,7 @@ const isMeRoute = computed(() => path.value === "/me" || path.value === "/me/edi
 const myProfileChanged = computed(() =>
   studentIdDraft.value.trim() !== (user.value?.student_id ?? "") ||
   teamGroupDraft.value !== (user.value?.team_group ?? "") ||
-  collegeDraft.value !== (user.value?.college ?? "") ||
-  teamMembershipDraft.value !== (user.value?.team_membership ?? ""),
+  collegeDraft.value !== (user.value?.college ?? ""),
 )
 const detailTask = computed(() =>
   taskDetailId.value === null ? null : tasks.value.find((task) => task.id === taskDetailId.value) ?? null,
@@ -1031,7 +1028,6 @@ async function loadCurrentUser() {
     studentIdDraft.value = user.value.student_id ?? ""
     teamGroupDraft.value = user.value.team_group ?? ""
     collegeDraft.value = user.value.college ?? ""
-    teamMembershipDraft.value = user.value.team_membership ?? ""
     await Promise.all([loadPlannerAccess(), loadSchoolLeaveSummary()])
   } catch (reason) {
     if (reason instanceof ApiError && reason.status === 401) {
@@ -1227,7 +1223,6 @@ async function loadRoute() {
       studentIdDraft.value = user.value?.student_id ?? ""
       teamGroupDraft.value = user.value?.team_group ?? ""
       collegeDraft.value = user.value?.college ?? ""
-      teamMembershipDraft.value = user.value?.team_membership ?? ""
     } else if (routePath === "/me") {
       await ensureCollegeOptions()
       if (!isCurrentLoad()) return
@@ -1311,9 +1306,6 @@ async function submitRegistration() {
     errors.college = "请选择有效学院"
   }
   if (!registrationTeamGroup.value) errors.team_group = "请选择所属组别"
-  if (!(registrationTeamMembership.value in membershipLabels)) {
-    errors.team_membership = "请选择队内身份"
-  }
   if (Object.keys(errors).length) {
     registrationFieldErrors.value = errors
     return
@@ -1330,7 +1322,6 @@ async function submitRegistration() {
       college: registrationCollege.value,
       email: registrationEmail.value,
       team_group: registrationTeamGroup.value as TeamGroup,
-      team_membership: registrationTeamMembership.value as TeamMembership,
       password: registrationPassword.value,
     })
     registrationPassword.value = ""
@@ -1498,9 +1489,6 @@ function profileValidationError(): [string, string] | null {
   if (collegeDraft.value && !collegeOptions.value.some((college) => college.code === collegeDraft.value)) {
     return ["college", "请选择有效学院"]
   }
-  if (teamMembershipDraft.value && !(teamMembershipDraft.value in membershipLabels)) {
-    return ["team_membership", "请选择有效队内身份"]
-  }
   return null
 }
 
@@ -1521,13 +1509,11 @@ async function saveMyProfile() {
         student_id: studentIdDraft.value.trim() || null,
         team_group: teamGroupDraft.value || null,
         college: collegeDraft.value || null,
-        team_membership: teamMembershipDraft.value || null,
       },
     )
     studentIdDraft.value = user.value.student_id ?? ""
     teamGroupDraft.value = user.value.team_group ?? ""
     collegeDraft.value = user.value.college ?? ""
-    teamMembershipDraft.value = user.value.team_membership ?? ""
     notice.value = "资料已保存"
     navigate("/me")
   } catch (reason) {
@@ -2640,19 +2626,6 @@ onBeforeUnmount(() => {
               <option value="" disabled>请选择</option>
               <option v-for="(label, code) in groupLabels" :key="code" :value="code">{{ label }}</option>
             </select>
-          </label>
-          <label>
-            队内身份
-            <select
-              v-model="registrationTeamMembership"
-              required
-              :aria-invalid="Boolean(registrationFieldErrors.team_membership)"
-              @change="clearRegistrationFieldError('team_membership')"
-            >
-              <option value="" disabled>请选择</option>
-              <option v-for="(label, code) in membershipLabels" :key="code" :value="code">{{ label }}</option>
-            </select>
-            <small v-if="registrationFieldErrors.team_membership" class="field-error">{{ registrationFieldErrors.team_membership }}</small>
           </label>
           <label>
             密码
@@ -4013,18 +3986,6 @@ onBeforeUnmount(() => {
                 @change="clearProfileFieldError('college')"
               />
               <small v-if="profileFieldErrors.college" class="field-error">{{ profileFieldErrors.college }}</small>
-            </label>
-            <label>
-              <span>队内身份</span>
-              <select
-                v-model="teamMembershipDraft"
-                :aria-invalid="Boolean(profileFieldErrors.team_membership)"
-                @change="clearProfileFieldError('team_membership')"
-              >
-                <option value="">未填写</option>
-                <option v-for="(label, code) in membershipLabels" :key="code" :value="code">{{ label }}</option>
-              </select>
-              <small v-if="profileFieldErrors.team_membership" class="field-error">{{ profileFieldErrors.team_membership }}</small>
             </label>
             <button
               class="primary profile-save"

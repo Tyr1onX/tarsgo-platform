@@ -18,6 +18,8 @@ assert.match(leavePage, /<CampLeavePage/)
 
 // Internal members enter only the interval; identity comes from their profile.
 assert.match(dailyPage, /生成请假条/)
+assert.match(dailyPage, /const profileReady = computed\(\(\) =>[\s\S]*?Boolean\(props\.currentUser\.college\)/)
+assert.doesNotMatch(dailyPage, /team_membership|正式队员和梯队成员开放/)
 assert.match(dailyPage, /v-model="selfDraft\.start_at" type="datetime-local"/)
 assert.match(dailyPage, /v-model="selfDraft\.end_at" type="datetime-local"/)
 assert.match(dailyPage, /function initializeDailyTimesIfEmpty/)

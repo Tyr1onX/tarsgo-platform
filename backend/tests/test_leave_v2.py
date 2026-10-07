@@ -54,6 +54,7 @@ def main() -> None:
     admin_email = f"leave-v2-admin-{suffix}@example.invalid"
     formal_email = f"leave-v2-formal-{suffix}@example.invalid"
     reserve_email = f"leave-v2-reserve-{suffix}@example.invalid"
+    unassigned_email = f"leave-v2-unassigned-{suffix}@example.invalid"
     incomplete_email = f"leave-v2-incomplete-{suffix}@example.invalid"
     event_ids: set[int] = set()
     window_ids: set[int] = set()
@@ -82,6 +83,15 @@ def main() -> None:
             role="member",
             status="active",
         )
+        unassigned = Member(
+            name="身份待管理员维护",
+            email=unassigned_email,
+            student_id="26000203",
+            college="art",
+            team_membership=None,
+            role="member",
+            status="active",
+        )
         incomplete = Member(
             name="资料未全",
             email=incomplete_email,
@@ -91,11 +101,12 @@ def main() -> None:
             role="member",
             status="active",
         )
-        db.add_all([admin, formal, reserve, incomplete])
+        db.add_all([admin, formal, reserve, unassigned, incomplete])
         db.commit()
         db.refresh(admin)
         db.refresh(formal)
         db.refresh(reserve)
+        db.refresh(unassigned)
         db.refresh(incomplete)
 
         def override_database():
@@ -160,6 +171,15 @@ def main() -> None:
                 "/api/daily-leave/self-service/document",
                 json={**standalone_payload, "end_at": standalone_payload["start_at"]},
             ).status_code == 422
+            set_actor(unassigned)
+            unassigned_self_doc = client.post("/api/daily-leave/self-service/document", json=standalone_payload)
+            assert unassigned_self_doc.status_code == 200, unassigned_self_doc.text
+            unassigned_self_entry = db.scalar(
+                select(DailyLeaveEntry).where(
+                    DailyLeaveEntry.window_id.is_(None), DailyLeaveEntry.member_id == unassigned.id
+                )
+            )
+            assert unassigned_self_entry is not None and unassigned_self_entry.participant_type == "other"
             assert db.scalar(
                 select(func.count(DailyLeaveEntry.id)).where(
                     DailyLeaveEntry.window_id.is_(None), DailyLeaveEntry.member_id == formal.id
@@ -226,6 +246,20 @@ def main() -> None:
                 )
             )
             assert reserve_entry is not None and reserve_entry.participant_type == "reserve"
+
+            set_actor(unassigned)
+            unassigned_windows = client.get("/api/daily-leave/windows")
+            assert unassigned_windows.status_code == 200
+            assert any(item["id"] == window_id for item in unassigned_windows.json())
+            unassigned_doc = client.post(f"/api/daily-leave/windows/{window_id}/document")
+            assert unassigned_doc.status_code == 200, unassigned_doc.text
+            unassigned_entry = db.scalar(
+                select(DailyLeaveEntry).where(
+                    DailyLeaveEntry.window_id == window_id,
+                    DailyLeaveEntry.member_id == unassigned.id,
+                )
+            )
+            assert unassigned_entry is not None and unassigned_entry.participant_type == "other"
 
             set_actor(incomplete)
             assert client.post(f"/api/daily-leave/windows/{window_id}/document").status_code == 409
@@ -472,8 +506,8 @@ def main() -> None:
                 db.execute(delete(DailyLeaveEntry).where(DailyLeaveEntry.window_id.in_(window_ids)))
                 db.execute(delete(DailyLeaveWindow).where(DailyLeaveWindow.id.in_(window_ids)))
             db.execute(
-                delete(DailyLeaveEntry).where(
-                    DailyLeaveEntry.member_id.in_([admin.id, formal.id, reserve.id, incomplete.id])
+                    delete(DailyLeaveEntry).where(
+                    DailyLeaveEntry.member_id.in_([admin.id, formal.id, reserve.id, unassigned.id, incomplete.id])
                 )
             )
             if event_ids:
@@ -482,7 +516,7 @@ def main() -> None:
             if legacy_run_ids:
                 db.execute(delete(SchoolLeaveRequest).where(SchoolLeaveRequest.run_id.in_(legacy_run_ids)))
                 db.execute(delete(SchoolLeaveRun).where(SchoolLeaveRun.id.in_(legacy_run_ids)))
-            db.execute(delete(Member).where(Member.email.in_([admin_email, formal_email, reserve_email, incomplete_email])))
+            db.execute(delete(Member).where(Member.email.in_([admin_email, formal_email, reserve_email, unassigned_email, incomplete_email])))
             db.commit()
             if original_phone is None:
                 os.environ.pop("LEAVE_CONTACT_PHONE", None)

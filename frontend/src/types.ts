@@ -131,6 +131,12 @@ export interface MemberProfilePayload {
   team_membership: TeamMembership | null
 }
 
+export interface MyProfilePayload {
+  student_id: string | null
+  team_group: TeamGroup | null
+  college: string | null
+}
+
 export interface InvitationInfo {
   name: string
   email: string
@@ -158,7 +164,6 @@ export interface TeamRegistrationPayload {
   student_id: string
   college: string
   team_group: TeamGroup
-  team_membership: TeamMembership
   password: string
 }
 

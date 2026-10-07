@@ -180,6 +180,12 @@ def main() -> None:
             assert canceled.json()["joined"] is False
             assert client.post(f"/api/camp-leave/events/{winter_id}/join").status_code == 201
 
+            reserve.team_membership = None
+            db.commit()
+            joined_without_team_identity = client.post(f"/api/camp-leave/events/{summer.json()['id']}/join")
+            assert joined_without_team_identity.status_code == 201, joined_without_team_identity.text
+            assert joined_without_team_identity.json()["participant_type"] == "other"
+
             # A public link exposes only event basics; grouped participant details are admin-only.
             set_actor(admin)
             detail_response = client.get(f"/api/camp-leave/admin/events/{winter_id}")

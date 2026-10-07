@@ -26,6 +26,7 @@ import type {
   ItemFactInput,
   Member,
   MemberProfilePayload,
+  MyProfilePayload,
   MemberSummary,
   KnowledgeDocument,
   KnowledgeSyncSummary,
@@ -126,7 +127,7 @@ export interface TaskPayload {
 export const api = {
   me: () => request<Member>("/api/auth/me"),
   colleges: () => request<CollegeOption[]>("/api/colleges"),
-  updateMeProfile: (payload: MemberProfilePayload) =>
+  updateMeProfile: (payload: MyProfilePayload) =>
     request<Member>("/api/auth/me", {
       method: "PATCH",
       body: JSON.stringify(payload),

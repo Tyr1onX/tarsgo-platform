@@ -134,7 +134,6 @@ def register_member(
         student_id=payload.student_id,
         team_group=payload.team_group,
         college=payload.college,
-        team_membership=payload.team_membership,
         password_hash=hash_password(payload.password),
         role="member",
         status="active",

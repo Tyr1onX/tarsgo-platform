@@ -142,8 +142,6 @@ def _daily_filename(start_at: datetime, *, offline: bool) -> str:
 
 
 def _member_identity(current: Member) -> tuple[str, str, str]:
-    if current.team_membership not in {"formal", "reserve"}:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="仅正式队员和梯队成员可以生成")
     try:
         return (
             validate_member_name(current.name or ""),
@@ -162,8 +160,6 @@ def member_windows(
     current: Member = Depends(get_current_member),
     db: Session = Depends(get_db),
 ) -> list[DailyLeaveWindowMemberOut]:
-    if current.team_membership not in {"formal", "reserve"}:
-        return []
     now = school_leave_now()
     windows = list(
         db.scalars(
@@ -255,8 +251,6 @@ def member_document(
 ) -> StreamingResponse:
     window = _get_window(db, window_id, lock=True)
     _require_open(window, public=False)
-    if current.team_membership not in {"formal", "reserve"}:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="仅正式队员和梯队成员可以生成")
     entry = db.scalar(
         select(DailyLeaveEntry)
         .where(DailyLeaveEntry.window_id == window.id, DailyLeaveEntry.member_id == current.id)
@@ -278,7 +272,7 @@ def member_document(
             name_snapshot=name,
             student_id_snapshot=student_id,
             college_snapshot=college,
-            participant_type=current.team_membership,
+            participant_type=current.team_membership or "other",
             start_at=None,
             end_at=None,
         )
@@ -325,7 +319,7 @@ def self_service_document(
         name_snapshot=name,
         student_id_snapshot=student_id,
         college_snapshot=college,
-        participant_type=current.team_membership,
+        participant_type=current.team_membership or "other",
     )
     db.add(entry)
     db.commit()

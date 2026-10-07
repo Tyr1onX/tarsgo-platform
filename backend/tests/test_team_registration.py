@@ -128,7 +128,6 @@ def main() -> None:
                     "student_id": f"{int(token[:16], 16) % 100_000_000:08d}",
                     "college": valid_college,
                     "team_group": "operations",
-                    "team_membership": "reserve",
                     "password": "registration-password",
                 }
                 for boundary_name in ("AB", "N" * 50):
@@ -141,6 +140,10 @@ def main() -> None:
                 assert client.post(
                     f"/api/team-registration/{raw_token}/register",
                     json={**base_payload, "team_group": "运营部"},
+                ).status_code == 422
+                assert client.post(
+                    f"/api/team-registration/{raw_token}/register",
+                    json={**base_payload, "team_membership": "formal"},
                 ).status_code == 422
                 assert client.post(
                     f"/api/team-registration/{raw_token}/register",
@@ -160,8 +163,6 @@ def main() -> None:
                     assert invalid.status_code == 422, invalid.text
                 for invalid_fields in (
                     {"college": "not-a-college"},
-                    {"team_membership": "other"},
-                    {"team_membership": None},
                 ):
                     invalid = client.post(
                         f"/api/team-registration/{raw_token}/register",
@@ -191,7 +192,7 @@ def main() -> None:
                 assert registered_json["team_group"] == "operations"
                 assert registered_json["name"] == "Ada Q·赵"
                 assert registered_json["college"] == valid_college
-                assert registered_json["team_membership"] == "reserve"
+                assert registered_json["team_membership"] is None
                 cookie = registered.headers.get("set-cookie", "")
                 assert COOKIE_NAME in cookie and "HttpOnly" in cookie
 
@@ -209,9 +210,9 @@ def main() -> None:
                 assert me.status_code == 200
                 assert me.json()["id"] == registered_id
                 assert me.json()["college"] == valid_college
-                assert me.json()["team_membership"] == "reserve"
+                assert me.json()["team_membership"] is None
 
-                # Profile edits preserve the independent group and membership enums.
+                # Ordinary profile edits update school and group fields without identity.
                 for group in GROUPS:
                     updated = client.patch(
                         "/api/auth/me",
@@ -225,13 +226,12 @@ def main() -> None:
                     "/api/auth/me",
                     json={"college": valid_college, "team_membership": "formal"},
                 )
-                assert updated_profile.status_code == 200, updated_profile.text
-                assert updated_profile.json()["college"] == valid_college
-                assert updated_profile.json()["team_membership"] == "formal"
+                assert updated_profile.status_code == 422, updated_profile.text
+                assert client.get("/api/auth/me").json()["team_membership"] is None
                 for invalid_profile in (
                     {"student_id": "not-8-digits"},
                     {"college": "not-a-college"},
-                    {"team_membership": "guest"},
+                    {"team_membership": "formal"},
                 ):
                     invalid = client.patch("/api/auth/me", json=invalid_profile)
                     assert invalid.status_code == 422, invalid.text

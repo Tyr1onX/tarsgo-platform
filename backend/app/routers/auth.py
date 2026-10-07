@@ -64,8 +64,6 @@ def update_me(
         member.team_group = payload.team_group
     if "college" in fields:
         member.college = payload.college
-    if "team_membership" in fields:
-        member.team_membership = payload.team_membership
     try:
         db.commit()
     except IntegrityError as exc:

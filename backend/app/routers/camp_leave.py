@@ -201,8 +201,6 @@ def join_event(
 ) -> CampLeaveEventMemberOut:
     event = get_event(db, event_id, lock=True)
     require_open_event(event)
-    if current.team_membership not in {"formal", "reserve"}:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="请先完善个人资料中的队内身份")
     try:
         name = validate_member_name(current.name or "")
         student_id = validate_student_id(current.student_id or "")
@@ -231,7 +229,7 @@ def join_event(
         name_snapshot=name,
         student_id_snapshot=student_id,
         college_snapshot=college,
-        participant_type=current.team_membership,
+        participant_type=current.team_membership or "other",
     )
     db.add(participant)
     try:

@@ -20,6 +20,8 @@ assert.match(types, /interface CampLeaveEventMember \{[^}]*joined: boolean[^}]*p
 assert.doesNotMatch(types.match(/interface CampLeaveEventMember \{[^}]*\}/s)?.[0] ?? "", /(?:^|\n)\s*(?:participant_count|public_path|participants):/)
 assert.match(page, /event\.joined \? "取消参加" : "确认参加"/)
 assert.match(page, /profileReady/)
+assert.doesNotMatch(page.match(/const profileReady = computed\(\(\) =>[\s\S]*?\n\)/)?.[0] ?? "", /team_membership/)
+assert.doesNotMatch(page, /队内身份/)
 assert.match(page, /emit\('navigate', '\/me'\)/)
 assert.match(api, /downloadCampLeaveMemberDocument: \(eventId: number\)/)
 assert.match(api, /\/api\/camp-leave\/events\/\$\{eventId\}\/document/)

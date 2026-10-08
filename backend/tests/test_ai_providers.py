@@ -3,6 +3,7 @@ import os
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from google.genai import errors as genai_errors
 from pydantic import ValidationError
 
 from app.ai_planner import (
@@ -11,6 +12,8 @@ from app.ai_planner import (
     GeminiPlannerProvider,
     OpenAIPlannerProvider,
     PlannerInvalidResponse,
+    PlannerProviderError,
+    PlannerRateLimitError,
     SYSTEM_PROMPT,
     ITEM_REVIEW_SYSTEM_PROMPT,
     ITEM_FACT_EXTRACTION_SYSTEM_PROMPT,
@@ -597,6 +600,52 @@ def main() -> None:
     assert gemini_generation.input_tokens == 101
     assert gemini_generation.output_tokens == 79
     assert gemini_generation.total_tokens == 180
+
+    for status_code, expected_error, expected_category in (
+        (503, PlannerProviderError, "provider_server_error"),
+        (429, PlannerRateLimitError, "rate_limit_or_quota"),
+    ):
+        failed_gemini_calls = {}
+
+        def fake_failed_gemini(**kwargs):
+            failed_gemini_calls["client"] = kwargs
+            client = FakeGeminiClient(failed_gemini_calls, valid_json())
+
+            def raise_api_error(**_request):
+                failed_gemini_calls["create_count"] = failed_gemini_calls.get("create_count", 0) + 1
+                upstream_status = "UNAVAILABLE" if status_code == 503 else "RESOURCE_EXHAUSTED"
+                raise genai_errors.APIError(
+                    status_code,
+                    {"error": {"message": "PRIVATE_PROVIDER_BODY", "status": upstream_status}},
+                )
+
+            client.interactions.create = raise_api_error
+            return client
+
+        with patch("app.ai_planner.genai.Client", side_effect=fake_failed_gemini):
+            with patch("app.ai_planner.logger.error") as error_logger:
+                try:
+                    GeminiPlannerProvider().generate("PRIVATE_USER_INPUT")
+                except expected_error:
+                    pass
+                else:
+                    raise AssertionError(f"expected {expected_error.__name__}")
+
+        assert failed_gemini_calls["create_count"] == 1
+        assert failed_gemini_calls["closed"] is True
+        assert error_logger.call_count == 1
+        logged = error_logger.call_args.args[0] % error_logger.call_args.args[1:]
+        assert logged.startswith("ai_provider_request_failed ")
+        log_fields = json.loads(logged.removeprefix("ai_provider_request_failed "))
+        assert log_fields["provider"] == "gemini"
+        assert log_fields["model"] == "gemini-3.8-flash"
+        assert log_fields["exception_type"] == "APIError"
+        assert log_fields["upstream_http_status"] == status_code
+        assert isinstance(log_fields["duration_ms"], int)
+        assert log_fields["error_category"] == expected_category
+        assert "PRIVATE_USER_INPUT" not in logged
+        assert "PRIVATE_PROVIDER_BODY" not in logged
+        assert "ci-placeholder" not in logged
 
     late_deadline_payload = draft().model_dump(mode="json")
     late_deadline_payload["item"]["deadline"] = "2026-10-12T08:00:00+08:00"

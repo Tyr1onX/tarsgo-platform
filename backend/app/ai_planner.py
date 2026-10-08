@@ -1,5 +1,8 @@
 import json
+import logging
 import os
+import re
+import time
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from typing import Protocol
@@ -11,6 +14,8 @@ from openai import APIConnectionError, APIError, APITimeoutError, OpenAI, RateLi
 from pydantic import ValidationError
 
 from .schemas import AIItemFactExtractionOut, AIItemReviewOut, AIPlannerDraft
+
+logger = logging.getLogger(__name__)
 
 MAX_OUTPUT_TOKENS = 2200
 DEEPSEEK_MAX_OUTPUT_TOKENS = 4096
@@ -256,6 +261,84 @@ def _gemini_client():
     )
 
 
+def _gemini_upstream_http_status(exc: Exception) -> int | None:
+    response = getattr(exc, "response", None)
+    for value in (
+        getattr(exc, "code", None),
+        getattr(exc, "status_code", None),
+        getattr(response, "status_code", None),
+        getattr(response, "status", None),
+    ):
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, int) and 100 <= value <= 599:
+            return value
+        if isinstance(value, str) and value.isdecimal():
+            parsed = int(value)
+            if 100 <= parsed <= 599:
+                return parsed
+    return None
+
+
+def _gemini_error_category(exc: Exception, upstream_http_status: int | None) -> str:
+    if upstream_http_status == 429:
+        return "rate_limit_or_quota"
+    if upstream_http_status in {408, 504}:
+        return "upstream_timeout"
+    if upstream_http_status == 401:
+        return "authentication"
+    if upstream_http_status == 403:
+        return "permission_or_quota"
+    if upstream_http_status == 404:
+        return "model_or_endpoint_not_found"
+    if upstream_http_status == 400:
+        return "invalid_request"
+    if upstream_http_status is not None and 500 <= upstream_http_status <= 599:
+        return "provider_server_error"
+    if upstream_http_status is not None:
+        return "provider_http_error"
+
+    status = getattr(exc, "status", None)
+    status = getattr(status, "value", status)
+    if isinstance(status, str):
+        return {
+            "RESOURCE_EXHAUSTED": "rate_limit_or_quota",
+            "DEADLINE_EXCEEDED": "upstream_timeout",
+            "UNAUTHENTICATED": "authentication",
+            "PERMISSION_DENIED": "permission_or_quota",
+            "NOT_FOUND": "model_or_endpoint_not_found",
+            "INVALID_ARGUMENT": "invalid_request",
+            "UNAVAILABLE": "provider_server_error",
+            "INTERNAL": "provider_server_error",
+        }.get(status.upper(), "unknown_provider_error")
+
+    exception_type = type(exc).__name__.lower()
+    if "timeout" in exception_type or "deadline" in exception_type:
+        return "network_timeout"
+    if "connect" in exception_type or "connection" in exception_type:
+        return "network_connection"
+    return "unknown_provider_error"
+
+
+def _log_gemini_provider_error(exc: Exception, *, request_started_at: float) -> None:
+    upstream_http_status = _gemini_upstream_http_status(exc)
+    model = os.environ.get("GEMINI_MODEL", "")
+    safe_model = re.sub(r"[^A-Za-z0-9._:/-]", "_", model)[:100] or "unset"
+    exception_type = re.sub(r"[^A-Za-z0-9_.]", "_", type(exc).__name__)[:100]
+    fields = {
+        "provider": "gemini",
+        "model": safe_model,
+        "exception_type": exception_type,
+        "upstream_http_status": upstream_http_status,
+        "duration_ms": max(0, int((time.perf_counter() - request_started_at) * 1000)),
+        "error_category": _gemini_error_category(exc, upstream_http_status),
+    }
+    logger.error(
+        "ai_provider_request_failed %s",
+        json.dumps(fields, ensure_ascii=True, separators=(",", ":"), sort_keys=True),
+    )
+
+
 def _gemini_interaction(
     *,
     system_instruction: str,
@@ -265,6 +348,7 @@ def _gemini_interaction(
 ):
     client = _gemini_client()
     try:
+        request_started_at = time.perf_counter()
         try:
             interaction = client.interactions.create(
                 model=os.environ["GEMINI_MODEL"],
@@ -279,6 +363,7 @@ def _gemini_interaction(
                 store=False,
             )
         except genai_errors.APIError as exc:
+            _log_gemini_provider_error(exc, request_started_at=request_started_at)
             code = getattr(exc, "code", None)
             if code == 429:
                 raise PlannerRateLimitError from exc
@@ -286,6 +371,7 @@ def _gemini_interaction(
                 raise PlannerTimeoutError from exc
             raise PlannerProviderError from exc
         except Exception as exc:
+            _log_gemini_provider_error(exc, request_started_at=request_started_at)
             if type(exc).__name__ in {"TimeoutException", "ConnectTimeout", "ReadTimeout"}:
                 raise PlannerTimeoutError from exc
             raise PlannerProviderError from exc

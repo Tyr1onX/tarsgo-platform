@@ -132,6 +132,16 @@ def main() -> None:
         assert extracted.filename == "current-event.txt"
         assert extracted.parse_status == "ready" and "10 月 12 日" in extracted.extracted_text
         assert planner_upload.file.closed
+
+        with patch.object(planner_router, "_enabled", return_value=False), patch.object(
+            planner_router, "_server_configured", return_value=False
+        ):
+            no_ai_upload = UploadFile(filename="external-plan.txt", file=io.BytesIO(b"local extraction still works"))
+            no_ai_extracted = planner_router.extract_planner_material(file=no_ai_upload, current=admin)
+            assert no_ai_extracted.parse_status == "ready"
+            assert "local extraction still works" in no_ai_extracted.extracted_text
+            assert no_ai_upload.file.closed
+
         assert (db.scalar(select(func.count(KnowledgeDocument.id))) or 0) == documents_before
 
         unsupported_upload = UploadFile(filename="event.zip", file=io.BytesIO(b"archive"))

@@ -2024,6 +2024,37 @@ textarea[aria-invalid="true"] {
   padding-top: 5px;
   border-top: 1px solid var(--line);
 }
+.planner-composer-actions,
+.planner-external-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.planner-composer-actions { justify-content: flex-end; }
+.planner-import-panel {
+  display: grid;
+  gap: 9px;
+  padding-top: 13px;
+  border-top: 1px solid var(--line);
+}
+.planner-import-panel > label {
+  color: var(--secondary);
+  font-size: 13px;
+}
+.planner-import-panel > textarea {
+  width: 100%;
+  min-height: 150px;
+  resize: vertical;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  padding: 10px;
+  font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.planner-import-panel > small { color: var(--muted); font-size: 11.5px; }
+.planner-import-error { margin: 0; color: var(--danger, #a3322b); font-size: 12px; }
+.planner-import-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .planner-composer-tools {
   display: flex;
   min-width: 0;
@@ -3415,7 +3446,11 @@ button:disabled { cursor: not-allowed; }
   .planner-composer > textarea { min-height: 190px; font-size: 16px; }
   .planner-composer-footer { align-items: stretch; flex-direction: column; }
   .planner-composer-tools { justify-content: space-between; }
+  .planner-composer-actions { align-items: stretch; flex-direction: column; }
+  .planner-external-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .planner-external-actions > button { min-height: 42px; }
   .planner-generate { width: 100%; min-height: 46px; }
+  .planner-import-actions > button { flex: 1 1 0; }
   .planner-publish { display: grid; grid-template-columns: minmax(0, 1fr); }
   .planner-overview-heading { align-items: stretch; flex-direction: column; }
   .planner-overview-heading h1 { font-size: 24px; }

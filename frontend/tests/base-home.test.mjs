@@ -54,7 +54,9 @@ assert.deepEqual(manyChanges.map((change) => change.content), [
   "参观时间已确认：10 月 9 日 15:00",
 ])
 
-assert.match(home, /v-if="isAdmin && aiPlannerAvailable"[\s\S]*?class="planner-composer base-composer"/)
+assert.match(home, /v-if="isAdmin"[\s\S]*?class="planner-composer base-composer"/)
+assert.match(home, /复制 AI 提示词[\s\S]*?导入 AI 方案/)
+assert.match(home, /v-if="aiPlannerAvailable"[\s\S]*?@click="planFromBase"/)
 assert.match(home, /homeRecentChanges.length[\s\S]*?最近与你有关/)
 assert.match(home, /v-if="homeTaskCards.length"[\s\S]*?现在要处理/)
 assert.match(home, /v-for="task in visibleHomeTaskCards"/)

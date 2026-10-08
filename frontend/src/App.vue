@@ -4,6 +4,7 @@ import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, r
 import { ApiError, api } from "./api"
 import { clearAsyncRouteRecovery, handleAsyncRouteResourceError } from "./asyncRouteRecovery.js"
 import { recentBaseChanges } from "./baseHome.js"
+import { buildExternalAIPlannerPrompt, parseExternalAIPlannerDraft } from "./externalAIPlanner.js"
 import { revealInvalidField } from "./formFeedback.js"
 import { filterIgnoredPlannerSuggestions, ignorePlannerSuggestion, plannerSuggestionJoinInstruction } from "./plannerSuggestions.js"
 import { itemReviewChanges, removeItemReviewSuggestion } from "./itemReview.js"
@@ -177,6 +178,10 @@ const aiPlannerAvailable = ref(false)
 const plannerDescription = ref("")
 const plannerAttachments = ref<{ id: string; filename: string; extracted_text: string }[]>([])
 const plannerAttachmentMessage = ref("")
+const plannerImportOpen = ref(false)
+const plannerImportJson = ref("")
+const plannerImportError = ref("")
+const plannerExternalMessage = ref("")
 const plannerUploading = ref(false)
 const plannerDragActive = ref(false)
 const plannerFileInput = ref<HTMLInputElement | null>(null)
@@ -1179,7 +1184,7 @@ async function loadRoute() {
       tasks.value = taskList
       tasksLoadedScope.value = taskView.value
     } else if (routePath === "/ai-planner") {
-      if (!isAdmin.value || !aiPlannerAvailable.value) {
+      if (!isAdmin.value || (!aiPlannerAvailable.value && !plannerDraft.value)) {
         navigate("/")
         return
       }
@@ -1980,6 +1985,53 @@ const plannerAttachmentContextTruncated = computed(
   () => fullPlannerAttachmentContext.value.length > PLANNER_MAX_CURRENT_CONTEXT_CHARS,
 )
 
+async function copyExternalAIPlannerPrompt() {
+  plannerExternalMessage.value = ""
+  if (plannerDescription.value.trim().length < 10 && !plannerAttachmentContext.value.trim()) {
+    plannerExternalMessage.value = "请填写事项描述，或先添加包含有效内容的资料。"
+    return
+  }
+  if (plannerUploading.value) {
+    plannerExternalMessage.value = "请等资料读取完成后再复制提示词。"
+    return
+  }
+  const prompt = buildExternalAIPlannerPrompt({
+    description: plannerDescription.value,
+    currentEventContext: plannerAttachmentContext.value,
+  })
+  try {
+    if (!navigator.clipboard?.writeText) throw new Error("当前浏览器不支持剪贴板写入。")
+    await navigator.clipboard.writeText(prompt)
+    plannerExternalMessage.value = plannerAttachmentContextTruncated.value
+      ? "提示词已复制到剪贴板；资料只包含前 5,000 字，内容不会自动发送，请确认可分享后再粘贴到外部 AI。"
+      : "提示词已复制到剪贴板；内容不会自动发送，请确认可分享后再粘贴到外部 AI。"
+  } catch (reason) {
+    plannerExternalMessage.value = messageOf(reason)
+  }
+}
+
+function togglePlannerImport() {
+  plannerImportOpen.value = !plannerImportOpen.value
+  plannerImportError.value = ""
+  plannerExternalMessage.value = ""
+}
+
+function importExternalAIPlanner() {
+  const result = parseExternalAIPlannerDraft(plannerImportJson.value)
+  if (!result.ok) {
+    plannerImportError.value = result.error
+    return
+  }
+  plannerImportError.value = ""
+  plannerExternalMessage.value = ""
+  plannerIgnoredSuggestionKeys.clear()
+  setPlannerDraft(result.draft)
+  plannerImportJson.value = ""
+  plannerImportOpen.value = false
+  navigate("/ai-planner")
+  notice.value = "方案已导入草案；请核对并手动确认创建。"
+}
+
 function choosePlannerFiles() {
   plannerFileInput.value?.click()
 }
@@ -2061,6 +2113,7 @@ function editPlannerRequest() {
   plannerNewTaskIndex.value = null
   plannerRefineOpenIndex.value = null
   error.value = ""
+  if (!aiPlannerAvailable.value) navigate("/")
 }
 
 function newPlannerTask(): AIPlannerTaskDraft {
@@ -2913,7 +2966,7 @@ onBeforeUnmount(() => {
           <h1>{{ isAdmin ? "现在要处理什么？" : "现在要处理" }}</h1>
 
           <div
-            v-if="isAdmin && aiPlannerAvailable"
+            v-if="isAdmin"
             class="planner-composer base-composer"
             :class="{ 'is-drag-active': plannerDragActive, 'is-uploading': plannerUploading }"
             @dragenter.prevent="onPlannerDragOver"
@@ -2949,17 +3002,48 @@ onBeforeUnmount(() => {
                   {{ plannerUploading ? "正在读取…" : "＋ 添加资料" }}
                 </button>
               </div>
-              <button
-                class="primary planner-generate"
-                type="button"
-                :disabled="plannerDescription.trim().length < 10 || plannerGenerating || plannerUploading"
-                @click="planFromBase"
-              >
-                {{ plannerGenerating ? "正在规划…" : "规划" }}
-              </button>
+              <div class="planner-composer-actions">
+                <div class="planner-external-actions">
+                  <button
+                    class="secondary"
+                    type="button"
+                    :disabled="(plannerDescription.trim().length < 10 && !plannerAttachmentContext.trim()) || plannerUploading"
+                    @click="copyExternalAIPlannerPrompt"
+                  >复制 AI 提示词</button>
+                  <button class="secondary" type="button" @click="togglePlannerImport">导入 AI 方案</button>
+                </div>
+                <button
+                  v-if="aiPlannerAvailable"
+                  class="primary planner-generate"
+                  type="button"
+                  :disabled="plannerDescription.trim().length < 10 || plannerGenerating || plannerUploading"
+                  @click="planFromBase"
+                >
+                  {{ plannerGenerating ? "正在规划…" : "规划" }}
+                </button>
+              </div>
+            </div>
+            <div v-if="plannerImportOpen" class="planner-import-panel">
+              <label for="external-planner-json">粘贴外部 AI 返回的 JSON</label>
+              <textarea
+                id="external-planner-json"
+                v-model="plannerImportJson"
+                rows="8"
+                spellcheck="false"
+                aria-describedby="external-planner-json-help"
+                placeholder="粘贴符合 AIPlannerDraft 格式的 JSON……"
+              />
+              <small id="external-planner-json-help">导入只会填入可编辑草案，不会创建事项；检查并手动确认后才会发布。</small>
+              <p v-if="plannerImportError" class="planner-import-error" role="alert">{{ plannerImportError }}</p>
+              <div class="planner-import-actions">
+                <button class="secondary" type="button" @click="togglePlannerImport">取消</button>
+                <button class="primary" type="button" :disabled="!plannerImportJson.trim()" @click="importExternalAIPlanner">验证并导入</button>
+              </div>
             </div>
           </div>
           <p v-if="isAdmin && plannerAttachmentMessage" class="planner-composer-message" role="status">{{ plannerAttachmentMessage }}</p>
+          <p v-if="isAdmin && plannerAttachmentContextTruncated" class="planner-composer-message" role="status">附件内容超过 5,000 字；复制提示词时只包含前 5,000 字。</p>
+          <p v-if="isAdmin && plannerExternalMessage" class="planner-composer-message" role="status">{{ plannerExternalMessage }}</p>
           <button v-if="isAdmin" class="base-manual-create" type="button" @click="startNewTask()">或手动创建任务</button>
         </section>
 
@@ -3086,7 +3170,7 @@ onBeforeUnmount(() => {
         <section v-else-if="plannerDraft" class="planner-result">
           <div class="planner-result-toolbar">
             <button class="planner-back-link" type="button" @click="editPlannerRequest">← 修改原始需求</button>
-            <span>AI 草案</span>
+            <span>方案草案</span>
           </div>
           <div class="planner-result-layout" :class="{ 'is-detail-open': plannerSelectedTaskIndex !== null }">
             <div class="planner-overview-column">
@@ -3157,7 +3241,7 @@ onBeforeUnmount(() => {
                 </div>
               </details>
 
-              <details class="planner-global-refine">
+              <details v-if="aiPlannerAvailable" class="planner-global-refine">
                 <summary>用 AI 调整整体方案</summary>
                 <label>
                   想怎样调整？
@@ -3185,14 +3269,14 @@ onBeforeUnmount(() => {
                     </div>
                     <div class="planner-suggestion-actions">
                       <button class="text-action" type="button" :disabled="plannerRefining || plannerPublishing" @click="dismissPlannerSuggestion(index)">忽略</button>
-                      <button class="secondary" type="button" :disabled="plannerRefining || plannerPublishing" @click="addPlannerSuggestion(suggestion)">加入方案</button>
+                      <button v-if="aiPlannerAvailable" class="secondary" type="button" :disabled="plannerRefining || plannerPublishing" @click="addPlannerSuggestion(suggestion)">加入方案</button>
                     </div>
                   </article>
                 </div>
               </div>
 
               <div class="planner-publish">
-                <button class="secondary" type="button" :disabled="plannerGenerating || plannerPublishing" @click="regenerateAIPlan">
+                <button v-if="aiPlannerAvailable" class="secondary" type="button" :disabled="plannerGenerating || plannerPublishing" @click="regenerateAIPlan">
                   重新生成
                 </button>
                 <button class="primary" type="button" :disabled="plannerPublishing" @click="publishAIPlan">
@@ -3315,7 +3399,7 @@ onBeforeUnmount(() => {
                   </label>
                 </div>
 
-                <div class="planner-card-ai">
+                <div v-if="aiPlannerAvailable" class="planner-card-ai">
                   <button class="text-action" type="button" :disabled="plannerRefining" @click="plannerRefineOpenIndex = plannerRefineOpenIndex === plannerSelectedTaskIndex ? null : plannerSelectedTaskIndex; plannerRefineInstruction = ''">
                     {{ plannerRefineOpenIndex === plannerSelectedTaskIndex ? "收起 AI 调整" : "AI 调整" }}
                   </button>

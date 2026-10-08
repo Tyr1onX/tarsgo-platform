@@ -130,6 +130,11 @@ def _require_planner_access(member: Member) -> None:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="AI 规划尚未完成服务器配置")
 
 
+def _require_planner_material_access(member: Member) -> None:
+    if member.status != "active" or member.role != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权添加规划资料")
+
+
 def _usage_date():
     return datetime.now(timezone.utc).date()
 
@@ -249,7 +254,7 @@ def extract_planner_material(
     current: Member = Depends(get_current_member),
 ) -> AIPlannerExtractOut:
     try:
-        _require_planner_access(current)
+        _require_planner_material_access(current)
         content = file.file.read(MAX_UPLOAD_BYTES + 1)
         if len(content) > MAX_UPLOAD_BYTES:
             raise UploadRejected(413, "单个文件不能超过 10 MiB")

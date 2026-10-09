@@ -5,7 +5,7 @@ import { recentBaseChanges } from "../src/baseHome.js"
 
 const app = readFileSync(new URL("../src/App.vue", import.meta.url), "utf8")
 const css = readFileSync(new URL("../src/style.css", import.meta.url), "utf8")
-const home = app.slice(app.indexOf("<template v-else-if=\"path === '/'\">"), app.indexOf("<template v-else-if=\"path === '/ai-planner'\">"))
+const home = app.slice(app.indexOf("<template v-else-if=\"path === '/'\">"), app.indexOf("<template v-else-if=\"path === '/planner-draft' && plannerDraft\">"))
 const now = Date.parse("2026-10-05T12:00:00Z")
 
 const root = {
@@ -56,7 +56,7 @@ assert.deepEqual(manyChanges.map((change) => change.content), [
 
 assert.match(home, /v-if="isAdmin"[\s\S]*?class="planner-composer base-composer"/)
 assert.match(home, /复制 AI 提示词[\s\S]*?导入 AI 方案/)
-assert.match(home, /v-if="aiPlannerAvailable"[\s\S]*?@click="planFromBase"/)
+assert.doesNotMatch(home, /aiPlannerAvailable|planFromBase|或手动创建任务/)
 assert.match(home, /homeRecentChanges.length[\s\S]*?最近与你有关/)
 assert.match(home, /v-if="homeTaskCards.length"[\s\S]*?现在要处理/)
 assert.match(home, /v-for="task in visibleHomeTaskCards"/)

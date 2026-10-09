@@ -1,9 +1,6 @@
 import type {
-  AIPlannerAccess,
   AIPlannerExtractedFile,
-  AIPlannerResult,
-  AIPlannerInput,
-  AIPlannerRefineInput,
+  AIReviewAccess,
   CampLeaveAdminEvent,
   CampLeaveAdminEventDetail,
   CampLeaveEventCreatePayload,
@@ -291,17 +288,7 @@ export const api = {
   downloadCampLeaveMemberDocument: (eventId: number) =>
     downloadFile(`/api/camp-leave/events/${eventId}/document`, "集中请假名单.docx"),
 
-  aiPlannerAccess: () => request<AIPlannerAccess>("/api/ai/planner/access"),
-  generateAIPlan: (payload: AIPlannerInput) =>
-    request<AIPlannerResult>("/api/ai/planner", {
-      method: "POST",
-      body: JSON.stringify(payload),
-    }),
-  refineAIPlan: (payload: AIPlannerRefineInput) =>
-    request<AIPlannerResult>("/api/ai/planner/refine", {
-      method: "POST",
-      body: JSON.stringify(payload),
-    }),
+  aiReviewAccess: () => request<AIReviewAccess>("/api/ai/planner/access"),
   reviewItemPlan: (rootTaskId: number) =>
     request<AIItemReviewResult>(`/api/ai/items/${rootTaskId}/review`, { method: "POST" }),
   applyItemReview: (rootTaskId: number, suggestion: AIItemReviewSuggestion) =>

@@ -83,7 +83,7 @@ for (const action of ["updateOwnTaskStatus", "claimTask", "unclaimTask", "joinTa
   assert.match(body, /runTaskAction/, `${action} has task-local pending state`)
 }
 assert.match(app, /function replaceTaskInState\(updated: Task\)/)
-assert.doesNotMatch(app.match(/async function startNewTask\([\s\S]*?\n}/)?.[0] ?? "", /parent\.deadline/)
+assert.doesNotMatch(app.match(/async function startChildTask\([\s\S]*?\n}/)?.[0] ?? "", /parent\.deadline/)
 assert.match(app, /deadline: task\.deadline \|\| null/)
 assert.match(app, /截止时间（可选）[\s\S]*?没有明确时间可以留空。/)
 assert.match(app, /v-if="task\.deadline" class="planner-summary-deadline"/)

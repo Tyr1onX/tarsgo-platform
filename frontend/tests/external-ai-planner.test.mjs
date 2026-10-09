@@ -70,8 +70,9 @@ const appSource = readFileSync(new URL("../src/App.vue", import.meta.url), "utf8
 assert.match(appSource, /class="planner-composer base-composer"/)
 assert.match(appSource, /复制 AI 提示词/)
 assert.match(appSource, /导入 AI 方案/)
-assert.match(appSource, /function importExternalAIPlanner\(\)[\s\S]*?setPlannerDraft\(result\.draft\)[\s\S]*?navigate\("\/ai-planner"\)/)
+assert.match(appSource, /function importExternalAIPlanner\(\)[\s\S]*?setPlannerDraft\(result\.draft\)[\s\S]*?navigate\("\/planner-draft"\)/)
 assert.doesNotMatch(appSource.match(/function importExternalAIPlanner\(\)[\s\S]*?\n}/)?.[0] ?? "", /api\./)
 assert.match(appSource, /请核对并手动确认创建/)
+assert.doesNotMatch(appSource, /generateAIPlan|refineAIPlan|startAIPlanner|planFromBase/)
 
 console.log("External AI planner prompt and import validation passed")

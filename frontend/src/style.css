@@ -1931,7 +1931,6 @@ textarea[aria-invalid="true"] {
 }
 
 .hero-actions,
-.page-title-actions,
 .planner-publish {
   display: flex;
   align-items: center;
@@ -1939,18 +1938,6 @@ textarea[aria-invalid="true"] {
   gap: 14px;
 }
 
-.page-title-actions { justify-content: flex-end; }
-.planner-heading > div { max-width: 700px; }
-.planner-heading p {
-  margin: 7px 0 0;
-  color: var(--muted);
-  font-size: 13.5px;
-  line-height: 1.65;
-}
-.planner-composer-page {
-  width: min(100%, 760px);
-  margin: clamp(42px, 11vh, 110px) auto 0;
-}
 .planner-composer {
   position: relative;
   display: grid;
@@ -2024,14 +2011,12 @@ textarea[aria-invalid="true"] {
   padding-top: 5px;
   border-top: 1px solid var(--line);
 }
-.planner-composer-actions,
 .planner-external-actions {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 8px;
 }
-.planner-composer-actions { justify-content: flex-end; }
 .planner-import-panel {
   display: grid;
   gap: 9px;
@@ -2075,19 +2060,6 @@ textarea[aria-invalid="true"] {
 .planner-composer-tools small {
   color: var(--faint);
   font-size: 11.5px;
-}
-.planner-generate { flex: 0 0 auto; }
-.planner-drop-overlay {
-  position: absolute;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  border-radius: inherit;
-  background: rgba(248, 247, 243, 0.92);
-  color: var(--text);
-  font-size: 17px;
-  font-weight: 550;
-  pointer-events: none;
 }
 .planner-composer-message {
   margin: 9px 2px 0;
@@ -2151,22 +2123,6 @@ textarea[aria-invalid="true"] {
 .planner-add-task { flex: 0 0 auto; }
 .planner-overview-tasks { gap: 12px; }
 .planner-overview-tasks .form-title { margin: 0; }
-.planner-global-refine {
-  display: grid;
-  gap: 12px;
-  padding: 13px 15px;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  background: var(--surface);
-}
-.planner-global-refine summary {
-  cursor: pointer;
-  color: var(--secondary);
-  font-size: 13px;
-}
-.planner-global-refine textarea,
-.planner-card-ai-panel textarea { font-size: 13px; }
-.planner-global-refine > button { justify-self: start; }
 .planner-item-edit {
   display: grid;
   gap: 14px;
@@ -2237,19 +2193,6 @@ textarea[aria-invalid="true"] {
 
 .base-composer > textarea {
   min-height: 132px;
-}
-
-.base-manual-create {
-  margin-top: 12px;
-  border: 0;
-  background: transparent;
-  padding: 3px 0;
-  color: var(--muted);
-  font-size: 13px;
-}
-
-.base-manual-create:hover {
-  color: var(--text);
 }
 
 .home-task-cards,
@@ -3266,7 +3209,6 @@ textarea[aria-invalid="true"] {
 }
 .planner-add-detail:hover { color: var(--text); }
 .planner-detail-options { padding-top: 3px; }
-.planner-task-detail .planner-card-ai { padding-top: 11px; }
 .planner-delete-task {
   width: fit-content;
   border: 0;
@@ -3283,21 +3225,6 @@ textarea[aria-invalid="true"] {
   font-size: 15px;
   font-weight: 600;
 }
-.planner-card-ai {
-  padding-top: 7px;
-  border-top: 1px solid var(--line);
-}
-.planner-card-ai-panel {
-  display: grid;
-  gap: 10px;
-  padding-top: 10px;
-}
-.planner-refine-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 7px;
-}
-.planner-refine-actions button { padding: 7px 9px; font-size: 12px; }
 .planner-options {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -3439,17 +3366,13 @@ button:disabled { cursor: not-allowed; }
   .fact-row-scoped > .fact-scope-label {
     width: 100%;
   }
-  .page-title-actions { align-items: flex-end; flex-direction: column; gap: 6px; }
   .planner-heading { align-items: flex-start; }
-  .planner-composer-page { margin-top: 34px; }
   .planner-composer { padding: 14px; }
   .planner-composer > textarea { min-height: 190px; font-size: 16px; }
   .planner-composer-footer { align-items: stretch; flex-direction: column; }
   .planner-composer-tools { justify-content: space-between; }
-  .planner-composer-actions { align-items: stretch; flex-direction: column; }
   .planner-external-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .planner-external-actions > button { min-height: 42px; }
-  .planner-generate { width: 100%; min-height: 46px; }
   .planner-import-actions > button { flex: 1 1 0; }
   .planner-publish { display: grid; grid-template-columns: minmax(0, 1fr); }
   .planner-overview-heading { align-items: stretch; flex-direction: column; }

@@ -6,7 +6,6 @@ import { clearAsyncRouteRecovery, handleAsyncRouteResourceError } from "./asyncR
 import { recentBaseChanges } from "./baseHome.js"
 import { buildExternalAIPlannerPrompt, parseExternalAIPlannerDraft } from "./externalAIPlanner.js"
 import { revealInvalidField } from "./formFeedback.js"
-import { filterIgnoredPlannerSuggestions, ignorePlannerSuggestion, plannerSuggestionJoinInstruction } from "./plannerSuggestions.js"
 import { itemReviewChanges, removeItemReviewSuggestion } from "./itemReview.js"
 import { isExpandedRoot, removeRootAndChildren, toggleExpandedRoot } from "./rootItemList.js"
 import { parseTaskEditorRoute, taskEditorCancelPath, taskEditorSuccessPath, taskEditorTitle } from "./taskRoutes.js"
@@ -38,6 +37,7 @@ import type {
   AIPlannerExtractedFile,
   AIPlannerSuggestionDraft,
   AIPlannerTaskDraft,
+  AIReviewAccess,
   AIItemReviewSuggestion,
   AIItemFactSuggestion,
   CollegeOption,
@@ -174,7 +174,7 @@ const deleteTargetRootId = ref<number | null>(null)
 const deleteRootOrigin = ref<"detail" | "list">("detail")
 const expandedRootIds = ref(new Set<number>())
 const claimableCount = ref(0)
-const aiPlannerAvailable = ref(false)
+const aiReviewAvailable = ref(false)
 const plannerDescription = ref("")
 const plannerAttachments = ref<{ id: string; filename: string; extracted_text: string }[]>([])
 const plannerAttachmentMessage = ref("")
@@ -186,7 +186,6 @@ const plannerUploading = ref(false)
 const plannerDragActive = ref(false)
 const plannerFileInput = ref<HTMLInputElement | null>(null)
 const plannerDraft = ref<AIPlannerDraft | null>(null)
-const plannerGenerating = ref(false)
 const plannerPublishing = ref(false)
 const plannerTaskDetailsText = ref<{ execution_points: string; cautions: string; prerequisites: string }[]>([])
 const plannerSelectedTaskIndex = ref<number | null>(null)
@@ -197,11 +196,6 @@ const plannerDetailCloseButton = ref<HTMLButtonElement | null>(null)
 const plannerDetailBackButton = ref<HTMLButtonElement | null>(null)
 const plannerDetailTitleInput = ref<HTMLInputElement | null>(null)
 const plannerAddTaskButton = ref<HTMLButtonElement | null>(null)
-const plannerRefineOpenIndex = ref<number | null>(null)
-const plannerRefineInstruction = ref("")
-const plannerGlobalInstruction = ref("")
-const plannerRefining = ref(false)
-const plannerIgnoredSuggestionKeys = new Set<string>()
 const knowledgeDocuments = ref<KnowledgeDocument[]>([])
 const knowledgeUploading = ref(false)
 const knowledgeSyncing = ref(false)
@@ -705,7 +699,7 @@ function syncCollaborationRefreshTimer() {
 
 async function reviewCurrentItemPlan() {
   const root = detailTask.value
-  if (!root || root.parent_id !== null || !aiPlannerAvailable.value || itemReviewLoading.value) return
+  if (!root || root.parent_id !== null || !aiReviewAvailable.value || itemReviewLoading.value) return
   error.value = ""
   itemReviewLoading.value = true
   clearItemReview()
@@ -963,14 +957,14 @@ async function ensureTaskAssignees() {
   }
 }
 
-async function startNewTask(parent?: Task) {
+async function startChildTask(parent: Task) {
   try {
     await ensureTaskAssignees()
   } catch (reason) {
     error.value = messageOf(reason)
     return
   }
-  navigate(parent ? `/tasks/${parent.id}/new-child` : "/tasks/new")
+  navigate(`/tasks/${parent.id}/new-child`)
 }
 
 async function editTask(task: Task) {
@@ -997,14 +991,14 @@ function sameIds(left: number[], right: number[]) {
   )
 }
 
-async function loadPlannerAccess() {
-  aiPlannerAvailable.value = false
+async function loadAIReviewAccess() {
+  aiReviewAvailable.value = false
   if (user.value?.role !== "admin") return
   try {
-    const access = await api.aiPlannerAccess()
-    aiPlannerAvailable.value = access.available
+    const access = await api.aiReviewAccess()
+    aiReviewAvailable.value = access.available
   } catch {
-    aiPlannerAvailable.value = false
+    aiReviewAvailable.value = false
   }
 }
 
@@ -1033,7 +1027,7 @@ async function loadCurrentUser() {
     studentIdDraft.value = user.value.student_id ?? ""
     teamGroupDraft.value = user.value.team_group ?? ""
     collegeDraft.value = user.value.college ?? ""
-    await Promise.all([loadPlannerAccess(), loadSchoolLeaveSummary()])
+    await Promise.all([loadAIReviewAccess(), loadSchoolLeaveSummary()])
   } catch (reason) {
     if (reason instanceof ApiError && reason.status === 401) {
       user.value = null
@@ -1183,8 +1177,8 @@ async function loadRoute() {
       if (!isCurrentLoad()) return
       tasks.value = taskList
       tasksLoadedScope.value = taskView.value
-    } else if (routePath === "/ai-planner") {
-      if (!isAdmin.value || (!aiPlannerAvailable.value && !plannerDraft.value)) {
+    } else if (routePath === "/planner-draft") {
+      if (!isAdmin.value || !plannerDraft.value) {
         navigate("/")
         return
       }
@@ -1270,7 +1264,7 @@ async function submitLogin() {
   notice.value = ""
   try {
     user.value = await api.login(loginEmail.value, loginPassword.value)
-    await loadPlannerAccess()
+    await loadAIReviewAccess()
     loginPassword.value = ""
     navigate("/")
   } catch (reason) {
@@ -1331,7 +1325,7 @@ async function submitRegistration() {
     })
     registrationPassword.value = ""
     registrationPasswordConfirm.value = ""
-    await loadPlannerAccess()
+    await loadAIReviewAccess()
     navigate("/")
   } catch (reason) {
     error.value = messageOf(reason)
@@ -1618,7 +1612,7 @@ async function submitTask() {
     replaceTaskInState(updatedTask)
     clearItemReview()
     tasksLoadedScope.value = null
-    navigate(taskEditorSuccessPath(taskEditor.value, updatedTask.id), { replace: true })
+    navigate(taskEditorSuccessPath(taskEditor.value), { replace: true })
   } catch (reason) {
     error.value = messageOf(reason)
   } finally {
@@ -1713,7 +1707,7 @@ function handleRootTaskMenuAction(task: Task, action: string) {
 
 function detailRootTaskMenuActions(task: Task): TaskActionMenuItem[] {
   const actions = rootTaskMenuActions(task)
-  if (task.parent_id === null && aiPlannerAvailable.value) {
+  if (task.parent_id === null && aiReviewAvailable.value) {
     const deleteIndex = actions.findIndex((action) => action.key === "delete")
     actions.splice(deleteIndex < 0 ? actions.length : deleteIndex, 0, {
       key: "review",
@@ -1740,18 +1734,6 @@ function handleDetailRootTaskMenuAction(task: Task, action: string) {
   handleRootTaskMenuAction(task, action)
 }
 
-
-async function planFromBase() {
-  if (plannerDescription.value.trim().length < 10) {
-    error.value = "请先补充一些事项背景，再生成方案。"
-    return
-  }
-  if (window.location.pathname !== "/ai-planner") {
-    window.history.pushState({}, "", "/ai-planner")
-  }
-  path.value = "/ai-planner"
-  await generateAIPlan()
-}
 
 async function saveTaskResult() {
   const task = detailTask.value
@@ -1962,12 +1944,6 @@ function editTaskFromDetail(task: Task) {
   void editTask(task)
 }
 
-function startAIPlanner() {
-  if (!plannerDraft.value) plannerIgnoredSuggestionKeys.clear()
-  error.value = ""
-  navigate("/ai-planner")
-}
-
 const PLANNER_FILE_EXTENSIONS = new Set([".md", ".txt", ".docx", ".pdf"])
 const PLANNER_MAX_FILE_BYTES = 10 * 1024 * 1024
 const PLANNER_MAX_FILES = 5
@@ -2024,11 +2000,10 @@ function importExternalAIPlanner() {
   }
   plannerImportError.value = ""
   plannerExternalMessage.value = ""
-  plannerIgnoredSuggestionKeys.clear()
   setPlannerDraft(result.draft)
   plannerImportJson.value = ""
   plannerImportOpen.value = false
-  navigate("/ai-planner")
+  navigate("/planner-draft")
   notice.value = "方案已导入草案；请核对并手动确认创建。"
 }
 
@@ -2111,9 +2086,8 @@ function editPlannerRequest() {
   plannerDraft.value = null
   plannerSelectedTaskIndex.value = null
   plannerNewTaskIndex.value = null
-  plannerRefineOpenIndex.value = null
   error.value = ""
-  if (!aiPlannerAvailable.value) navigate("/")
+  navigate("/")
 }
 
 function newPlannerTask(): AIPlannerTaskDraft {
@@ -2145,8 +2119,6 @@ function removePlannerTask(index: number) {
   else if (plannerNewTaskIndex.value !== null && plannerNewTaskIndex.value > index) plannerNewTaskIndex.value -= 1
   if (plannerSelectedTaskIndex.value === index) plannerSelectedTaskIndex.value = null
   else if (plannerSelectedTaskIndex.value !== null && plannerSelectedTaskIndex.value > index) plannerSelectedTaskIndex.value -= 1
-  if (plannerRefineOpenIndex.value === index) plannerRefineOpenIndex.value = null
-  else if (plannerRefineOpenIndex.value !== null && plannerRefineOpenIndex.value > index) plannerRefineOpenIndex.value -= 1
 }
 
 function plannerTaskStatus(task: AIPlannerTaskDraft) {
@@ -2265,56 +2237,19 @@ function plannerTaskLineLimitMessage() {
   return ""
 }
 
-function setPlannerDraft(draft: AIPlannerDraft, preserveSelectedTask = false) {
-  const selectedIndex = plannerSelectedTaskIndex.value
+function setPlannerDraft(draft: AIPlannerDraft) {
   draft.item.deadline = toLocalInput(draft.item.deadline)
   draft.tasks.forEach((task) => {
     task.deadline = toLocalInput(task.deadline)
   })
-  filterIgnoredPlannerSuggestions(draft, plannerIgnoredSuggestionKeys)
   plannerDraft.value = draft
   resetPlannerTaskDetails(draft)
-  plannerSelectedTaskIndex.value = preserveSelectedTask && selectedIndex !== null && selectedIndex < draft.tasks.length
-    ? selectedIndex
-    : null
+  plannerSelectedTaskIndex.value = null
   plannerNewTaskIndex.value = null
-  plannerRefineOpenIndex.value = null
 }
 
 function dismissPlannerSuggestion(index: number) {
-  if (!plannerDraft.value) return
-  ignorePlannerSuggestion(plannerDraft.value, index, plannerIgnoredSuggestionKeys)
-}
-
-async function addPlannerSuggestion(suggestion: AIPlannerSuggestionDraft) {
-  await refineAIPlan(undefined, plannerSuggestionJoinInstruction(suggestion))
-}
-
-async function generateAIPlan() {
-  const description = plannerDescription.value.trim()
-  if (description.length < 10) {
-    error.value = "请先补充一些事项背景，再生成方案。"
-    return
-  }
-
-  error.value = ""
-  plannerGenerating.value = true
-  try {
-    const result = await api.generateAIPlan({
-      description,
-      current_event_context: plannerAttachmentContext.value || undefined,
-    })
-    setPlannerDraft(result.draft)
-  } catch (reason) {
-    error.value = messageOf(reason)
-  } finally {
-    plannerGenerating.value = false
-  }
-}
-
-async function regenerateAIPlan() {
-  plannerDraft.value = null
-  await generateAIPlan()
+  plannerDraft.value?.suggestions.splice(index, 1)
 }
 
 async function publishAIPlan() {
@@ -2358,7 +2293,6 @@ async function publishAIPlan() {
       })),
     })
     plannerDraft.value = null
-    plannerIgnoredSuggestionKeys.clear()
     plannerDescription.value = ""
     plannerAttachments.value = []
     plannerAttachmentMessage.value = ""
@@ -2368,43 +2302,6 @@ async function publishAIPlan() {
     error.value = messageOf(reason)
   } finally {
     plannerPublishing.value = false
-  }
-}
-
-async function refineAIPlan(index?: number, instructionOverride?: string) {
-  const draft = plannerDraft.value
-  if (!draft || plannerRefining.value) return
-  const instruction = (instructionOverride ?? (index === undefined ? plannerGlobalInstruction.value : plannerRefineInstruction.value)).trim()
-  if (!instruction) {
-    error.value = "请先写下希望如何调整。"
-    return
-  }
-  if (index === undefined) plannerRefineOpenIndex.value = null
-  else plannerRefineOpenIndex.value = index
-  const lineLimitError = plannerTaskLineLimitMessage()
-  if (lineLimitError) {
-    error.value = lineLimitError
-    return
-  }
-  syncPlannerTaskDetails()
-  error.value = ""
-  plannerRefining.value = true
-  try {
-    const result = await api.refineAIPlan({
-      description: plannerDescription.value.trim(),
-      item_title: draft.item.title.trim() || undefined,
-      current_event_context: plannerAttachmentContext.value || undefined,
-      draft,
-      instruction,
-      ...(index === undefined ? {} : { scope_task_index: index }),
-    })
-    setPlannerDraft(result.draft, true)
-    plannerGlobalInstruction.value = ""
-    plannerRefineInstruction.value = ""
-  } catch (reason) {
-    error.value = messageOf(reason)
-  } finally {
-    plannerRefining.value = false
   }
 }
 
@@ -2473,9 +2370,8 @@ async function logout() {
   tasks.value = []
   members.value = []
   taskMembers.value = []
-  aiPlannerAvailable.value = false
+  aiReviewAvailable.value = false
   plannerDraft.value = null
-  plannerIgnoredSuggestionKeys.clear()
   navigate("/login")
 }
 
@@ -3002,25 +2898,14 @@ onBeforeUnmount(() => {
                   {{ plannerUploading ? "正在读取…" : "＋ 添加资料" }}
                 </button>
               </div>
-              <div class="planner-composer-actions">
-                <div class="planner-external-actions">
-                  <button
-                    class="secondary"
-                    type="button"
-                    :disabled="(plannerDescription.trim().length < 10 && !plannerAttachmentContext.trim()) || plannerUploading"
-                    @click="copyExternalAIPlannerPrompt"
-                  >复制 AI 提示词</button>
-                  <button class="secondary" type="button" @click="togglePlannerImport">导入 AI 方案</button>
-                </div>
+              <div class="planner-external-actions">
                 <button
-                  v-if="aiPlannerAvailable"
-                  class="primary planner-generate"
+                  class="secondary"
                   type="button"
-                  :disabled="plannerDescription.trim().length < 10 || plannerGenerating || plannerUploading"
-                  @click="planFromBase"
-                >
-                  {{ plannerGenerating ? "正在规划…" : "规划" }}
-                </button>
+                  :disabled="(plannerDescription.trim().length < 10 && !plannerAttachmentContext.trim()) || plannerUploading"
+                  @click="copyExternalAIPlannerPrompt"
+                >复制 AI 提示词</button>
+                <button class="secondary" type="button" @click="togglePlannerImport">导入 AI 方案</button>
               </div>
             </div>
             <div v-if="plannerImportOpen" class="planner-import-panel">
@@ -3044,7 +2929,6 @@ onBeforeUnmount(() => {
           <p v-if="isAdmin && plannerAttachmentMessage" class="planner-composer-message" role="status">{{ plannerAttachmentMessage }}</p>
           <p v-if="isAdmin && plannerAttachmentContextTruncated" class="planner-composer-message" role="status">附件内容超过 5,000 字；复制提示词时只包含前 5,000 字。</p>
           <p v-if="isAdmin && plannerExternalMessage" class="planner-composer-message" role="status">{{ plannerExternalMessage }}</p>
-          <button v-if="isAdmin" class="base-manual-create" type="button" @click="startNewTask()">或手动创建任务</button>
         </section>
 
         <section v-if="homeTaskCards.length" class="base-home-section">
@@ -3095,79 +2979,13 @@ onBeforeUnmount(() => {
         </button>
       </template>
 
-      <template v-else-if="path === '/ai-planner'">
+      <template v-else-if="path === '/planner-draft' && plannerDraft">
         <div class="page-title planner-heading">
-          <div>
-            <h1>AI 规划事项</h1>
-            <p v-if="!plannerDraft">描述越具体，生成结果越准确。</p>
-          </div>
-          <button type="button" @click="navigate('/tasks')">返回任务</button>
+          <h1>审核事项草案</h1>
+          <button type="button" @click="navigate('/')">返回 Base</button>
         </div>
 
-        <section v-if="!plannerDraft" class="planner-composer-page">
-          <div
-            class="planner-composer"
-            :class="{ 'is-drag-active': plannerDragActive, 'is-uploading': plannerUploading }"
-            @dragenter.prevent="onPlannerDragOver"
-            @dragover.prevent="onPlannerDragOver"
-            @dragleave="onPlannerDragLeave"
-            @drop="onPlannerDrop"
-          >
-            <textarea
-              v-model="plannerDescription"
-              maxlength="5000"
-              rows="7"
-              aria-label="描述你准备做的事项"
-              placeholder="告诉 TARS 你准备做什么……&#10;例如：10 月 12 日去力旺实验小学参加科技展，帮我把需要安排的事情整理出来。"
-            />
-            <div v-if="plannerAttachments.length" class="planner-attachments" aria-label="本次规划附件">
-              <span v-for="attachment in plannerAttachments" :key="attachment.id" class="planner-attachment">
-                <span class="planner-attachment-icon" aria-hidden="true">↳</span>
-                <span class="planner-attachment-name">{{ attachment.filename }}</span>
-                <button
-                  type="button"
-                  :aria-label="`移除 ${attachment.filename}`"
-                  @click="removePlannerAttachment(attachment.id)"
-                >×</button>
-              </span>
-            </div>
-            <div class="planner-composer-footer">
-              <div class="planner-composer-tools">
-                <input
-                  ref="plannerFileInput"
-                  class="visually-hidden"
-                  type="file"
-                  accept=".md,.txt,.docx,.pdf"
-                  multiple
-                  @change="onPlannerFilesSelected"
-                />
-                <button class="planner-add-file" type="button" :disabled="plannerUploading" @click="choosePlannerFiles">
-                  {{ plannerUploading ? "正在读取…" : "＋ 添加文件" }}
-                </button>
-                <small>md、txt、docx、pdf</small>
-              </div>
-              <button
-                class="primary planner-generate"
-                type="button"
-                :disabled="plannerDescription.trim().length < 10 || plannerGenerating || plannerUploading"
-                @click="generateAIPlan"
-              >
-                {{ plannerGenerating ? "正在生成…" : "生成方案" }}
-              </button>
-            </div>
-            <div v-if="plannerDragActive" class="planner-drop-overlay" aria-hidden="true">
-              释放以添加到本次规划
-            </div>
-          </div>
-          <p v-if="plannerAttachmentContextTruncated" class="planner-composer-message" role="status">
-            附件文字较多，生成时只会使用前段内容。
-          </p>
-          <p v-if="plannerAttachmentMessage" class="planner-composer-message" role="status">
-            {{ plannerAttachmentMessage }}
-          </p>
-        </section>
-
-        <section v-else-if="plannerDraft" class="planner-result">
+        <section class="planner-result">
           <div class="planner-result-toolbar">
             <button class="planner-back-link" type="button" @click="editPlannerRequest">← 修改原始需求</button>
             <span>方案草案</span>
@@ -3241,17 +3059,6 @@ onBeforeUnmount(() => {
                 </div>
               </details>
 
-              <details v-if="aiPlannerAvailable" class="planner-global-refine">
-                <summary>用 AI 调整整体方案</summary>
-                <label>
-                  想怎样调整？
-                  <textarea v-model="plannerGlobalInstruction" rows="2" maxlength="1000" placeholder="例如：把现场展示和技术保障合并，保留必要的交接任务。" />
-                </label>
-                <button class="secondary" type="button" :disabled="plannerRefining || plannerPublishing" @click="refineAIPlan()">
-                  {{ plannerRefining && plannerRefineOpenIndex === null ? "正在调整…" : "调整整体方案" }}
-                </button>
-              </details>
-
               <div v-if="plannerDraft.questions.length" class="planner-section planner-questions">
                 <h2>需要确认 · {{ plannerDraft.questions.length }}</h2>
                 <ul>
@@ -3268,17 +3075,13 @@ onBeforeUnmount(() => {
                       <p>{{ suggestion.reason }}</p>
                     </div>
                     <div class="planner-suggestion-actions">
-                      <button class="text-action" type="button" :disabled="plannerRefining || plannerPublishing" @click="dismissPlannerSuggestion(index)">忽略</button>
-                      <button v-if="aiPlannerAvailable" class="secondary" type="button" :disabled="plannerRefining || plannerPublishing" @click="addPlannerSuggestion(suggestion)">加入方案</button>
+                      <button class="text-action" type="button" :disabled="plannerPublishing" @click="dismissPlannerSuggestion(index)">忽略</button>
                     </div>
                   </article>
                 </div>
               </div>
 
               <div class="planner-publish">
-                <button v-if="aiPlannerAvailable" class="secondary" type="button" :disabled="plannerGenerating || plannerPublishing" @click="regenerateAIPlan">
-                  重新生成
-                </button>
                 <button class="primary" type="button" :disabled="plannerPublishing" @click="publishAIPlan">
                   {{ plannerPublishing ? "正在创建…" : "确认并创建" }}
                 </button>
@@ -3399,26 +3202,6 @@ onBeforeUnmount(() => {
                   </label>
                 </div>
 
-                <div v-if="aiPlannerAvailable" class="planner-card-ai">
-                  <button class="text-action" type="button" :disabled="plannerRefining" @click="plannerRefineOpenIndex = plannerRefineOpenIndex === plannerSelectedTaskIndex ? null : plannerSelectedTaskIndex; plannerRefineInstruction = ''">
-                    {{ plannerRefineOpenIndex === plannerSelectedTaskIndex ? "收起 AI 调整" : "AI 调整" }}
-                  </button>
-                  <div v-if="plannerRefineOpenIndex === plannerSelectedTaskIndex" class="planner-card-ai-panel">
-                    <label>
-                      希望这张卡如何调整？
-                      <textarea v-model="plannerRefineInstruction" rows="2" maxlength="1000" placeholder="例如：让新人拿到后更容易执行" />
-                    </label>
-                    <div class="planner-refine-actions">
-                      <button class="secondary" type="button" :disabled="plannerRefining" @click="refineAIPlan(plannerSelectedTaskIndex, '补充执行提示')">补充执行提示</button>
-                      <button class="secondary" type="button" :disabled="plannerRefining" @click="refineAIPlan(plannerSelectedTaskIndex, '检查容易遗漏的点')">检查遗漏</button>
-                      <button class="secondary" type="button" :disabled="plannerRefining" @click="refineAIPlan(plannerSelectedTaskIndex, '简化这张任务卡，保留最必要的信息')">简化</button>
-                      <button class="primary" type="button" :disabled="plannerRefining || !plannerRefineInstruction.trim()" @click="refineAIPlan(plannerSelectedTaskIndex)">
-                        {{ plannerRefining ? "正在调整…" : "提交调整" }}
-                      </button>
-                    </div>
-                  </div>
-                </div>
-
                 <button class="planner-delete-task" type="button" @click="deleteSelectedPlannerTask">删除这项分工</button>
               </div>
             </aside>
@@ -3520,7 +3303,7 @@ onBeforeUnmount(() => {
           <section class="execution-section">
             <div class="section-heading breakdown-heading">
               <h2>分工 <span class="task-count">· {{ detailChildren.length }}</span></h2>
-              <button v-if="isAdmin" type="button" @click="startNewTask(detailRoot)">＋ 添加分工</button>
+              <button v-if="isAdmin" type="button" @click="startChildTask(detailRoot)">＋ 添加分工</button>
             </div>
             <div v-if="detailChildren.length" class="detail-task-list child-task-list">
               <article v-for="task in visibleDetailChildren" :key="task.id" class="child-task-row detail-child-task-row">
@@ -3830,10 +3613,6 @@ onBeforeUnmount(() => {
       <template v-else-if="path === '/tasks'">
         <div class="page-title">
           <h1>任务</h1>
-          <div class="page-title-actions">
-            <button v-if="aiPlannerAvailable" class="primary" type="button" @click="startAIPlanner">AI 规划任务</button>
-            <button v-if="isAdmin" class="text-action" type="button" @click="startNewTask()">手动创建</button>
-          </div>
         </div>
 
         <div class="view-tabs" role="tablist" aria-label="任务视图">
@@ -3929,13 +3708,13 @@ onBeforeUnmount(() => {
                 >{{ isRootExpanded(task.id) ? "收起分工 ▴" : "展开分工 ▾" }}</button>
                 <span v-else-if="taskView === 'all' && !childTasks(task.id).length" class="no-child-tasks">暂无分工</span>
                 <span v-else-if="!taskViewChildren(task.id).length" class="no-child-tasks">暂无与你相关的分工</span>
-                <button v-if="isAdmin && taskView === 'all' && !childTasks(task.id).length" type="button" class="add-first-child" @click="startNewTask(task)">＋ 添加分工</button>
+                <button v-if="isAdmin && taskView === 'all' && !childTasks(task.id).length" type="button" class="add-first-child" @click="startChildTask(task)">＋ 添加分工</button>
               </div>
 
               <div v-if="(taskView === 'claimable' ? claimableChildren(task.id).length : taskViewChildren(task.id).length) && isRootExpanded(task.id)" :id="`work-breakdown-${task.id}`" class="work-breakdown">
                 <div class="breakdown-heading">
                   <strong>{{ taskView === 'claimable' ? '待认领分工' : '分工' }} <span class="task-count">· {{ (taskView === 'claimable' ? claimableChildren(task.id) : taskViewChildren(task.id)).length }}</span></strong>
-                  <button v-if="isAdmin && taskView === 'all'" type="button" @click="startNewTask(task)">＋ 添加分工</button>
+                  <button v-if="isAdmin && taskView === 'all'" type="button" @click="startChildTask(task)">＋ 添加分工</button>
                 </div>
 
                 <div class="child-task-list">
@@ -3988,8 +3767,6 @@ onBeforeUnmount(() => {
             <p v-if="taskView === 'mine'">目前没有你负责或参与的任务。</p>
             <p v-else-if="taskView === 'claimable'">新的可认领任务出现后，会显示在这里。</p>
             <p v-else>还没有正式发布的运营事项。</p>
-            <button v-if="aiPlannerAvailable && taskView === 'all'" class="primary" type="button" @click="startAIPlanner">AI 规划任务</button>
-            <button v-if="isAdmin && taskView === 'all'" class="text-action" type="button" @click="startNewTask()">手动创建</button>
           </div>
         </section>
       </template>

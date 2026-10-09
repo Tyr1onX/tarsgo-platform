@@ -283,16 +283,17 @@ const parentTask = computed(() =>
 const taskEditorHeading = computed(() =>
   taskEditorTitle(taskEditor.value, editingTask.value?.parent_id !== null && editingTask.value !== null),
 )
-const ownerOptions = computed(() => {
+const ownerOptions = computed<TaskAssigneeOption[]>(() => {
   const options = [...activeMembers.value]
   const owner = editingTask.value?.owner
   if (owner && !activeMemberIds.value.has(owner.id)) {
-    options.unshift({ ...owner, team_group: null, team_group_unknown: true })
+    options.unshift({ ...owner, team_group: null })
   }
   return options
 })
 const filteredOwnerOptions = computed(() =>
-  filterMembers(ownerOptions.value, taskOwnerSearch.value, taskOwnerGroupFilter.value),
+  filterMembers(ownerOptions.value, taskOwnerSearch.value, taskOwnerGroupFilter.value)
+    .filter((member) => !taskOwnerGroupFilter.value || activeMemberIds.value.has(member.id)),
 )
 const selectedTaskOwner = computed(() =>
   ownerOptions.value.find((member) => member.id === taskOwnerId.value) ?? null,

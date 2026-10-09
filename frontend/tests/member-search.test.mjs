@@ -28,11 +28,18 @@ assert.deepEqual(
   filterMembers(members, "example.com", "electrical", ["name", "email", "student_id"]).map((member) => member.id),
   [1],
 )
-const inactiveCurrentOwner = { id: 4, name: "旧负责人", team_group: null, team_group_unknown: true }
+const inactiveCurrentOwner = { id: 4, name: "旧负责人", team_group: null }
+const ownerOptions = [...members, inactiveCurrentOwner]
+const activeMemberIds = new Set(members.map((member) => member.id))
+const filterOwnerOptions = (query, group) =>
+  filterMembers(ownerOptions, query, group)
+    .filter((member) => !group || activeMemberIds.has(member.id))
 assert.deepEqual(
-  filterMembers([...members, inactiveCurrentOwner], "", UNASSIGNED_TEAM_GROUP).map((member) => member.id),
-  [3],
+  filterOwnerOptions("旧", "").map((member) => member.id),
+  [4],
 )
+assert.deepEqual(filterOwnerOptions("", UNASSIGNED_TEAM_GROUP).map((member) => member.id), [3])
+assert.deepEqual(filterOwnerOptions("李", "electrical").map((member) => member.id), [1])
 
 assert.match(app, /MemberSearchFilters/)
 assert.match(app, /v-model="taskOwnerId"[\s\S]*?type="radio"/)
@@ -40,7 +47,13 @@ assert.match(app, /v-model="taskCollaboratorIds" type="checkbox"/)
 assert.match(app, /v-for="member in filteredCollaborators"[\s\S]*?v-model="taskCollaboratorIds"/)
 assert.match(app, /taskCollaboratorIds\.length/)
 assert.match(app, /filterMembers\(activeMembers\.value, taskCollaboratorSearch/)
+const collaboratorFilterSource = app.match(/const filteredCollaborators = computed\(\(\) =>([\s\S]*?)\n\)/)?.[1]
+assert.ok(collaboratorFilterSource)
+assert.doesNotMatch(collaboratorFilterSource, /taskCollaboratorIds/)
 assert.match(app, /taskOwnerId\.value/)
+assert.match(app, /computed<TaskAssigneeOption\[]>\(\(\) => \{[\s\S]*?options\.unshift\(\{ \.\.\.owner, team_group: null \}\)/)
+assert.match(app, /\.filter\(\(member\) => !taskOwnerGroupFilter\.value \|\| activeMemberIds\.value\.has\(member\.id\)\)/)
+assert.match(app, /ownerOptions\.value\.find\(\(member\) => member\.id === taskOwnerId\.value\)/)
 assert.match(teamPage, /filterMembers\([\s\S]*?props\.members,[\s\S]*?memberSearchQuery\.value,[\s\S]*?memberGroupFilter\.value,[\s\S]*?\["name", "email", "student_id"\]/)
 assert.match(teamPage, /MemberSearchFilters/)
 assert.match(filtersComponent, /type="search"/)

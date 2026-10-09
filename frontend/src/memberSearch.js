@@ -4,7 +4,6 @@ export function filterMembers(members, query = "", group = "", searchFields = ["
   const normalizedQuery = query.trim().toLocaleLowerCase()
 
   return members.filter((member) => {
-    if (group && member.team_group_unknown) return false
     if (group === UNASSIGNED_TEAM_GROUP) {
       if (member.team_group) return false
     } else if (group && member.team_group !== group) {

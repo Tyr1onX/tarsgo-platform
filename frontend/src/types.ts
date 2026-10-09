@@ -24,6 +24,10 @@ export interface MemberSummary {
   name: string
 }
 
+export interface TaskAssigneeOption extends MemberSummary {
+  team_group: TeamGroup | null
+}
+
 export interface Task {
   id: number
   parent_id: number | null

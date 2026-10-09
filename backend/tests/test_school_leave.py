@@ -182,10 +182,11 @@ def main() -> None:
             assert response.status_code == 409, response.text
             assert response.json()["detail"] == "请先完善学号，生成学校请假材料时需要使用。"
 
-            # Task member summaries must not start exposing student ids.
+            # Task assignee options include team group for filtering, but no student id.
             set_actor(admin)
             task_assignees = client.get("/api/tasks/assignees")
             assert task_assignees.status_code == 200, task_assignees.text
+            assert all("team_group" in row for row in task_assignees.json())
             assert all("student_id" not in row for row in task_assignees.json())
 
             # A member can update/withdraw only their own pending request.

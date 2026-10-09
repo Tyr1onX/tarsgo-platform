@@ -22,6 +22,7 @@ from ..schemas import (
     ItemFactScopeUpdate,
     ItemFactsBatchIn,
     MemberSummary,
+    TaskAssigneeOut,
     TaskBatchCreate,
     TaskBatchOut,
     TaskCreate,
@@ -457,7 +458,7 @@ def list_tasks(
     return [_task_out(task, db, current) for task in tasks]
 
 
-@router.get("/assignees", response_model=list[MemberSummary])
+@router.get("/assignees", response_model=list[TaskAssigneeOut])
 def list_task_assignees(_: Member = Depends(require_admin), db: Session = Depends(get_db)) -> list[Member]:
     return list(db.scalars(select(Member).where(Member.status == "active").order_by(Member.name.asc(), Member.id.asc())))
 

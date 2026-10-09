@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { computed } from "vue"
+import { computed, ref } from "vue"
+import MemberSearchFilters from "../components/MemberSearchFilters.vue"
+import { filterMembers } from "../memberSearch.js"
 import type { Member, Role, TeamGroup, TeamRegistrationWindow } from "../types"
 
 const props = defineProps<{
@@ -20,8 +22,19 @@ const emit = defineEmits<{
   navigate: [path: string]
 }>()
 
-const enabledMembers = computed(() => props.members.filter((member) => member.status !== "disabled"))
-const disabledMembers = computed(() => props.members.filter((member) => member.status === "disabled"))
+const memberSearchQuery = ref("")
+const memberGroupFilter = ref("")
+const filteredMembers = computed(() =>
+  filterMembers(
+    props.members,
+    memberSearchQuery.value,
+    memberGroupFilter.value,
+    ["name", "email", "student_id"],
+  ),
+)
+const enabledMembers = computed(() => filteredMembers.value.filter((member) => member.status !== "disabled"))
+const allDisabledMembers = computed(() => props.members.filter((member) => member.status === "disabled"))
+const disabledMembers = computed(() => filteredMembers.value.filter((member) => member.status === "disabled"))
 
 function memberStatusLabel(member: Member) {
   if (member.status === "invited") return "邀请中"
@@ -89,6 +102,13 @@ function groupLabel(member: Member) {
       <h2>成员</h2>
       <span>{{ enabledMembers.length }}</span>
     </div>
+    <MemberSearchFilters
+      v-model:query="memberSearchQuery"
+      v-model:group="memberGroupFilter"
+      :group-labels="groupLabels"
+      search-label="搜索姓名、邮箱或学号"
+      search-placeholder="输入姓名、邮箱或学号"
+    />
     <div class="member-list">
       <div v-for="member in enabledMembers" :key="member.id" class="member-row team-member-row">
         <button class="team-member-link" type="button" @click="emit('navigate', `/team/${member.id}`)">
@@ -103,10 +123,11 @@ function groupLabel(member: Member) {
           <span class="team-member-chevron" aria-hidden="true">›</span>
         </button>
       </div>
+      <p v-if="!enabledMembers.length" class="team-member-empty">当前筛选条件下没有匹配的成员。</p>
     </div>
 
-    <details v-if="disabledMembers.length" class="team-disabled-members">
-      <summary>已停用成员（{{ disabledMembers.length }}）</summary>
+    <details v-if="allDisabledMembers.length" class="team-disabled-members">
+      <summary>已停用成员（{{ allDisabledMembers.length }}）</summary>
       <div class="member-list">
         <div v-for="member in disabledMembers" :key="member.id" class="member-row team-member-row">
           <button class="team-member-link" type="button" @click="emit('navigate', `/team/${member.id}`)">
@@ -121,6 +142,7 @@ function groupLabel(member: Member) {
             <span class="team-member-chevron" aria-hidden="true">›</span>
           </button>
         </div>
+        <p v-if="!disabledMembers.length" class="team-member-empty">当前筛选条件下没有匹配的已停用成员。</p>
       </div>
     </details>
   </section>
@@ -169,6 +191,13 @@ function groupLabel(member: Member) {
 .team-member-row {
   display: block;
   padding: 0;
+}
+
+.team-member-empty {
+  margin: 0;
+  padding: 12px 0;
+  color: var(--muted);
+  font-size: 13px;
 }
 
 .team-member-link {

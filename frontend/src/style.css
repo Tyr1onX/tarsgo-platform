@@ -1797,8 +1797,12 @@ textarea[aria-invalid="true"] {
     gap: 10px;
   }
 
+  .claimable-root-claim {
+    align-self: flex-end;
+  }
+
   .root-task-actions {
-    justify-content: flex-start;
+    justify-content: flex-end;
   }
 
   .task-status-menu {
@@ -1908,7 +1912,7 @@ textarea[aria-invalid="true"] {
 
   .child-task-actions {
     justify-content: flex-end;
-    align-self: stretch;
+    align-self: flex-end;
   }
 
   .child-task-metadata {
@@ -2444,6 +2448,7 @@ textarea[aria-invalid="true"] {
   flex: 0 0 auto;
   align-items: center;
   gap: 6px;
+  margin-left: auto;
 }
 
 .action-menu-wrap {

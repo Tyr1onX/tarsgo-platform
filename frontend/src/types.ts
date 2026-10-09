@@ -353,14 +353,7 @@ export interface CampLeaveEventCreatePayload {
   collection_deadline: string
 }
 
-export interface AIPlannerAccess { available: boolean }
-export interface AIPlannerInput {
-  description: string
-  item_title?: string
-  current_event_context?: string
-  current_event_document_ids?: number[]
-  excluded_historical_document_ids?: number[]
-}
+export interface AIReviewAccess { available: boolean }
 export interface AIPlannerItemDraft {
   title: string
   deliverable: string
@@ -386,11 +379,6 @@ export interface AIPlannerDraft {
   questions: string[]
   suggestions: AIPlannerSuggestionDraft[]
 }
-export interface AIPlannerRefineInput extends AIPlannerInput {
-  draft: AIPlannerDraft
-  instruction: string
-  scope_task_index?: number
-}
 export interface TaskBatchPayload {
   item: { title: string; deliverable: string; deadline: string | null }
   tasks: AIPlannerTaskDraft[]
@@ -412,18 +400,6 @@ export interface KnowledgeDocument {
   is_active: boolean
   synced_at: string
   source_updated_at: string | null
-}
-export interface KnowledgeReference {
-  id: number
-  source_type: "github" | "upload"
-  source_name: string
-  source_label: string
-  title: string
-}
-export interface AIPlannerResult {
-  draft: AIPlannerDraft
-  current_event_documents: KnowledgeReference[]
-  historical_documents: KnowledgeReference[]
 }
 export interface AIItemReviewTaskProposal {
   title: string

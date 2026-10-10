@@ -1277,6 +1277,61 @@ textarea[aria-invalid="true"] {
   width: auto;
 }
 
+.member-picker {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.member-picker-selection {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.member-picker-selection strong {
+  color: var(--text);
+}
+
+.member-picker-options {
+  display: grid;
+  min-width: 0;
+  max-height: 240px;
+  overflow-y: auto;
+  border-block: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.member-option-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  margin: 0;
+  padding: 9px 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.member-option-row:last-child {
+  border-bottom: 0;
+}
+
+.member-option-copy {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+}
+
+.member-option-copy strong,
+.member-option-copy small {
+  overflow-wrap: anywhere;
+}
+
+.member-option-copy small {
+  color: var(--faint);
+  font-size: 12px;
+}
+
 .invite-result {
   display: grid;
   gap: 12px;

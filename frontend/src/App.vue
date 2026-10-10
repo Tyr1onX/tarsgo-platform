@@ -13,8 +13,10 @@ import TaskStatusIndicator from "./TaskStatusIndicator.vue"
 import TaskActionMenu, { type TaskActionMenuItem } from "./TaskActionMenu.vue"
 import ConfirmDialog from "./components/ConfirmDialog.vue"
 import CollegeSelect from "./components/CollegeSelect.vue"
+import MemberSearchFilters from "./components/MemberSearchFilters.vue"
 import AsyncRouteLoadError from "./pages/AsyncRouteLoadError.vue"
 import LocalPageLoading from "./pages/LocalPageLoading.vue"
+import { filterMembers } from "./memberSearch.js"
 import {
   claimableTask,
   compareTaskDeadlines,
@@ -52,6 +54,7 @@ import type {
   Member,
   MemberProfilePayload,
   MemberSummary,
+  TaskAssigneeOption,
   Role,
   TeamGroup,
   TeamMembership,
@@ -160,7 +163,7 @@ const detailFactsExpanded = ref(false)
 const detailChildrenExpanded = ref(false)
 const detailContextLoading = ref(false)
 const members = ref<Member[]>([])
-const taskMembers = ref<MemberSummary[]>([])
+const taskMembers = ref<TaskAssigneeOption[]>([])
 const taskMembersLoaded = ref(false)
 const pendingTaskActions = ref<Map<number, string>>(new Map())
 const latestInvite = ref<InviteResult | null>(null)
@@ -227,7 +230,7 @@ let collaborationRefreshTimer: number | undefined
 let collaborationRefreshInFlight = false
 let lastCollaborationRefreshAt = 0
 let routeLoadSequence = 0
-let taskMembersRequest: Promise<MemberSummary[]> | null = null
+let taskMembersRequest: Promise<TaskAssigneeOption[]> | null = null
 
 const taskSaving = ref(false)
 const taskTitle = ref("")
@@ -239,8 +242,12 @@ const taskCautionsOpen = ref(false)
 const taskPrerequisitesOpen = ref(false)
 const taskOwnerMode = ref<"assigned" | "claimable">("assigned")
 const taskOwnerId = ref<number | null>(null)
+const taskOwnerSearch = ref("")
+const taskOwnerGroupFilter = ref("")
 const taskOwnerClaimable = ref(false)
 const taskCollaboratorIds = ref<number[]>([])
+const taskCollaboratorSearch = ref("")
+const taskCollaboratorGroupFilter = ref("")
 const taskCollaborationOpen = ref(false)
 const taskDeadline = ref("")
 const taskStatus = ref<TaskStatus>("todo")
@@ -276,12 +283,25 @@ const parentTask = computed(() =>
 const taskEditorHeading = computed(() =>
   taskEditorTitle(taskEditor.value, editingTask.value?.parent_id !== null && editingTask.value !== null),
 )
-const ownerOptions = computed(() => {
+const ownerOptions = computed<TaskAssigneeOption[]>(() => {
   const options = [...activeMembers.value]
   const owner = editingTask.value?.owner
-  if (owner && !activeMemberIds.value.has(owner.id)) options.unshift(owner)
+  if (owner && !activeMemberIds.value.has(owner.id)) {
+    options.unshift({ ...owner, team_group: null })
+  }
   return options
 })
+const filteredOwnerOptions = computed(() =>
+  filterMembers(ownerOptions.value, taskOwnerSearch.value, taskOwnerGroupFilter.value)
+    .filter((member) => !taskOwnerGroupFilter.value || activeMemberIds.value.has(member.id)),
+)
+const selectedTaskOwner = computed(() =>
+  ownerOptions.value.find((member) => member.id === taskOwnerId.value) ?? null,
+)
+const filteredCollaborators = computed(() =>
+  filterMembers(activeMembers.value, taskCollaboratorSearch.value, taskCollaboratorGroupFilter.value)
+    .filter((member) => member.id !== taskOwnerId.value),
+)
 const taskDetailId = computed(() => {
   const match = path.value.match(/^\/tasks\/(\d+)$/)
   return match ? Number(match[1]) : null
@@ -405,6 +425,11 @@ const groupLabels: Record<TeamGroup, string> = {
   vision: "视觉组",
   ai: "AI组",
   operations: "运营组",
+}
+
+function taskMemberGroupLabel(member: MemberSummary & { team_group?: TeamGroup | null }) {
+  if (!activeMemberIds.value.has(member.id)) return "现有负责人"
+  return member.team_group ? groupLabels[member.team_group] : "组别未填写"
 }
 
 const membershipLabels: Record<TeamMembership, string> = {
@@ -914,6 +939,7 @@ function resetTaskForm() {
   taskPrerequisitesOpen.value = false
   taskOwnerMode.value = "assigned"
   taskOwnerId.value = activeMembers.value[0]?.id ?? null
+  resetTaskMemberFilters()
   taskOwnerClaimable.value = false
   taskCollaboratorIds.value = []
   taskCollaborationOpen.value = false
@@ -932,6 +958,7 @@ function fillTaskForm(task: Task) {
   taskPrerequisitesOpen.value = Boolean(taskPrerequisitesText.value.trim())
   taskOwnerMode.value = task.owner ? "assigned" : "claimable"
   taskOwnerId.value = task.owner?.id ?? activeMembers.value[0]?.id ?? null
+  resetTaskMemberFilters()
   taskOwnerClaimable.value = task.owner_claimable
   taskCollaboratorIds.value = task.collaborators
     .filter((member) => activeMemberIds.value.has(member.id))
@@ -940,6 +967,13 @@ function fillTaskForm(task: Task) {
   taskDeadline.value = toLocalInput(task.deadline)
   taskStatus.value = task.status
   taskDependencyIds.value = task.depends_on_tasks.map((dependency) => dependency.id)
+}
+
+function resetTaskMemberFilters() {
+  taskOwnerSearch.value = ""
+  taskOwnerGroupFilter.value = ""
+  taskCollaboratorSearch.value = ""
+  taskCollaboratorGroupFilter.value = ""
 }
 
 async function ensureTaskAssignees() {
@@ -2750,17 +2784,41 @@ onBeforeUnmount(() => {
                 待认领
               </label>
             </div>
-            <select
-              v-if="taskOwnerMode === 'assigned'"
-              v-model="taskOwnerId"
-              data-validation-field="task-owner"
-              :aria-invalid="Boolean(fieldErrors['task-owner'])"
-              @change="clearFieldError('task-owner')"
-            >
-              <option v-for="member in ownerOptions" :key="member.id" :value="member.id">
-                {{ member.name }}{{ activeMemberIds.has(member.id) ? "" : "（已停用）" }}
-              </option>
-            </select>
+            <div v-if="taskOwnerMode === 'assigned'" class="member-picker">
+              <MemberSearchFilters
+                v-model:query="taskOwnerSearch"
+                v-model:group="taskOwnerGroupFilter"
+                :group-labels="groupLabels"
+                search-label="按姓名搜索"
+                search-placeholder="搜索负责人姓名"
+              />
+              <p v-if="selectedTaskOwner" class="member-picker-selection">
+                当前负责人：<strong>{{ selectedTaskOwner.name }}</strong>
+              </p>
+              <div
+                class="member-picker-options"
+                role="radiogroup"
+                aria-label="负责人"
+                :aria-invalid="Boolean(fieldErrors['task-owner'])"
+                data-validation-field="task-owner"
+                tabindex="-1"
+              >
+                <label v-for="member in filteredOwnerOptions" :key="member.id" class="check-row member-option-row">
+                  <input
+                    v-model="taskOwnerId"
+                    type="radio"
+                    name="task-owner"
+                    :value="member.id"
+                    @change="clearFieldError('task-owner')"
+                  />
+                  <span class="member-option-copy">
+                    <strong>{{ member.name }}{{ activeMemberIds.has(member.id) ? "" : "（已停用）" }}</strong>
+                    <small>{{ taskMemberGroupLabel(member) }}</small>
+                  </span>
+                </label>
+                <span v-if="!filteredOwnerOptions.length" class="muted">没有符合条件的负责人。</span>
+              </div>
+            </div>
             <small v-if="fieldErrors['task-owner']" class="field-error">{{ fieldErrors['task-owner'] }}</small>
           </fieldset>
 
@@ -2817,16 +2875,26 @@ onBeforeUnmount(() => {
               </fieldset>
 
               <fieldset>
-                <legend>协作者</legend>
-                <label
-                  v-for="member in activeMembers.filter((item) => item.id !== taskOwnerId)"
-                  :key="member.id"
-                  class="check-row"
-                >
-                  <input v-model="taskCollaboratorIds" type="checkbox" :value="member.id" />
-                  {{ member.name }}
-                </label>
-                <span v-if="activeMembers.length <= 1" class="muted">暂无其他可选成员</span>
+                <legend>协作者（已选 {{ taskCollaboratorIds.length }} 人）</legend>
+                <MemberSearchFilters
+                  v-model:query="taskCollaboratorSearch"
+                  v-model:group="taskCollaboratorGroupFilter"
+                  :group-labels="groupLabels"
+                  search-label="按姓名搜索"
+                  search-placeholder="搜索协作者姓名"
+                />
+                <div class="member-picker-options">
+                  <label v-for="member in filteredCollaborators" :key="member.id" class="check-row member-option-row">
+                    <input v-model="taskCollaboratorIds" type="checkbox" :value="member.id" />
+                    <span class="member-option-copy">
+                      <strong>{{ member.name }}</strong>
+                      <small>{{ taskMemberGroupLabel(member) }}</small>
+                    </span>
+                  </label>
+                  <span v-if="!filteredCollaborators.length" class="muted">
+                    {{ activeMembers.length <= 1 ? "暂无其他可选成员" : "没有符合条件的协作者。" }}
+                  </span>
+                </div>
               </fieldset>
 
               <label class="check-row">

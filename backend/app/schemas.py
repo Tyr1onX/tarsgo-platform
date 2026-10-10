@@ -182,6 +182,13 @@ class MemberSummary(BaseModel):
     name: str
 
 
+class TaskAssigneeOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    name: str
+    team_group: TeamGroup | None = None
+
+
 class MemberProfileUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

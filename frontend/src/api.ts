@@ -25,6 +25,7 @@ import type {
   MemberProfilePayload,
   MyProfilePayload,
   MemberSummary,
+  TaskAssigneeOption,
   KnowledgeDocument,
   KnowledgeSyncSummary,
   Role,
@@ -316,7 +317,7 @@ export const api = {
   deleteKnowledgeDocument: (documentId: number) =>
     request<void>(`/api/knowledge/${documentId}`, { method: "DELETE" }),
 
-  taskAssignees: () => request<MemberSummary[]>("/api/tasks/assignees"),
+  taskAssignees: () => request<TaskAssigneeOption[]>("/api/tasks/assignees"),
   tasks: (scope: TaskView = "mine") => request<Task[]>(`/api/tasks?scope=${scope}`),
   taskContext: (taskId: number) => request<TaskDetailContext>(`/api/tasks/${taskId}/context`),
   deleteRootTask: (rootTaskId: number) =>
